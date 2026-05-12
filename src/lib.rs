@@ -1,5 +1,6 @@
 pub mod dictionary;
 pub mod error;
+pub mod meter;
 pub mod phone;
 
 pub use dictionary::Dictionary;

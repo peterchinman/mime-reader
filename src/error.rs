@@ -33,3 +33,19 @@ impl std::fmt::Display for DictionaryError {
         }
     }
 }
+
+#[derive(Debug)]
+pub enum ParseMeterError {
+    InvalidChar(char),
+    InvalidParenNesting,
+}
+
+impl std::fmt::Display for ParseMeterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParseMeterError::InvalidChar(c) => write!(f, "invalid stress character '{}'", c),
+            ParseMeterError::InvalidParenNesting => write!(f, "invalid parentheses nesting"),
+        }
+    }
+}
+
