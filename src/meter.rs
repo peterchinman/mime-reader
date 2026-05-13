@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use crate::{
-    Line, Phone, Stress,
+    Line, Phoneme, Stress,
     error::{MeterMatchError, ParseMeterError},
     line::WordEntry,
 };
@@ -154,9 +154,9 @@ fn matches_recursive(
         .map(|pronunciation| {
             pronunciation
                 .iter()
-                .filter_map(|phone| match phone {
-                    Phone::Consonant(_) => None,
-                    Phone::Vowel(vowel) => Some(vowel.stress),
+                .filter_map(|phoneme| match phoneme {
+                    Phoneme::Consonant(_) => None,
+                    Phoneme::Vowel(vowel) => Some(vowel.stress),
                 })
                 .collect::<Vec<_>>()
         })

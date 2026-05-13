@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::error::DictionaryError;
-use crate::phone::Phone;
+use crate::phoneme::Phoneme;
 
-pub type Pronunciations = Vec<Box<[Phone]>>;
+pub type Pronunciations = Vec<Box<[Phoneme]>>;
 
 pub struct Dictionary {
     entries: HashMap<String, Pronunciations>,
@@ -19,14 +19,14 @@ impl Dictionary {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, DictionaryError> {
         let content = bytes.iter().map(|&b| b as char).collect::<String>();
 
-        let mut entries: HashMap<String, Vec<Box<[Phone]>>> = HashMap::new();
+        let mut entries: HashMap<String, Vec<Box<[Phoneme]>>> = HashMap::new();
 
         for line in content.lines() {
             if line.starts_with(";;;") {
                 continue;
             }
 
-            let (word, phones_str) = line
+            let (word, phonemes_str) = line
                 .split_once("  ")
                 .ok_or_else(|| DictionaryError::MalformedLine(line.to_string()))?;
 
@@ -36,16 +36,16 @@ impl Dictionary {
                 None => word,
             };
 
-            let phones: Vec<Phone> = phones_str
+            let phonemes: Vec<Phoneme> = phonemes_str
                 .split_whitespace()
-                .map(|s| s.parse::<Phone>())
+                .map(|s| s.parse::<Phoneme>())
                 .collect::<Result<_, _>>()
-                .map_err(DictionaryError::InvalidPhone)?;
+                .map_err(DictionaryError::InvalidPhoneme)?;
 
             entries
                 .entry(word.to_lowercase())
                 .or_default()
-                .push(phones.into_boxed_slice());
+                .push(phonemes.into_boxed_slice());
         }
 
         Ok(Dictionary { entries })
@@ -62,7 +62,7 @@ impl Dictionary {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::phone::{Phone, Stress};
+    use crate::phoneme::{Phoneme, Stress};
     use std::sync::OnceLock;
 
     const DICT_PATH: &str = "data/CMUdict/cmudict-0.7b";
@@ -109,24 +109,24 @@ mod tests {
     }
 
     #[test]
-    fn pronunciation_phones_parse_correctly() {
+    fn pronunciation_phonemes_parse_correctly() {
         let dict = dict();
         // THE  DH AH0 — a simple known entry
         let pronunciations = dict.lookup("the").unwrap();
-        let phones = &pronunciations[0];
-        assert_eq!(phones.len(), 2);
-        assert!(matches!(phones[0], Phone::Consonant(_)));
-        assert!(matches!(phones[1], Phone::Vowel(_)));
+        let phonemes = &pronunciations[0];
+        assert_eq!(phonemes.len(), 2);
+        assert!(matches!(phonemes[0], Phoneme::Consonant(_)));
+        assert!(matches!(phonemes[1], Phoneme::Vowel(_)));
     }
 
     #[test]
     fn vowel_stress_is_parsed() {
         let dict = dict();
         // HELLO  HH AH0 L OW1 — AH0 is unstressed, OW1 is primary
-        let phones = &dict.lookup("hello").unwrap()[0];
-        let stresses: Vec<&Stress> = phones.iter().filter_map(|p| match p {
-            Phone::Vowel(v) => Some(&v.stress),
-            Phone::Consonant(_) => None,
+        let phonemes = &dict.lookup("hello").unwrap()[0];
+        let stresses: Vec<&Stress> = phonemes.iter().filter_map(|p| match p {
+            Phoneme::Vowel(v) => Some(&v.stress),
+            Phoneme::Consonant(_) => None,
         }).collect();
         assert!(matches!(stresses[0], Stress::Unstressed));
         assert!(matches!(stresses[1], Stress::Primary));

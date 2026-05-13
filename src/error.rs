@@ -1,6 +1,6 @@
 #[derive(Debug)]
 pub enum ParseArpabetError {
-    UnknownPhone,
+    UnknownPhoneme,
     MissingStress,
     InvalidStress(char),
 }
@@ -8,7 +8,7 @@ pub enum ParseArpabetError {
 impl std::fmt::Display for ParseArpabetError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParseArpabetError::UnknownPhone     => write!(f, "unknown ARPAbet phone"),
+            ParseArpabetError::UnknownPhoneme     => write!(f, "unknown ARPAbet phoneme"),
             ParseArpabetError::MissingStress    => write!(f, "vowel is missing stress digit"),
             ParseArpabetError::InvalidStress(c) => write!(f, "invalid stress digit '{}'", c),
         }
@@ -19,7 +19,7 @@ impl std::fmt::Display for ParseArpabetError {
 pub enum DictionaryError {
     Io(std::io::Error),
     MalformedLine(String),
-    InvalidPhone(ParseArpabetError),
+    InvalidPhoneme(ParseArpabetError),
     UnknownWord(String),
 }
 
@@ -28,7 +28,7 @@ impl std::fmt::Display for DictionaryError {
         match self {
             DictionaryError::Io(e)             => write!(f, "IO error: {}", e),
             DictionaryError::MalformedLine(l)  => write!(f, "malformed dictionary line: {:?}", l),
-            DictionaryError::InvalidPhone(e)   => write!(f, "invalid phone: {}", e),
+            DictionaryError::InvalidPhoneme(e)   => write!(f, "invalid phoneme: {}", e),
             DictionaryError::UnknownWord(w)    => write!(f, "unknown word: {:?}", w),
         }
     }
