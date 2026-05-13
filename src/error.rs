@@ -49,3 +49,17 @@ impl std::fmt::Display for ParseMeterError {
     }
 }
 
+#[derive(Debug)]
+pub enum MeterMatchError {
+    // TODO we probably want errors for??? too long, too short, first incorrect word?, unrecognized word?
+    FailedMatch
+}
+
+impl std::fmt::Display for MeterMatchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MeterMatchError::FailedMatch => write!(f, "failed to match meter"),
+        }
+    }
+}
+

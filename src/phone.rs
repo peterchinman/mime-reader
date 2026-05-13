@@ -2,7 +2,7 @@ use crate::error::ParseArpabetError;
 
 // --- ConsonantPhone ---
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum ConsonantPhone {
     CH,
     JH,
@@ -98,7 +98,7 @@ impl std::fmt::Display for ConsonantPhone {
 
 // --- ConsonantManner ---
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum ConsonantManner {
     Affricate,
     Approximant,
@@ -110,7 +110,7 @@ enum ConsonantManner {
 
 // --- Consonant ---
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Consonant {
     phone: ConsonantPhone,
     manner: ConsonantManner,
@@ -162,7 +162,7 @@ impl std::fmt::Display for Consonant {
 
 // --- VowelPhone ---
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum VowelPhone {
     AE,
     AA,
@@ -231,7 +231,7 @@ impl std::fmt::Display for VowelPhone {
 
 // --- Stress ---
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
 pub enum Stress {
     Unstressed,
     Primary,
@@ -240,7 +240,7 @@ pub enum Stress {
 
 // --- Vowel ---
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Vowel {
     phone: VowelPhone,
     pub stress: Stress,
@@ -286,7 +286,7 @@ impl std::fmt::Display for Vowel {
 
 // --- Phone ---
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Phone {
     Consonant(Consonant),
     Vowel(Vowel),

@@ -4,8 +4,10 @@ use std::path::Path;
 use crate::error::DictionaryError;
 use crate::phone::Phone;
 
+pub type Pronunciations = Vec<Box<[Phone]>>;
+
 pub struct Dictionary {
-    entries: HashMap<String, Vec<Box<[Phone]>>>,
+    entries: HashMap<String, Pronunciations>,
 }
 
 impl Dictionary {
@@ -50,7 +52,7 @@ impl Dictionary {
     }
 
     // Returns an array of pronunciations for a given word, if known.
-    pub fn word_to_phones(&self, word: &str) -> Result<&Vec<Box<[Phone]>>, DictionaryError> {
+    pub fn lookup(&self, word: &str) -> Result<&Pronunciations, DictionaryError> {
         self.entries
             .get(&word.to_lowercase())
             .ok_or_else(|| DictionaryError::UnknownWord(word.to_string()))
@@ -79,15 +81,15 @@ mod tests {
     #[test]
     fn known_word_returns_pronunciations() {
         let dict = dict();
-        let pronunciations = dict.word_to_phones("hello").unwrap();
+        let pronunciations = dict.lookup("hello").unwrap();
         assert!(!pronunciations.is_empty());
     }
 
     #[test]
     fn lookup_is_case_insensitive() {
         let dict = dict();
-        let lower = dict.word_to_phones("hello").unwrap();
-        let upper = dict.word_to_phones("HELLO").unwrap();
+        let lower = dict.lookup("hello").unwrap();
+        let upper = dict.lookup("HELLO").unwrap();
         assert_eq!(lower.len(), upper.len());
     }
 
@@ -95,14 +97,14 @@ mod tests {
     fn word_with_alternate_pronunciations() {
         let dict = dict();
         // HELLO has two entries in CMUdict: HELLO and HELLO(1)
-        let pronunciations = dict.word_to_phones("hello").unwrap();
+        let pronunciations = dict.lookup("hello").unwrap();
         assert_eq!(pronunciations.len(), 2);
     }
 
     #[test]
     fn unknown_word_returns_error() {
         let dict = dict();
-        let err = dict.word_to_phones("xyzzy").unwrap_err();
+        let err = dict.lookup("xyzzy").unwrap_err();
         assert!(matches!(err, DictionaryError::UnknownWord(_)));
     }
 
@@ -110,7 +112,7 @@ mod tests {
     fn pronunciation_phones_parse_correctly() {
         let dict = dict();
         // THE  DH AH0 — a simple known entry
-        let pronunciations = dict.word_to_phones("the").unwrap();
+        let pronunciations = dict.lookup("the").unwrap();
         let phones = &pronunciations[0];
         assert_eq!(phones.len(), 2);
         assert!(matches!(phones[0], Phone::Consonant(_)));
@@ -121,7 +123,7 @@ mod tests {
     fn vowel_stress_is_parsed() {
         let dict = dict();
         // HELLO  HH AH0 L OW1 — AH0 is unstressed, OW1 is primary
-        let phones = &dict.word_to_phones("hello").unwrap()[0];
+        let phones = &dict.lookup("hello").unwrap()[0];
         let stresses: Vec<&Stress> = phones.iter().filter_map(|p| match p {
             Phone::Vowel(v) => Some(&v.stress),
             Phone::Consonant(_) => None,
