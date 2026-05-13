@@ -1,9 +1,42 @@
-use crate::{Dictionary, dictionary::Pronunciations};
+use std::collections::HashSet;
+
+use crate::{Dictionary, Stress, phoneme::Phoneme};
+
+pub enum WordData {
+    Unknown,
+    Known {
+        pronunciations: Vec<Box<[Phoneme]>>,
+        stress_patterns: HashSet<Vec<Stress>>,
+    },
+}
 
 pub struct WordEntry {
     pub word: String,
-    // None here means an unrecognized word
-    pub pronunciations: Option<Pronunciations>,
+    pub data: WordData,
+}
+
+impl WordEntry {
+    fn new(word: &str, dict: &Dictionary) -> Self {
+        let data = match dict.lookup(word) {
+            None => WordData::Unknown,
+            Some(pronunciations) => {
+                let stress_patterns = pronunciations
+                    .iter()
+                    .map(|pronunciation| {
+                        pronunciation
+                            .iter()
+                            .filter_map(|phoneme| match phoneme {
+                                Phoneme::Vowel(vowel) => Some(vowel.stress),
+                                Phoneme::Consonant(_) => None,
+                            })
+                            .collect()
+                    })
+                    .collect();
+                WordData::Known { pronunciations, stress_patterns }
+            }
+        };
+        Self { word: word.to_string(), data }
+    }
 }
 
 pub struct Line {
@@ -13,10 +46,7 @@ pub struct Line {
 impl Line {
     pub fn new(s: &str, dict: &Dictionary) -> Self {
         let words = s.split_whitespace()
-            .map(|w| WordEntry {
-                word: w.to_string(),
-                pronunciations: dict.lookup(w).ok().cloned(),
-            })
+            .map(|w| WordEntry::new(w, dict))
             .collect::<Vec<_>>();
         Self { words }
     }
@@ -39,22 +69,22 @@ mod tests {
     fn known_words_have_pronunciations() {
         let line = Line::new("hello world", dict());
         assert_eq!(line.words.len(), 2);
-        assert!(line.words[0].pronunciations.is_some());
-        assert!(line.words[1].pronunciations.is_some());
+        assert!(matches!(line.words[0].data, WordData::Known { .. }));
+        assert!(matches!(line.words[1].data, WordData::Known { .. }));
     }
 
     #[test]
     fn unknown_word_has_no_pronunciations() {
         let line = Line::new("hello xyzzy", dict());
-        assert!(line.words[0].pronunciations.is_some());
-        assert!(line.words[1].pronunciations.is_none());
+        assert!(matches!(line.words[0].data, WordData::Known { .. }));
+        assert!(matches!(line.words[1].data, WordData::Unknown));
     }
 
     #[test]
     fn word_with_multiple_pronunciations() {
         // "hello" has two entries in CMUdict: HELLO and HELLO(1)
         let line = Line::new("hello", dict());
-        let pronunciations = line.words[0].pronunciations.as_ref().unwrap();
+        let WordData::Known { ref pronunciations, .. } = line.words[0].data else { panic!() };
         assert_eq!(pronunciations.len(), 2);
     }
 
@@ -63,5 +93,17 @@ mod tests {
         let line = Line::new("Hello World", dict());
         assert_eq!(line.words[0].word, "Hello");
         assert_eq!(line.words[1].word, "World");
+    }
+
+    #[test]
+    fn stress_patterns_precomputed_for_known_word() {
+        let line = Line::new("hello", dict());
+        assert!(matches!(line.words[0].data, WordData::Known { .. }));
+    }
+
+    #[test]
+    fn stress_patterns_none_for_unknown_word() {
+        let line = Line::new("xyzzy", dict());
+        assert!(matches!(line.words[0].data, WordData::Unknown));
     }
 }

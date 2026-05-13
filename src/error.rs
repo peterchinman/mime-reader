@@ -20,7 +20,6 @@ pub enum DictionaryError {
     Io(std::io::Error),
     MalformedLine(String),
     InvalidPhoneme(ParseArpabetError),
-    UnknownWord(String),
 }
 
 impl std::fmt::Display for DictionaryError {
@@ -29,7 +28,6 @@ impl std::fmt::Display for DictionaryError {
             DictionaryError::Io(e)             => write!(f, "IO error: {}", e),
             DictionaryError::MalformedLine(l)  => write!(f, "malformed dictionary line: {:?}", l),
             DictionaryError::InvalidPhoneme(e)   => write!(f, "invalid phoneme: {}", e),
-            DictionaryError::UnknownWord(w)    => write!(f, "unknown word: {:?}", w),
         }
     }
 }

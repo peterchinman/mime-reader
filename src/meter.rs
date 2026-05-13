@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
 use crate::{
-    Line, Phoneme, Stress,
+    Stress,
     error::{MeterMatchError, ParseMeterError},
-    line::WordEntry,
+    line::{Line, WordData, WordEntry},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -116,7 +116,7 @@ impl std::str::FromStr for MeterSpecification {
 }
 
 impl MeterSpecification {
-    pub fn matches(&self, line: &crate::line::Line) -> bool {
+    pub fn matches(&self, line: &Line) -> bool {
         let meters: Vec<&[SyllableStress]> = self
             .possible_meters
             .iter()
@@ -162,21 +162,10 @@ fn matches_recursive(
             Err(MeterMatchError::FailedMatch)
         };
     }
-    let next_word_possible_stresses = words[0]
-        .pronunciations
-        .as_ref()
-        .ok_or(MeterMatchError::FailedMatch)?
-        .iter()
-        .map(|pronunciation| {
-            pronunciation
-                .iter()
-                .filter_map(|phoneme| match phoneme {
-                    Phoneme::Consonant(_) => None,
-                    Phoneme::Vowel(vowel) => Some(vowel.stress),
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect::<HashSet<_>>();
+    let WordData::Known { ref stress_patterns, .. } = words[0].data else {
+        return Err(MeterMatchError::FailedMatch);
+    };
+    let next_word_possible_stresses = stress_patterns;
 
     for stresses in next_word_possible_stresses {
         let mut meter_match_suffixes: Vec<&[SyllableStress]> = Vec::new();

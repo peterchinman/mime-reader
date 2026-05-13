@@ -4,10 +4,8 @@ use std::path::Path;
 use crate::error::DictionaryError;
 use crate::phoneme::Phoneme;
 
-pub type Pronunciations = Vec<Box<[Phoneme]>>;
-
 pub struct Dictionary {
-    entries: HashMap<String, Pronunciations>,
+    entries: HashMap<String, Vec<Box<[Phoneme]>>>,
 }
 
 impl Dictionary {
@@ -42,8 +40,7 @@ impl Dictionary {
                 .collect::<Result<_, _>>()
                 .map_err(DictionaryError::InvalidPhoneme)?;
 
-            entries
-                .entry(word.to_lowercase())
+            entries.entry(word.to_lowercase())
                 .or_default()
                 .push(phonemes.into_boxed_slice());
         }
@@ -51,11 +48,8 @@ impl Dictionary {
         Ok(Dictionary { entries })
     }
 
-    // Returns an array of pronunciations for a given word, if known.
-    pub fn lookup(&self, word: &str) -> Result<&Pronunciations, DictionaryError> {
-        self.entries
-            .get(&word.to_lowercase())
-            .ok_or_else(|| DictionaryError::UnknownWord(word.to_string()))
+    pub fn lookup(&self, word: &str) -> Option<Vec<Box<[Phoneme]>>> {
+        self.entries.get(&word.to_lowercase()).cloned()
     }
 }
 
@@ -81,31 +75,26 @@ mod tests {
     #[test]
     fn known_word_returns_pronunciations() {
         let dict = dict();
-        let pronunciations = dict.lookup("hello").unwrap();
-        assert!(!pronunciations.is_empty());
+        assert!(!dict.lookup("hello").unwrap().is_empty());
     }
 
     #[test]
     fn lookup_is_case_insensitive() {
         let dict = dict();
-        let lower = dict.lookup("hello").unwrap();
-        let upper = dict.lookup("HELLO").unwrap();
-        assert_eq!(lower.len(), upper.len());
+        assert_eq!(dict.lookup("hello").unwrap().len(), dict.lookup("HELLO").unwrap().len());
     }
 
     #[test]
     fn word_with_alternate_pronunciations() {
         let dict = dict();
         // HELLO has two entries in CMUdict: HELLO and HELLO(1)
-        let pronunciations = dict.lookup("hello").unwrap();
-        assert_eq!(pronunciations.len(), 2);
+        assert_eq!(dict.lookup("hello").unwrap().len(), 2);
     }
 
     #[test]
-    fn unknown_word_returns_error() {
+    fn unknown_word_returns_none() {
         let dict = dict();
-        let err = dict.lookup("xyzzy").unwrap_err();
-        assert!(matches!(err, DictionaryError::UnknownWord(_)));
+        assert!(dict.lookup("xyzzy").is_none());
     }
 
     #[test]
@@ -123,11 +112,15 @@ mod tests {
     fn vowel_stress_is_parsed() {
         let dict = dict();
         // HELLO  HH AH0 L OW1 — AH0 is unstressed, OW1 is primary
-        let phonemes = &dict.lookup("hello").unwrap()[0];
-        let stresses: Vec<&Stress> = phonemes.iter().filter_map(|p| match p {
-            Phoneme::Vowel(v) => Some(&v.stress),
-            Phoneme::Consonant(_) => None,
-        }).collect();
+        let pronunciations = dict.lookup("hello").unwrap();
+        let phonemes = &pronunciations[0];
+        let stresses: Vec<&Stress> = phonemes
+            .iter()
+            .filter_map(|p| match p {
+                Phoneme::Vowel(v) => Some(&v.stress),
+                Phoneme::Consonant(_) => None,
+            })
+            .collect();
         assert!(matches!(stresses[0], Stress::Unstressed));
         assert!(matches!(stresses[1], Stress::Primary));
     }
