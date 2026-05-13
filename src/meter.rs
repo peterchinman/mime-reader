@@ -126,13 +126,31 @@ impl MeterSpecification {
     }
 }
 
+// Secondary stress is ambiguous if there is a primary stress either before or after it.
 fn is_ambiguous_secondary(stresses: &[Stress], i: usize) -> bool {
     stresses[i] == Stress::Secondary
         && (stresses.get(i + 1) == Some(&Stress::Primary)
             || i > 0 && stresses.get(i - 1) == Some(&Stress::Primary))
 }
 
-// TODO return helpful error instead of bool
+fn word_stress_matches_meter(stresses: &[Stress], meter: &[SyllableStress]) -> bool {
+    // Assumption: single-syllable are inherently ambiguous and match any meter position
+    if stresses.len() == 1 {
+        return true;
+    }
+    stresses.iter().enumerate().all(|(i, s)| match s {
+        // Assumption: primary stress must match a stressed position
+        Stress::Primary => meter[i] == SyllableStress::Stressed,
+        // Assumption: secondary stress adjacent to primary is ambiguous — matches any meter position
+        Stress::Secondary if is_ambiguous_secondary(stresses, i) => true,
+        // Assumption: non-ambiguous secondary stress must match a stressed position
+        Stress::Secondary => meter[i] == SyllableStress::Stressed,
+        // Assumption: unstressed syllables must match unstressed positions
+        Stress::Unstressed => meter[i] == SyllableStress::Unstressed,
+    })
+}
+
+/// Recursively matches the pronunciations of a word against a collection of valid meters. Returns true if it finds any branch that matches, false if all branches fail.
 fn matches_recursive(
     words: &[WordEntry],
     meters: &[&[SyllableStress]],
@@ -144,9 +162,7 @@ fn matches_recursive(
             Err(MeterMatchError::FailedMatch)
         };
     }
-    let next_word_possible_stresses = words
-        .first()
-        .ok_or(MeterMatchError::FailedMatch)?
+    let next_word_possible_stresses = words[0]
         .pronunciations
         .as_ref()
         .ok_or(MeterMatchError::FailedMatch)?
@@ -163,25 +179,13 @@ fn matches_recursive(
         .collect::<HashSet<_>>();
 
     for stresses in next_word_possible_stresses {
-        // We want to check if any pronunciation of the next word matches any remaining meter, and if so, to recurse with those matches
         let mut meter_match_suffixes: Vec<&[SyllableStress]> = Vec::new();
         for m in meters {
             if stresses.len() > m.len() {
                 continue;
             }
-            if stresses.len() == 1 {
-                meter_match_suffixes.push(&m[1..]);
-                continue;
-            } else {
-                let valid = stresses.iter().enumerate().all(|(i, s)| match s {
-                    Stress::Primary => m[i] == SyllableStress::Stressed,
-                    Stress::Secondary if is_ambiguous_secondary(&stresses, i) => true,
-                    Stress::Secondary => m[i] == SyllableStress::Stressed,
-                    Stress::Unstressed => m[i] == SyllableStress::Unstressed,
-                });
-                if valid {
-                    meter_match_suffixes.push(&m[stresses.len()..]);
-                }
+            if word_stress_matches_meter(&stresses, &m[..stresses.len()]) {
+                meter_match_suffixes.push(&m[stresses.len()..]);
             }
         }
 
