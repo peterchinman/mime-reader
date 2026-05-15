@@ -40,7 +40,8 @@ impl Dictionary {
                 .collect::<Result<_, _>>()
                 .map_err(DictionaryError::InvalidPhoneme)?;
 
-            entries.entry(word.to_lowercase())
+            entries
+                .entry(word.to_lowercase())
                 .or_default()
                 .push(phonemes.into_boxed_slice());
         }
@@ -81,7 +82,10 @@ mod tests {
     #[test]
     fn lookup_is_case_insensitive() {
         let dict = dict();
-        assert_eq!(dict.lookup("hello").unwrap().len(), dict.lookup("HELLO").unwrap().len());
+        assert_eq!(
+            dict.lookup("hello").unwrap().len(),
+            dict.lookup("HELLO").unwrap().len()
+        );
     }
 
     #[test]

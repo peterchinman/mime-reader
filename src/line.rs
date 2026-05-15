@@ -44,13 +44,19 @@ impl WordEntry {
                                 Phoneme::Consonant(_) => None,
                             })
                             .collect();
-                        Pronunciation { phonemes, stress_pattern }
+                        Pronunciation {
+                            phonemes,
+                            stress_pattern,
+                        }
                     })
                     .collect();
                 WordData::Known(pronunciations)
             }
         };
-        Self { word: word.to_string(), data }
+        Self {
+            word: word.to_string(),
+            data,
+        }
     }
 }
 
@@ -60,7 +66,8 @@ pub struct Line {
 
 impl Line {
     pub fn new(s: &str, dict: &Dictionary) -> Self {
-        let words = s.split_whitespace()
+        let words = s
+            .split_whitespace()
             .map(|w| WordEntry::new(w, dict))
             .collect::<Vec<_>>();
         Self { words }
@@ -99,7 +106,9 @@ mod tests {
     fn word_with_multiple_pronunciations() {
         // "hello" has two entries in CMUdict: HELLO and HELLO(1)
         let line = Line::new("hello", dict());
-        let WordData::Known(ref pronunciations) = line.words[0].data else { panic!() };
+        let WordData::Known(ref pronunciations) = line.words[0].data else {
+            panic!()
+        };
         assert_eq!(pronunciations.len(), 2);
     }
 

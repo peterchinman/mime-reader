@@ -37,29 +37,29 @@ impl std::str::FromStr for ConsonantPhoneme {
         match s {
             "CH" => Ok(ConsonantPhoneme::CH),
             "JH" => Ok(ConsonantPhoneme::JH),
-            "R"  => Ok(ConsonantPhoneme::R),
-            "W"  => Ok(ConsonantPhoneme::W),
-            "Y"  => Ok(ConsonantPhoneme::Y),
+            "R" => Ok(ConsonantPhoneme::R),
+            "W" => Ok(ConsonantPhoneme::W),
+            "Y" => Ok(ConsonantPhoneme::Y),
             "DH" => Ok(ConsonantPhoneme::DH),
-            "F"  => Ok(ConsonantPhoneme::F),
+            "F" => Ok(ConsonantPhoneme::F),
             "HH" => Ok(ConsonantPhoneme::HH),
-            "S"  => Ok(ConsonantPhoneme::S),
+            "S" => Ok(ConsonantPhoneme::S),
             "SH" => Ok(ConsonantPhoneme::SH),
             "TH" => Ok(ConsonantPhoneme::TH),
-            "V"  => Ok(ConsonantPhoneme::V),
-            "Z"  => Ok(ConsonantPhoneme::Z),
+            "V" => Ok(ConsonantPhoneme::V),
+            "Z" => Ok(ConsonantPhoneme::Z),
             "ZH" => Ok(ConsonantPhoneme::ZH),
-            "L"  => Ok(ConsonantPhoneme::L),
-            "M"  => Ok(ConsonantPhoneme::M),
-            "N"  => Ok(ConsonantPhoneme::N),
+            "L" => Ok(ConsonantPhoneme::L),
+            "M" => Ok(ConsonantPhoneme::M),
+            "N" => Ok(ConsonantPhoneme::N),
             "NG" => Ok(ConsonantPhoneme::NG),
-            "B"  => Ok(ConsonantPhoneme::B),
-            "D"  => Ok(ConsonantPhoneme::D),
-            "G"  => Ok(ConsonantPhoneme::G),
-            "K"  => Ok(ConsonantPhoneme::K),
-            "P"  => Ok(ConsonantPhoneme::P),
-            "T"  => Ok(ConsonantPhoneme::T),
-            _    => Err(ParseArpabetError::UnknownPhoneme),
+            "B" => Ok(ConsonantPhoneme::B),
+            "D" => Ok(ConsonantPhoneme::D),
+            "G" => Ok(ConsonantPhoneme::G),
+            "K" => Ok(ConsonantPhoneme::K),
+            "P" => Ok(ConsonantPhoneme::P),
+            "T" => Ok(ConsonantPhoneme::T),
+            _ => Err(ParseArpabetError::UnknownPhoneme),
         }
     }
 }
@@ -69,28 +69,28 @@ impl std::fmt::Display for ConsonantPhoneme {
         let s = match self {
             ConsonantPhoneme::CH => "CH",
             ConsonantPhoneme::JH => "JH",
-            ConsonantPhoneme::R  => "R",
-            ConsonantPhoneme::W  => "W",
-            ConsonantPhoneme::Y  => "Y",
+            ConsonantPhoneme::R => "R",
+            ConsonantPhoneme::W => "W",
+            ConsonantPhoneme::Y => "Y",
             ConsonantPhoneme::DH => "DH",
-            ConsonantPhoneme::F  => "F",
+            ConsonantPhoneme::F => "F",
             ConsonantPhoneme::HH => "HH",
-            ConsonantPhoneme::S  => "S",
+            ConsonantPhoneme::S => "S",
             ConsonantPhoneme::SH => "SH",
             ConsonantPhoneme::TH => "TH",
-            ConsonantPhoneme::V  => "V",
-            ConsonantPhoneme::Z  => "Z",
+            ConsonantPhoneme::V => "V",
+            ConsonantPhoneme::Z => "Z",
             ConsonantPhoneme::ZH => "ZH",
-            ConsonantPhoneme::L  => "L",
-            ConsonantPhoneme::M  => "M",
-            ConsonantPhoneme::N  => "N",
+            ConsonantPhoneme::L => "L",
+            ConsonantPhoneme::M => "M",
+            ConsonantPhoneme::N => "N",
             ConsonantPhoneme::NG => "NG",
-            ConsonantPhoneme::B  => "B",
-            ConsonantPhoneme::D  => "D",
-            ConsonantPhoneme::G  => "G",
-            ConsonantPhoneme::K  => "K",
-            ConsonantPhoneme::P  => "P",
-            ConsonantPhoneme::T  => "T",
+            ConsonantPhoneme::B => "B",
+            ConsonantPhoneme::D => "D",
+            ConsonantPhoneme::G => "G",
+            ConsonantPhoneme::K => "K",
+            ConsonantPhoneme::P => "P",
+            ConsonantPhoneme::T => "T",
         };
         write!(f, "{}", s)
     }
@@ -122,35 +122,41 @@ pub struct Consonant {
 
 impl From<ConsonantPhoneme> for Consonant {
     fn from(phoneme: ConsonantPhoneme) -> Self {
-        use ConsonantPhoneme::*;
         use ConsonantManner::*;
+        use ConsonantPhoneme::*;
         let (manner, sibilant, voiced, place) = match phoneme {
-            CH => (Affricate,          true,  false, 5),
-            JH => (Affricate,          true,  true,  5),
-            R  => (Approximant,        false, true,  4),
-            W  => (Approximant,        false, true,  9),
-            Y  => (Approximant,        false, true,  6),
-            DH => (Fricative,          false, true,  3),
-            F  => (Fricative,          false, false, 2),
-            HH => (Fricative,          false, false, 8),
-            S  => (Fricative,          true,  false, 4),
-            SH => (Fricative,          true,  false, 5),
-            TH => (Fricative,          false, false, 3),
-            V  => (Fricative,          false, true,  2),
-            Z  => (Fricative,          true,  true,  4),
-            ZH => (Fricative,          true,  true,  5),
-            L  => (LateralApproximant, false, true,  4),
-            M  => (Nasal,              false, true,  1),
-            N  => (Nasal,              false, true,  4),
-            NG => (Nasal,              false, true,  7),
-            B  => (Plosive,            false, true,  1),
-            D  => (Plosive,            false, true,  4),
-            G  => (Plosive,            false, true,  7),
-            K  => (Plosive,            false, false, 7),
-            P  => (Plosive,            false, false, 1),
-            T  => (Plosive,            false, false, 4),
+            CH => (Affricate, true, false, 5),
+            JH => (Affricate, true, true, 5),
+            R => (Approximant, false, true, 4),
+            W => (Approximant, false, true, 9),
+            Y => (Approximant, false, true, 6),
+            DH => (Fricative, false, true, 3),
+            F => (Fricative, false, false, 2),
+            HH => (Fricative, false, false, 8),
+            S => (Fricative, true, false, 4),
+            SH => (Fricative, true, false, 5),
+            TH => (Fricative, false, false, 3),
+            V => (Fricative, false, true, 2),
+            Z => (Fricative, true, true, 4),
+            ZH => (Fricative, true, true, 5),
+            L => (LateralApproximant, false, true, 4),
+            M => (Nasal, false, true, 1),
+            N => (Nasal, false, true, 4),
+            NG => (Nasal, false, true, 7),
+            B => (Plosive, false, true, 1),
+            D => (Plosive, false, true, 4),
+            G => (Plosive, false, true, 7),
+            K => (Plosive, false, false, 7),
+            P => (Plosive, false, false, 1),
+            T => (Plosive, false, false, 4),
         };
-        Consonant { phoneme, manner, sibilant, voiced, place }
+        Consonant {
+            phoneme,
+            manner,
+            sibilant,
+            voiced,
+            place,
+        }
     }
 }
 
@@ -201,7 +207,7 @@ impl std::str::FromStr for VowelPhoneme {
             "EY" => Ok(VowelPhoneme::EY),
             "OW" => Ok(VowelPhoneme::OW),
             "OY" => Ok(VowelPhoneme::OY),
-            _    => Err(ParseArpabetError::UnknownPhoneme),
+            _ => Err(ParseArpabetError::UnknownPhoneme),
         }
     }
 }
@@ -277,8 +283,8 @@ impl std::fmt::Display for Vowel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let stress = match self.stress {
             Stress::Unstressed => '0',
-            Stress::Primary    => '1',
-            Stress::Secondary  => '2',
+            Stress::Primary => '1',
+            Stress::Secondary => '2',
         };
         write!(f, "{}{}", self.phoneme, stress)
     }
@@ -307,7 +313,7 @@ impl std::fmt::Display for Phoneme {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Phoneme::Consonant(c) => write!(f, "{}", c),
-            Phoneme::Vowel(v)     => write!(f, "{}", v),
+            Phoneme::Vowel(v) => write!(f, "{}", v),
         }
     }
 }
@@ -327,19 +333,37 @@ mod tests {
     #[test]
     fn parse_vowel_primary_stress() {
         let phoneme: Phoneme = "AE1".parse().unwrap();
-        assert!(matches!(phoneme, Phoneme::Vowel(Vowel { stress: Stress::Primary, .. })));
+        assert!(matches!(
+            phoneme,
+            Phoneme::Vowel(Vowel {
+                stress: Stress::Primary,
+                ..
+            })
+        ));
     }
 
     #[test]
     fn parse_vowel_unstressed() {
         let phoneme: Phoneme = "AE0".parse().unwrap();
-        assert!(matches!(phoneme, Phoneme::Vowel(Vowel { stress: Stress::Unstressed, .. })));
+        assert!(matches!(
+            phoneme,
+            Phoneme::Vowel(Vowel {
+                stress: Stress::Unstressed,
+                ..
+            })
+        ));
     }
 
     #[test]
     fn parse_vowel_secondary_stress() {
         let phoneme: Phoneme = "AE2".parse().unwrap();
-        assert!(matches!(phoneme, Phoneme::Vowel(Vowel { stress: Stress::Secondary, .. })));
+        assert!(matches!(
+            phoneme,
+            Phoneme::Vowel(Vowel {
+                stress: Stress::Secondary,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -384,9 +408,10 @@ mod tests {
 
     #[test]
     fn round_trip_consonants() {
-        for s in ["CH", "JH", "R", "W", "Y", "DH", "F", "HH", "S", "SH",
-                  "TH", "V", "Z", "ZH", "L", "M", "N", "NG", "B", "D",
-                  "G", "K", "P", "T"] {
+        for s in [
+            "CH", "JH", "R", "W", "Y", "DH", "F", "HH", "S", "SH", "TH", "V", "Z", "ZH", "L", "M",
+            "N", "NG", "B", "D", "G", "K", "P", "T",
+        ] {
             let phoneme: Phoneme = s.parse().unwrap();
             assert_eq!(phoneme.to_string(), s);
         }
@@ -394,8 +419,10 @@ mod tests {
 
     #[test]
     fn round_trip_vowels() {
-        for s in ["AE0", "AA1", "EH2", "AH0", "AO1", "IY2", "IH0", "UH1",
-                  "UW2", "ER0", "AW1", "AY2", "EY0", "OW1", "OY2"] {
+        for s in [
+            "AE0", "AA1", "EH2", "AH0", "AO1", "IY2", "IH0", "UH1", "UW2", "ER0", "AW1", "AY2",
+            "EY0", "OW1", "OY2",
+        ] {
             let phoneme: Phoneme = s.parse().unwrap();
             assert_eq!(phoneme.to_string(), s);
         }

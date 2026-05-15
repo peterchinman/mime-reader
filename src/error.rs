@@ -8,8 +8,8 @@ pub enum ParseArpabetError {
 impl std::fmt::Display for ParseArpabetError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParseArpabetError::UnknownPhoneme     => write!(f, "unknown ARPAbet phoneme"),
-            ParseArpabetError::MissingStress    => write!(f, "vowel is missing stress digit"),
+            ParseArpabetError::UnknownPhoneme => write!(f, "unknown ARPAbet phoneme"),
+            ParseArpabetError::MissingStress => write!(f, "vowel is missing stress digit"),
             ParseArpabetError::InvalidStress(c) => write!(f, "invalid stress digit '{}'", c),
         }
     }
@@ -25,9 +25,9 @@ pub enum DictionaryError {
 impl std::fmt::Display for DictionaryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DictionaryError::Io(e)             => write!(f, "IO error: {}", e),
-            DictionaryError::MalformedLine(l)  => write!(f, "malformed dictionary line: {:?}", l),
-            DictionaryError::InvalidPhoneme(e)   => write!(f, "invalid phoneme: {}", e),
+            DictionaryError::Io(e) => write!(f, "IO error: {}", e),
+            DictionaryError::MalformedLine(l) => write!(f, "malformed dictionary line: {:?}", l),
+            DictionaryError::InvalidPhoneme(e) => write!(f, "invalid phoneme: {}", e),
         }
     }
 }
@@ -56,8 +56,10 @@ pub enum ParseSyllableCountError {
 impl std::fmt::Display for ParseSyllableCountError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParseSyllableCountError::InvalidNumber => write!(f, "expected a number or 'min-max' range"),
-            ParseSyllableCountError::InvalidRange  => write!(f, "min must be <= max"),
+            ParseSyllableCountError::InvalidNumber => {
+                write!(f, "expected a number or 'min-max' range")
+            }
+            ParseSyllableCountError::InvalidRange => write!(f, "min must be <= max"),
         }
     }
 }
@@ -65,7 +67,7 @@ impl std::fmt::Display for ParseSyllableCountError {
 #[derive(Debug)]
 pub enum MeterMatchError {
     // TODO we probably want errors for??? too long, too short, first incorrect word?, unrecognized word?
-    FailedMatch
+    FailedMatch,
 }
 
 impl std::fmt::Display for MeterMatchError {
@@ -75,4 +77,3 @@ impl std::fmt::Display for MeterMatchError {
         }
     }
 }
-

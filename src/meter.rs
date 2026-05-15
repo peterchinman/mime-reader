@@ -120,7 +120,9 @@ impl std::str::FromStr for MeterSpecification {
 impl MeterSpecification {
     fn from_syllable_range(min: usize, max: usize) -> Self {
         let possible_meters = (min..=max)
-            .map(|n| Meter { meter: vec![SyllableStress::Either; n] })
+            .map(|n| Meter {
+                meter: vec![SyllableStress::Either; n],
+            })
             .collect();
         MeterSpecification { possible_meters }
     }
@@ -207,14 +209,23 @@ impl std::str::FromStr for SyllableCountSpecification {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Some((min_str, max_str)) = s.split_once('-') {
-            let min = min_str.trim().parse::<usize>().map_err(|_| ParseSyllableCountError::InvalidNumber)?;
-            let max = max_str.trim().parse::<usize>().map_err(|_| ParseSyllableCountError::InvalidNumber)?;
+            let min = min_str
+                .trim()
+                .parse::<usize>()
+                .map_err(|_| ParseSyllableCountError::InvalidNumber)?;
+            let max = max_str
+                .trim()
+                .parse::<usize>()
+                .map_err(|_| ParseSyllableCountError::InvalidNumber)?;
             if min > max {
                 return Err(ParseSyllableCountError::InvalidRange);
             }
             Ok(Self(MeterSpecification::from_syllable_range(min, max)))
         } else {
-            let n = s.trim().parse::<usize>().map_err(|_| ParseSyllableCountError::InvalidNumber)?;
+            let n = s
+                .trim()
+                .parse::<usize>()
+                .map_err(|_| ParseSyllableCountError::InvalidNumber)?;
             Ok(Self(MeterSpecification::from_syllable_range(n, n)))
         }
     }
@@ -312,7 +323,7 @@ mod tests {
 
     #[test]
     fn wildcard_matches_unstressed_position() {
-        // HELLO: AH0 L OW1 
+        // HELLO: AH0 L OW1
         let line = Line::new("hello", dict());
         let spec: MeterSpecification = "_/".parse().unwrap();
         assert!(spec.matches(&line));
@@ -471,8 +482,16 @@ mod tests {
     fn syllable_count_variable_syllable_word() {
         // "fire" has pronunciations with 1 and 2 syllables
         let line = Line::new("fire", dict());
-        assert!("1".parse::<SyllableCountSpecification>().unwrap().matches(&line));
-        assert!("2".parse::<SyllableCountSpecification>().unwrap().matches(&line));
+        assert!(
+            "1".parse::<SyllableCountSpecification>()
+                .unwrap()
+                .matches(&line)
+        );
+        assert!(
+            "2".parse::<SyllableCountSpecification>()
+                .unwrap()
+                .matches(&line)
+        );
     }
 
     #[test]
