@@ -1,7 +1,10 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::phoneme::VowelPhoneme;
+use crate::phoneme::{Vowel, VowelPhoneme};
 use VowelPhoneme::*;
+
+pub const VOWEL_STRESS_PENALTY: u32 = 1;
+pub const VOWEL_DISTANCE_COEFFICIENT: u32 = 2;
 
 const VOWELS: [VowelPhoneme; 15] = [AE, AA, EH, AH, AO, IY, IH, UH, UW, ER, AW, AY, EY, OW, OY];
 
@@ -197,15 +200,74 @@ impl VowelHexGraph {
     }
 }
 
+impl Vowel {
+    pub fn distance(&self, other: &Vowel, graph: &VowelHexGraph) -> u32 {
+        if self == other {
+            return 0;
+        }
+        let stress_penalty = if self.stress != other.stress { VOWEL_STRESS_PENALTY } else { 0 };
+        if self.phoneme == other.phoneme {
+            stress_penalty
+        } else {
+            graph.get_distance(self.phoneme, other.phoneme) * VOWEL_DISTANCE_COEFFICIENT + stress_penalty
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::phoneme::Vowel;
     use std::sync::OnceLock;
 
     static GRAPH: OnceLock<VowelHexGraph> = OnceLock::new();
 
     fn graph() -> &'static VowelHexGraph {
         GRAPH.get_or_init(VowelHexGraph::new)
+    }
+
+    fn v(s: &str) -> Vowel {
+        s.parse().unwrap()
+    }
+
+    // --- Vowel::distance ---
+
+    #[test]
+    fn vowel_distance_same_vowel_same_stress() {
+        assert_eq!(v("AO1").distance(&v("AO1"), graph()), 0);
+    }
+
+    #[test]
+    fn vowel_distance_same_vowel_different_stress() {
+        assert_eq!(v("AO1").distance(&v("AO0"), graph()), VOWEL_STRESS_PENALTY);
+    }
+
+    #[test]
+    fn vowel_distance_adjacent_same_stress() {
+        // AO and OW are adjacent on the hex-graph (dist=1)
+        assert_eq!(v("AO1").distance(&v("OW1"), graph()), VOWEL_DISTANCE_COEFFICIENT);
+    }
+
+    #[test]
+    fn vowel_distance_adjacent_different_stress() {
+        assert_eq!(
+            v("AO1").distance(&v("OW0"), graph()),
+            VOWEL_DISTANCE_COEFFICIENT + VOWEL_STRESS_PENALTY
+        );
+    }
+
+    #[test]
+    fn vowel_distance_two_steps() {
+        // UW and IH are distance 2 on the hex-graph
+        assert_eq!(v("UW1").distance(&v("IH1"), graph()), 2 * VOWEL_DISTANCE_COEFFICIENT);
+    }
+
+    #[test]
+    fn vowel_distance_is_symmetric() {
+        assert_eq!(
+            v("AO1").distance(&v("IY2"), graph()),
+            v("IY2").distance(&v("AO1"), graph())
+        );
     }
 
     #[test]
