@@ -10,6 +10,7 @@ const VOWEL_TO_CONSONANT_MISMATCH: u32 = 100;
 // This coefficient determines "how much more important vowels are than consonants"
 const VOWEL_COEFFICIENT: u32 = 2;
 // Insertion/deletion penalty for vowels
+// This should be high! Inserting/deleting is adding/removing an entire syllable.
 const VOWEL_INDEL_PENALTY: u32 = 20;
 // Insertion/deletion penalty for consonants
 // This should be greater or equal to half of the Consonant's UNRELATED_PENALTY, otherwise it's cheaper to insert/delete a consonant than to compare consonants.
@@ -19,8 +20,77 @@ const TRANSPOSITION_COST: u32 = 2;
 
 const INF: u32 = u32::MAX / 2;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranspositionDirection {
+    /// This phoneme matches a later/right column in the other sequence.
+    Right,
+    /// This phoneme matches an earlier/left column in the other sequence.
+    Left,
+}
+
+impl TranspositionDirection {
+    pub fn as_char(self) -> char {
+        match self {
+            TranspositionDirection::Right => '\\',
+            TranspositionDirection::Left => '/',
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlignmentStep<'a> {
+    Match {
+        a: &'a Phoneme,
+        b: &'a Phoneme,
+    },
+    Substitution {
+        a: &'a Phoneme,
+        b: &'a Phoneme,
+    },
+    Indel {
+        a: Option<&'a Phoneme>,
+        b: Option<&'a Phoneme>,
+    },
+    Transposition {
+        a: &'a Phoneme,
+        b: &'a Phoneme,
+        direction: TranspositionDirection,
+    },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct DamerauLevenshteinOutput<'a> {
+    score: u32,
+    alignment: Vec<AlignmentStep<'a>>,
+}
+
+impl<'a> DamerauLevenshteinOutput<'a> {
+    pub fn score(&self) -> u32 {
+        self.score
+    }
+
+    /// Aligned edit steps in display order.
+    pub fn alignment(&self) -> &[AlignmentStep<'a>] {
+        &self.alignment
+    }
+}
+
 pub struct DamerauLevenshtein {
     vowel_graph: VowelHexGraph,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Edit {
+    Start,
+    GapInFirst,
+    GapInSecond,
+    Substitute,
+    Transpose { l1: usize, l2: usize },
+}
+
+struct DpOutput {
+    score: u32,
+    edits: Option<Vec<Vec<Edit>>>,
 }
 
 impl DamerauLevenshtein {
@@ -54,6 +124,12 @@ impl DamerauLevenshtein {
         }
     }
 
+    fn choose_edit(best: &mut (u32, u8, Edit), cost: u32, priority: u8, edit: Edit) {
+        if cost < best.0 || (cost == best.0 && priority < best.1) {
+            *best = (cost, priority, edit);
+        }
+    }
+
     // first_prev: the phoneme just before slice[0] in the original sequence (stripped prefix context).
     fn prefix_gap_sums(slice: &[Phoneme], first_prev: Option<&Phoneme>) -> Vec<u32> {
         let mut sums = vec![0u32; slice.len() + 1];
@@ -66,6 +142,249 @@ impl DamerauLevenshtein {
             sums[i + 1] = sums[i] + Self::gap_penalty(&slice[i], prev);
         }
         sums
+    }
+
+    fn run_dp(
+        &self,
+        s1: &[Phoneme],
+        s2: &[Phoneme],
+        prefix_context: Option<&Phoneme>,
+        trace: bool,
+    ) -> DpOutput {
+        let len1 = s1.len();
+        let len2 = s2.len();
+
+        let prefix_gap1 = Self::prefix_gap_sums(s1, prefix_context);
+        let prefix_gap2 = Self::prefix_gap_sums(s2, prefix_context);
+
+        let rows = len1 + 2;
+        let cols = len2 + 2;
+        let mut dists = vec![vec![INF; cols]; rows];
+        let mut edits = trace.then(|| vec![vec![Edit::Start; cols]; rows]);
+
+        dists[1][1] = 0;
+        for i in 1..=len1 {
+            dists[i + 1][1] = prefix_gap1[i];
+            if let Some(edits) = edits.as_mut() {
+                edits[i + 1][1] = Edit::GapInSecond;
+            }
+        }
+        for j in 1..=len2 {
+            dists[1][j + 1] = prefix_gap2[j];
+            if let Some(edits) = edits.as_mut() {
+                edits[1][j + 1] = Edit::GapInFirst;
+            }
+        }
+
+        let mut last_i1: HashMap<Phoneme, usize> = HashMap::new();
+
+        for (i1, p1) in s1.iter().enumerate() {
+            let mut l2 = 0usize;
+
+            for (i2, p2) in s2.iter().enumerate() {
+                let l1 = *last_i1.get(p2).unwrap_or(&0);
+
+                let del_cost = Self::gap_penalty(
+                    p1,
+                    if i1 > 0 {
+                        s1.get(i1 - 1)
+                    } else {
+                        prefix_context
+                    },
+                );
+                let ins_cost = Self::gap_penalty(
+                    p2,
+                    if i2 > 0 {
+                        s2.get(i2 - 1)
+                    } else {
+                        prefix_context
+                    },
+                );
+                let sub_cost = self.substitution_score(p1, p2);
+                let trans_gap1 = prefix_gap1[i1] - prefix_gap1[l1];
+                let trans_gap2 = prefix_gap2[i2] - prefix_gap2[l2];
+                let trans_cost = dists[l1][l2]
+                    .saturating_add(trans_gap1)
+                    .saturating_add(trans_gap2)
+                    .saturating_add(TRANSPOSITION_COST);
+
+                let mut best = (INF, u8::MAX, Edit::Start);
+                if l1 > 0 && l2 > 0 {
+                    Self::choose_edit(&mut best, trans_cost, 1, Edit::Transpose { l1, l2 });
+                }
+                Self::choose_edit(
+                    &mut best,
+                    dists[i1 + 1][i2 + 1].saturating_add(sub_cost),
+                    if sub_cost == 0 { 0 } else { 2 },
+                    Edit::Substitute,
+                );
+                Self::choose_edit(
+                    &mut best,
+                    dists[i1 + 2][i2 + 1].saturating_add(del_cost),
+                    3,
+                    Edit::GapInFirst,
+                );
+                Self::choose_edit(
+                    &mut best,
+                    dists[i1 + 1][i2 + 2].saturating_add(ins_cost),
+                    4,
+                    Edit::GapInSecond,
+                );
+
+                dists[i1 + 2][i2 + 2] = best.0;
+                if let Some(edits) = edits.as_mut() {
+                    edits[i1 + 2][i2 + 2] = best.2;
+                }
+
+                if p1 == p2 {
+                    l2 = i2 + 1;
+                }
+            }
+
+            last_i1.insert(p1.clone(), i1 + 1);
+        }
+
+        DpOutput {
+            score: dists[len1 + 1][len2 + 1],
+            edits,
+        }
+    }
+
+    fn backtrack_alignment<'a>(
+        s1: &'a [Phoneme],
+        s2: &'a [Phoneme],
+        edits: &[Vec<Edit>],
+    ) -> Vec<AlignmentStep<'a>> {
+        let mut i = s1.len();
+        let mut j = s2.len();
+        let mut alignment = Vec::new();
+
+        while i > 0 || j > 0 {
+            match edits[i + 1][j + 1] {
+                Edit::Start => break,
+                Edit::GapInFirst => {
+                    j -= 1;
+                    alignment.push(AlignmentStep::Indel {
+                        a: None,
+                        b: Some(&s2[j]),
+                    });
+                }
+                Edit::GapInSecond => {
+                    i -= 1;
+                    alignment.push(AlignmentStep::Indel {
+                        a: Some(&s1[i]),
+                        b: None,
+                    });
+                }
+                Edit::Substitute => {
+                    i -= 1;
+                    j -= 1;
+                    let step = if s1[i] == s2[j] {
+                        AlignmentStep::Match {
+                            a: &s1[i],
+                            b: &s2[j],
+                        }
+                    } else {
+                        AlignmentStep::Substitution {
+                            a: &s1[i],
+                            b: &s2[j],
+                        }
+                    };
+                    alignment.push(step);
+                }
+                Edit::Transpose { l1, l2 } => {
+                    let i1 = i - 1;
+                    let i2 = j - 1;
+
+                    alignment.push(AlignmentStep::Transposition {
+                        a: &s1[i1],
+                        b: &s2[i2],
+                        direction: TranspositionDirection::Left,
+                    });
+
+                    for j_mid in (l2..i2).rev() {
+                        alignment.push(AlignmentStep::Indel {
+                            a: None,
+                            b: Some(&s2[j_mid]),
+                        });
+                    }
+                    for i_mid in (l1..i1).rev() {
+                        alignment.push(AlignmentStep::Indel {
+                            a: Some(&s1[i_mid]),
+                            b: None,
+                        });
+                    }
+
+                    alignment.push(AlignmentStep::Transposition {
+                        a: &s1[l1 - 1],
+                        b: &s2[l2 - 1],
+                        direction: TranspositionDirection::Right,
+                    });
+
+                    i = l1 - 1;
+                    j = l2 - 1;
+                }
+            }
+        }
+
+        alignment.reverse();
+        alignment
+    }
+
+    pub fn align<'a>(
+        &self,
+        slice1: &'a [Phoneme],
+        slice2: &'a [Phoneme],
+    ) -> DamerauLevenshteinOutput<'a> {
+        let prefix = slice1
+            .iter()
+            .zip(slice2.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let prefix_context: Option<&Phoneme> = if prefix > 0 {
+            Some(&slice1[prefix - 1])
+        } else {
+            None
+        };
+        let s1 = &slice1[prefix..];
+        let s2 = &slice2[prefix..];
+
+        let suffix = s1
+            .iter()
+            .rev()
+            .zip(s2.iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let s1 = &s1[..s1.len() - suffix];
+        let s2 = &s2[..s2.len() - suffix];
+
+        let dp = self.run_dp(s1, s2, prefix_context, true);
+        let edits = dp
+            .edits
+            .as_ref()
+            .expect("traceback edits are recorded when trace is enabled");
+        let mut alignment = Self::backtrack_alignment(s1, s2, edits);
+
+        for i in (0..prefix).rev() {
+            alignment.insert(
+                0,
+                AlignmentStep::Match {
+                    a: &slice1[i],
+                    b: &slice2[i],
+                },
+            );
+        }
+        for i in 0..suffix {
+            alignment.push(AlignmentStep::Match {
+                a: &slice1[slice1.len() - suffix + i],
+                b: &slice2[slice2.len() - suffix + i],
+            });
+        }
+
+        DamerauLevenshteinOutput {
+            score: dp.score,
+            alignment,
+        }
     }
 
     pub fn distance(&self, slice1: &[Phoneme], slice2: &[Phoneme]) -> u32 {
@@ -101,81 +420,13 @@ impl DamerauLevenshtein {
             (s1, s2)
         };
 
-        let len1 = s1.len();
-        let len2 = s2.len();
+        self.run_dp(s1, s2, prefix_context, false).score
+    }
+}
 
-        let prefix_gap1 = Self::prefix_gap_sums(s1, prefix_context);
-        let prefix_gap2 = Self::prefix_gap_sums(s2, prefix_context);
-
-        if len1 == 0 {
-            return prefix_gap2[len2];
-        }
-
-        // DP matrix: (len1+2) rows × (len2+2) cols
-        // Row/col 0 are INF sentinels; row/col 1 are base cases.
-        let rows = len1 + 2;
-        let cols = len2 + 2;
-        let mut dists = vec![vec![INF; cols]; rows];
-
-        dists[1][1] = 0;
-        for i in 1..=len1 {
-            dists[i + 1][1] = prefix_gap1[i];
-        }
-        for j in 1..=len2 {
-            dists[1][j + 1] = prefix_gap2[j];
-        }
-
-        let mut last_i1: HashMap<Phoneme, usize> = HashMap::new();
-
-        for (i1, p1) in s1.iter().enumerate() {
-            let mut l2 = 0usize;
-
-            for (i2, p2) in s2.iter().enumerate() {
-                let l1 = *last_i1.get(p2).unwrap_or(&0);
-
-                let del_cost = Self::gap_penalty(
-                    p1,
-                    if i1 > 0 {
-                        s1.get(i1 - 1)
-                    } else {
-                        prefix_context
-                    },
-                );
-                let ins_cost = Self::gap_penalty(
-                    p2,
-                    if i2 > 0 {
-                        s2.get(i2 - 1)
-                    } else {
-                        prefix_context
-                    },
-                );
-                let sub_cost = self.substitution_score(p1, p2);
-                let trans_gap1 = prefix_gap1[i1] - prefix_gap1[l1];
-                let trans_gap2 = prefix_gap2[i2] - prefix_gap2[l2];
-                let trans_cost = dists[l1][l2]
-                    .saturating_add(trans_gap1)
-                    .saturating_add(trans_gap2)
-                    .saturating_add(TRANSPOSITION_COST);
-
-                dists[i1 + 2][i2 + 2] = [
-                    dists[i1 + 2][i2 + 1].saturating_add(del_cost),
-                    dists[i1 + 1][i2 + 2].saturating_add(ins_cost),
-                    dists[i1 + 1][i2 + 1].saturating_add(sub_cost),
-                    trans_cost,
-                ]
-                .into_iter()
-                .min()
-                .unwrap();
-
-                if p1 == p2 {
-                    l2 = i2 + 1;
-                }
-            }
-
-            last_i1.insert(p1.clone(), i1 + 1);
-        }
-
-        dists[len1 + 1][len2 + 1]
+impl Default for DamerauLevenshtein {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -183,7 +434,9 @@ impl DamerauLevenshtein {
 mod tests {
     use super::*;
     use crate::vowel_distance::VOWEL_DISTANCE_COEFFICIENT;
+    use std::hint::black_box;
     use std::sync::OnceLock;
+    use std::time::{Duration, Instant};
 
     static DL: OnceLock<DamerauLevenshtein> = OnceLock::new();
     fn dl() -> &'static DamerauLevenshtein {
@@ -192,6 +445,77 @@ mod tests {
 
     fn parse(s: &str) -> Vec<Phoneme> {
         s.split_whitespace().map(|t| t.parse().unwrap()).collect()
+    }
+
+    fn aligned_tokens(output: &DamerauLevenshteinOutput<'_>) -> (Vec<String>, Vec<String>) {
+        output
+            .alignment()
+            .iter()
+            .map(|step| match step {
+                AlignmentStep::Match { a, b } | AlignmentStep::Substitution { a, b } => {
+                    (a.to_string(), b.to_string())
+                }
+                AlignmentStep::Indel { a, b } => (
+                    a.map(ToString::to_string).unwrap_or("_".to_string()),
+                    b.map(ToString::to_string).unwrap_or("_".to_string()),
+                ),
+                AlignmentStep::Transposition { a, b, direction } => {
+                    let a_marker = direction.as_char();
+                    let b_marker = match direction {
+                        TranspositionDirection::Right => '/',
+                        TranspositionDirection::Left => '\\',
+                    };
+                    (format!("{a}{a_marker}"), format!("{b}{b_marker}"))
+                }
+            })
+            .unzip()
+    }
+
+    fn benchmark_iterations() -> usize {
+        std::env::var("MIME_BENCH_ITERS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(10_000)
+    }
+
+    fn nanos_per_iteration(duration: Duration, iterations: usize) -> u128 {
+        duration.as_nanos() / iterations as u128
+    }
+
+    fn time_distance(iterations: usize, s1: &[Phoneme], s2: &[Phoneme]) -> (Duration, u32) {
+        let start = Instant::now();
+        let mut checksum = 0;
+        for _ in 0..iterations {
+            checksum ^= black_box(dl().distance(black_box(s1), black_box(s2)));
+        }
+        (start.elapsed(), checksum)
+    }
+
+    fn time_align_score(iterations: usize, s1: &[Phoneme], s2: &[Phoneme]) -> (Duration, u32) {
+        let start = Instant::now();
+        let mut checksum = 0;
+        for _ in 0..iterations {
+            checksum ^= black_box(dl().align(black_box(s1), black_box(s2)).score());
+        }
+        (start.elapsed(), checksum)
+    }
+
+    fn print_score_benchmark(name: &str, iterations: usize, s1: &[Phoneme], s2: &[Phoneme]) {
+        let distance_score = dl().distance(s1, s2);
+        let align_score = dl().align(s1, s2).score();
+        assert_eq!(align_score, distance_score);
+
+        let (distance_duration, distance_checksum) = time_distance(iterations, s1, s2);
+        let (align_duration, align_checksum) = time_align_score(iterations, s1, s2);
+        assert_eq!(align_checksum, distance_checksum);
+
+        let distance_nanos = nanos_per_iteration(distance_duration, iterations);
+        let align_nanos = nanos_per_iteration(align_duration, iterations);
+        let ratio = align_duration.as_secs_f64() / distance_duration.as_secs_f64();
+
+        println!(
+            "{name}: score={distance_score}, iterations={iterations}, distance={distance_nanos} ns/iter, align().score()={align_nanos} ns/iter, ratio={ratio:.2}x"
+        );
     }
 
     #[test]
@@ -220,7 +544,10 @@ mod tests {
         // cost = (1 * VOWEL_DISTANCE_COEFFICIENT + 0) * VOWEL_COEFFICIENT
         let s1 = parse("M AO1 S T");
         let s2 = parse("M OW1 S T");
-        assert_eq!(dl().distance(&s1, &s2), 1 * VOWEL_DISTANCE_COEFFICIENT * VOWEL_COEFFICIENT);
+        assert_eq!(
+            dl().distance(&s1, &s2),
+            1 * VOWEL_DISTANCE_COEFFICIENT * VOWEL_COEFFICIENT
+        );
     }
 
     #[test]
@@ -243,6 +570,55 @@ mod tests {
     }
 
     #[test]
+    fn align_reports_score_and_alignment_for_insertion() {
+        let s1 = parse("M AO1 T");
+        let s2 = parse("M AO1 S T");
+        let output = dl().align(&s1, &s2);
+        let (aligned_1, aligned_2) = aligned_tokens(&output);
+
+        assert_eq!(output.score(), CONSONANT_INDEL_PENALTY);
+        assert_eq!(aligned_1, ["M", "AO1", "_", "T"]);
+        assert_eq!(aligned_2, ["M", "AO1", "S", "T"]);
+        assert!(matches!(output.alignment()[0], AlignmentStep::Match { .. }));
+        assert!(matches!(output.alignment()[2], AlignmentStep::Indel { .. }));
+    }
+
+    #[test]
+    fn align_marks_adjacent_transposition() {
+        let s1 = parse("M AO1 S T");
+        let s2 = parse("M AO1 T S");
+        let output = dl().align(&s1, &s2);
+        let (aligned_1, aligned_2) = aligned_tokens(&output);
+
+        assert_eq!(output.score(), TRANSPOSITION_COST);
+        assert_eq!(aligned_1, ["M", "AO1", "S\\", "T/"]);
+        assert_eq!(aligned_2, ["M", "AO1", "T/", "S\\"]);
+        assert!(matches!(
+            output.alignment()[2],
+            AlignmentStep::Transposition {
+                direction: TranspositionDirection::Right,
+                ..
+            }
+        ));
+        assert!(matches!(
+            output.alignment()[3],
+            AlignmentStep::Transposition {
+                direction: TranspositionDirection::Left,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn align_score_matches_distance() {
+        let s1 = parse("M AO1 S T");
+        let s2 = parse("B OW1 T");
+
+        assert_eq!(dl().align(&s1, &s2).score(), dl().distance(&s1, &s2));
+        assert_eq!(dl().align(&s2, &s1).score(), dl().distance(&s2, &s1));
+    }
+
+    #[test]
     fn single_consonant_insertion() {
         let s1 = parse("M AO1 T");
         let s2 = parse("M AO1 S T");
@@ -262,5 +638,30 @@ mod tests {
         let s1 = parse("M AO1 S T");
         let s2 = parse("B OW1 T");
         assert_eq!(dl().distance(&s1, &s2), dl().distance(&s2, &s1));
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_distance_vs_align_score() {
+        let iterations = benchmark_iterations();
+
+        print_score_benchmark(
+            "short insertion",
+            iterations,
+            &parse("M AO1 T"),
+            &parse("M AO1 S T"),
+        );
+        print_score_benchmark(
+            "adjacent transposition",
+            iterations,
+            &parse("M AO1 S T"),
+            &parse("M AO1 T S"),
+        );
+        print_score_benchmark(
+            "long mixed edits",
+            iterations,
+            &parse("M AE1 N T AH0 N S IH2 V L IY0 S P IY1 CH"),
+            &parse("B AE1 N D AH0 N T S IH2 V R IY0 S P IY1 CH"),
+        );
     }
 }

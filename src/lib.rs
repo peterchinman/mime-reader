@@ -8,9 +8,11 @@ pub mod phoneme;
 pub mod vowel_distance;
 
 pub use dictionary::Dictionary;
+pub use distance::{
+    AlignmentStep, DamerauLevenshtein, DamerauLevenshteinOutput, TranspositionDirection,
+};
 pub use error::{DictionaryError, ParseArpabetError, ParseSyllableCountError};
 pub use line::Line;
 pub use meter::{MeterSpecification, SyllableCountSpecification};
 pub use phoneme::{Consonant, Phoneme, Stress, Vowel, VowelPhoneme};
-pub use distance::DamerauLevenshtein;
 pub use vowel_distance::VowelHexGraph;
