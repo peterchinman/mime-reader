@@ -5,8 +5,8 @@ pub mod meter;
 pub mod phoneme;
 
 pub use dictionary::Dictionary;
-pub use error::{DictionaryError, ParseArpabetError};
+pub use error::{DictionaryError, ParseArpabetError, ParseSyllableCountError};
 pub use phoneme::{Phoneme, Consonant, Vowel, Stress};
 pub use line::Line;
-pub use meter::MeterSpecification;
+pub use meter::{MeterSpecification, SyllableCountSpecification};
 

@@ -2,14 +2,15 @@ use std::collections::HashSet;
 
 use crate::{
     Stress,
-    error::{MeterMatchError, ParseMeterError},
-    line::{Line, WordData, WordEntry},
+    error::{MeterMatchError, ParseMeterError, ParseSyllableCountError},
+    line::{Line, WordEntry},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum SyllableStress {
     Stressed,
     Unstressed,
+    Either,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -38,9 +39,10 @@ fn parse_segments(s: &str) -> Result<Vec<Segment>, ParseMeterError> {
     for c in s.chars() {
         match c {
             c if c.is_whitespace() => continue,
-            'x' | '/' => {
+            'x' | '/' | '_' => {
                 let stress = match c {
                     'x' => SyllableStress::Unstressed,
+                    '_' => SyllableStress::Either,
                     _ => SyllableStress::Stressed,
                 };
                 current.push(stress);
@@ -116,6 +118,13 @@ impl std::str::FromStr for MeterSpecification {
 }
 
 impl MeterSpecification {
+    fn from_syllable_range(min: usize, max: usize) -> Self {
+        let possible_meters = (min..=max)
+            .map(|n| Meter { meter: vec![SyllableStress::Either; n] })
+            .collect();
+        MeterSpecification { possible_meters }
+    }
+
     pub fn matches(&self, line: &Line) -> bool {
         let meters: Vec<&[SyllableStress]> = self
             .possible_meters
@@ -139,6 +148,8 @@ fn word_stress_matches_meter(stresses: &[Stress], meter: &[SyllableStress]) -> b
         return true;
     }
     stresses.iter().enumerate().all(|(i, s)| match s {
+        // Either position matches any stress
+        _ if meter[i] == SyllableStress::Either => true,
         // Assumption: primary stress must match a stressed position
         Stress::Primary => meter[i] == SyllableStress::Stressed,
         // Assumption: secondary stress adjacent to primary is ambiguous — matches any meter position
@@ -162,10 +173,10 @@ fn matches_recursive(
             Err(MeterMatchError::FailedMatch)
         };
     }
-    let WordData::Known { ref stress_patterns, .. } = words[0].data else {
+    let next_word_possible_stresses = words[0].data.stress_patterns();
+    if next_word_possible_stresses.is_empty() {
         return Err(MeterMatchError::FailedMatch);
-    };
-    let next_word_possible_stresses = stress_patterns;
+    }
 
     for stresses in next_word_possible_stresses {
         let mut meter_match_suffixes: Vec<&[SyllableStress]> = Vec::new();
@@ -186,6 +197,33 @@ fn matches_recursive(
     }
 
     Err(MeterMatchError::FailedMatch)
+}
+
+#[derive(Debug)]
+pub struct SyllableCountSpecification(MeterSpecification);
+
+impl std::str::FromStr for SyllableCountSpecification {
+    type Err = ParseSyllableCountError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Some((min_str, max_str)) = s.split_once('-') {
+            let min = min_str.trim().parse::<usize>().map_err(|_| ParseSyllableCountError::InvalidNumber)?;
+            let max = max_str.trim().parse::<usize>().map_err(|_| ParseSyllableCountError::InvalidNumber)?;
+            if min > max {
+                return Err(ParseSyllableCountError::InvalidRange);
+            }
+            Ok(Self(MeterSpecification::from_syllable_range(min, max)))
+        } else {
+            let n = s.trim().parse::<usize>().map_err(|_| ParseSyllableCountError::InvalidNumber)?;
+            Ok(Self(MeterSpecification::from_syllable_range(n, n)))
+        }
+    }
+}
+
+impl SyllableCountSpecification {
+    pub fn matches(&self, line: &Line) -> bool {
+        self.0.matches(line)
+    }
 }
 
 #[cfg(test)]
@@ -211,6 +249,7 @@ mod tests {
 
     const U: SyllableStress = SyllableStress::Unstressed;
     const S: SyllableStress = SyllableStress::Stressed;
+    const E: SyllableStress = SyllableStress::Either;
 
     #[test]
     fn simple_meter_gives_one_possibility() {
@@ -261,6 +300,37 @@ mod tests {
     fn unrecognized_character_returns_error() {
         let err = "xjx".parse::<MeterSpecification>().unwrap_err();
         assert!(matches!(err, ParseMeterError::InvalidChar('j')));
+    }
+
+    // --- wildcard (_) ---
+
+    #[test]
+    fn wildcard_parses_to_either() {
+        let pm: MeterSpecification = "x_/".parse().unwrap();
+        assert!(pm.possible_meters.contains(&meter(&[U, E, S])));
+    }
+
+    #[test]
+    fn wildcard_matches_unstressed_position() {
+        // HELLO: AH0 L OW1 
+        let line = Line::new("hello", dict());
+        let spec: MeterSpecification = "_/".parse().unwrap();
+        assert!(spec.matches(&line));
+    }
+
+    #[test]
+    fn wildcard_matches_stressed_position() {
+        // KARAOKE: EH2 R IY0 OW1 K IY0
+        let line = Line::new("karaoke", dict());
+        let spec: MeterSpecification = "/x_x".parse().unwrap();
+        assert!(spec.matches(&line));
+    }
+
+    #[test]
+    fn wildcard_wrong_length_fails() {
+        let line = Line::new("hello", dict());
+        let spec: MeterSpecification = "_/_".parse().unwrap();
+        assert!(!spec.matches(&line));
     }
 
     // --- check_meter_validity: single syllable words ---
@@ -356,5 +426,71 @@ mod tests {
         let line = Line::new("fire conflicts content record", dict());
         let spec: MeterSpecification = "/(x) x/ x/ xx".parse().unwrap();
         assert!(!spec.matches(&line));
+    }
+
+    // --- SyllableCountSpecification ---
+
+    #[test]
+    fn syllable_count_parse_exact() {
+        let spec: SyllableCountSpecification = "8".parse().unwrap();
+        // "I want to suck your blood right now" = 8 single-syllable words
+        let line = Line::new("I want to suck your blood right now", dict());
+        assert!(spec.matches(&line));
+    }
+
+    #[test]
+    fn syllable_count_parse_range_matches() {
+        let spec: SyllableCountSpecification = "6-10".parse().unwrap();
+        let line = Line::new("I want to suck your blood right now", dict());
+        assert!(spec.matches(&line));
+    }
+
+    #[test]
+    fn syllable_count_below_range_fails() {
+        let spec: SyllableCountSpecification = "9-12".parse().unwrap();
+        let line = Line::new("I want to suck your blood right now", dict());
+        assert!(!spec.matches(&line));
+    }
+
+    #[test]
+    fn syllable_count_above_range_fails() {
+        let spec: SyllableCountSpecification = "4-7".parse().unwrap();
+        let line = Line::new("I want to suck your blood right now", dict());
+        assert!(!spec.matches(&line));
+    }
+
+    #[test]
+    fn syllable_count_multisyllable_words() {
+        // karaoke (4) + okey-dokey (4) = 8
+        let line = Line::new("karaoke okey-dokey", dict());
+        let spec: SyllableCountSpecification = "8".parse().unwrap();
+        assert!(spec.matches(&line));
+    }
+
+    #[test]
+    fn syllable_count_variable_syllable_word() {
+        // "fire" has pronunciations with 1 and 2 syllables
+        let line = Line::new("fire", dict());
+        assert!("1".parse::<SyllableCountSpecification>().unwrap().matches(&line));
+        assert!("2".parse::<SyllableCountSpecification>().unwrap().matches(&line));
+    }
+
+    #[test]
+    fn syllable_count_unknown_word_fails() {
+        let line = Line::new("hello xyzzy", dict());
+        let spec: SyllableCountSpecification = "1-10".parse().unwrap();
+        assert!(!spec.matches(&line));
+    }
+
+    #[test]
+    fn syllable_count_invalid_number_returns_error() {
+        let err = "abc".parse::<SyllableCountSpecification>().unwrap_err();
+        assert!(matches!(err, ParseSyllableCountError::InvalidNumber));
+    }
+
+    #[test]
+    fn syllable_count_inverted_range_returns_error() {
+        let err = "11-8".parse::<SyllableCountSpecification>().unwrap_err();
+        assert!(matches!(err, ParseSyllableCountError::InvalidRange));
     }
 }

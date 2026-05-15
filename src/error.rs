@@ -48,6 +48,21 @@ impl std::fmt::Display for ParseMeterError {
 }
 
 #[derive(Debug)]
+pub enum ParseSyllableCountError {
+    InvalidNumber,
+    InvalidRange,
+}
+
+impl std::fmt::Display for ParseSyllableCountError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParseSyllableCountError::InvalidNumber => write!(f, "expected a number or 'min-max' range"),
+            ParseSyllableCountError::InvalidRange  => write!(f, "min must be <= max"),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum MeterMatchError {
     // TODO we probably want errors for??? too long, too short, first incorrect word?, unrecognized word?
     FailedMatch
