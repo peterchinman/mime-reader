@@ -162,8 +162,8 @@ impl std::fmt::Display for Consonant {
 
 // --- VowelPhone ---
 
-#[derive(Debug, Clone)]
-enum VowelPhoneme {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum VowelPhoneme {
     AE,
     AA,
     EH,
