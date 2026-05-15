@@ -2,8 +2,8 @@ use crate::error::ParseArpabetError;
 
 // --- ConsonantPhoneme ---
 
-#[derive(Debug, Clone)]
-enum ConsonantPhoneme {
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum ConsonantPhoneme {
     CH,
     JH,
     R,
@@ -98,8 +98,8 @@ impl std::fmt::Display for ConsonantPhoneme {
 
 // --- ConsonantManner ---
 
-#[derive(Debug, Clone)]
-enum ConsonantManner {
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum ConsonantManner {
     Affricate,
     Approximant,
     Fricative,
@@ -112,12 +112,11 @@ enum ConsonantManner {
 
 #[derive(Debug, Clone)]
 pub struct Consonant {
-    phoneme: ConsonantPhoneme,
-    manner: ConsonantManner,
-    sibilant: bool,
-    voiced: bool,
-    // 0-7
-    place: u8,
+    pub(crate) phoneme: ConsonantPhoneme,
+    pub(crate) manner: ConsonantManner,
+    pub(crate) sibilant: bool,
+    pub(crate) voiced: bool,
+    pub(crate) place: u8,
 }
 
 impl From<ConsonantPhoneme> for Consonant {

@@ -1,3 +1,4 @@
+pub mod consonant_distance;
 pub mod dictionary;
 pub mod error;
 pub mod line;
