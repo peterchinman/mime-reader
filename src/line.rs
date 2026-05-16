@@ -1,6 +1,9 @@
-use std::collections::HashSet;
+use std::{cmp::min, collections::HashSet};
 
-use crate::{Dictionary, Stress, phoneme::Phoneme};
+use crate::{
+    DamerauLevenshtein, Dictionary, Stress, SyllableCountSpecification,
+    phoneme::{Phoneme, RhymingPart, get_last_n_syllables, get_rhyming_part},
+};
 
 pub struct Pronunciation {
     pub phonemes: Box<[Phoneme]>,
@@ -72,6 +75,35 @@ impl Line {
             .collect::<Vec<_>>();
         Self { words }
     }
+}
+
+fn rhyming_parts_of_last_word<'a>(line: &'a Line) -> HashSet<RhymingPart<'a>> {
+    line.words
+        .last()
+        .and_then(|word| match &word.data {
+            WordData::Known(ps) => Some(ps),
+            WordData::Unknown => None,
+        })
+        .map(|ps| ps.iter().map(|p| get_rhyming_part(&p.phonemes)).collect())
+        .unwrap_or_default()
+}
+
+// Returns the lowest distance score after comaring all the possible rhyming parts. Note: currently this compares the shortest
+fn compare_rhyming_parts(a: &Line, b: &Line, dl: &DamerauLevenshtein) -> Option<u32> {
+    let parts_self = rhyming_parts_of_last_word(a);
+    let parts_other = rhyming_parts_of_last_word(b);
+
+    parts_self
+        .iter()
+        .flat_map(|a| {
+            parts_other.iter().filter_map(move |b| {
+                let shortest_count = min(a.syllable_count, b.syllable_count);
+                let a_phonemes = get_last_n_syllables(a.phonemes, shortest_count)?;
+                let b_phonemes = get_last_n_syllables(b.phonemes, shortest_count)?;
+                Some(dl.distance(a_phonemes, b_phonemes))
+            })
+        })
+        .min()
 }
 
 #[cfg(test)]

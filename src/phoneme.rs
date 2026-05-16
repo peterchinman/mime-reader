@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use crate::error::ParseArpabetError;
 
 // --- ConsonantPhoneme ---
@@ -326,10 +328,11 @@ fn get_syllable_count(phonemes: &[Phoneme]) -> usize {
         .count()
 }
 
+#[derive(PartialEq, Eq, Hash)]
 pub struct RhymingPart<'a> {
-     pub phonemes: &'a [Phoneme],
-     pub syllable_count: usize,
- }
+    pub phonemes: &'a [Phoneme],
+    pub syllable_count: usize,
+}
 
 pub fn get_rhyming_part<'a>(word: &'a [Phoneme]) -> RhymingPart<'a> {
     let final_stressed_index = word
@@ -340,6 +343,21 @@ pub fn get_rhyming_part<'a>(word: &'a [Phoneme]) -> RhymingPart<'a> {
         phonemes: rhyming_part,
         syllable_count: get_syllable_count(rhyming_part),
     }
+}
+
+/// Count n vowels back and return an optional slice from that vowel onward. Returns `None` if nth vowel is not found or if n is 0.
+pub fn get_last_n_syllables(phonemes: &[Phoneme], n: usize) -> Option<&[Phoneme]> {
+    if n == 0 {
+        return None;
+    }
+    let index = phonemes
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| matches!(p, Phoneme::Vowel(_)))
+        .nth_back(n - 1)?
+        .0;
+
+    Some(&phonemes[index..])
 }
 
 #[cfg(test)]
@@ -500,6 +518,51 @@ mod tests {
         let rp = get_rhyming_part(&word);
         assert_eq!(rp.phonemes, &word[..]);
         assert_eq!(rp.syllable_count, 2);
+    }
+
+    // --- get_last_n_syllables ---
+
+    #[test]
+    fn last_n_syllables_one() {
+        // K AE1 T = "cat": last 1 syllable starts at AE1
+        let word = phonemes(&["K", "AE1", "T"]);
+        let result = get_last_n_syllables(&word, NonZeroUsize::new(1).unwrap());
+        assert_eq!(result, Some(&word[1..]));
+    }
+
+    #[test]
+    fn last_n_syllables_two() {
+        // HH EH1 L OW0 = "hello": last 2 syllables starts at EH1
+        let word = phonemes(&["HH", "EH1", "L", "OW0"]);
+        let result = get_last_n_syllables(&word, NonZeroUsize::new(2).unwrap());
+        assert_eq!(result, Some(&word[1..]));
+    }
+
+    #[test]
+    fn last_n_syllables_more_than_available_returns_none() {
+        let word = phonemes(&["K", "AE1", "T"]);
+        let result = get_last_n_syllables(&word, NonZeroUsize::new(2).unwrap());
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn last_n_syllables_exactly_available() {
+        let word = phonemes(&["AE1", "T"]);
+        let result = get_last_n_syllables(&word, NonZeroUsize::new(1).unwrap());
+        assert_eq!(result, Some(&word[0..]));
+    }
+
+    #[test]
+    fn last_n_syllables_no_vowels_returns_none() {
+        let word = phonemes(&["K", "T"]);
+        let result = get_last_n_syllables(&word, NonZeroUsize::new(1).unwrap());
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn last_n_syllables_empty_returns_none() {
+        let result = get_last_n_syllables(&[], NonZeroUsize::new(1).unwrap());
+        assert_eq!(result, None);
     }
 
     // --- Round-trip ---
