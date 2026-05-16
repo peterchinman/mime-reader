@@ -1,6 +1,6 @@
 pub mod consonant_distance;
-pub mod distance;
 pub mod dictionary;
+pub mod distance;
 pub mod error;
 pub mod line;
 pub mod meter;

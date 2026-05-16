@@ -127,18 +127,20 @@ impl MeterSpecification {
         MeterSpecification { possible_meters }
     }
 
-    pub fn matches(&self, line: &Line) -> bool {
+    /// TODO: Does it make sense for this to be a method on MeterSpecification? Or should this live on Line?
+    /// Checks whether a Meter Spec matches a specific line. This is a very permissive check—we make no guesses about the Meter of the Line, instead we check every pronunciation of every word in the Line, and return true if any combinatoric possibility matches.
+    pub fn validate_line(&self, line: &Line) -> bool {
         let meters: Vec<&[SyllableStress]> = self
             .possible_meters
             .iter()
             .map(|m| m.meter.as_slice())
             .collect();
-        matches_recursive(&line.words, &meters).is_ok()
+        validate_recursive(&line.words, &meters).is_ok()
     }
 }
 
 // Secondary stress is ambiguous if there is a primary stress either before or after it.
-fn is_ambiguous_secondary(stresses: &[Stress], i: usize) -> bool {
+fn is_secondary_next_to_primary(stresses: &[Stress], i: usize) -> bool {
     stresses[i] == Stress::Secondary
         && (stresses.get(i + 1) == Some(&Stress::Primary)
             || i > 0 && stresses.get(i - 1) == Some(&Stress::Primary))
@@ -155,7 +157,7 @@ fn word_stress_matches_meter(stresses: &[Stress], meter: &[SyllableStress]) -> b
         // Assumption: primary stress must match a stressed position
         Stress::Primary => meter[i] == SyllableStress::Stressed,
         // Assumption: secondary stress adjacent to primary is ambiguous — matches any meter position
-        Stress::Secondary if is_ambiguous_secondary(stresses, i) => true,
+        Stress::Secondary if is_secondary_next_to_primary(stresses, i) => true,
         // Assumption: non-ambiguous secondary stress must match a stressed position
         Stress::Secondary => meter[i] == SyllableStress::Stressed,
         // Assumption: unstressed syllables must match unstressed positions
@@ -164,10 +166,11 @@ fn word_stress_matches_meter(stresses: &[Stress], meter: &[SyllableStress]) -> b
 }
 
 /// Recursively matches the pronunciations of a word against a collection of valid meters. Returns true if it finds any branch that matches, false if all branches fail.
-fn matches_recursive(
+fn validate_recursive(
     words: &[WordEntry],
     meters: &[&[SyllableStress]],
 ) -> Result<(), MeterMatchError> {
+    // Base-case: if we've chewed thru all the words, and any of the valid meters is also empty, we've found a match.
     if words.is_empty() {
         return if meters.iter().any(|m| m.is_empty()) {
             Ok(())
@@ -175,10 +178,11 @@ fn matches_recursive(
             Err(MeterMatchError::FailedMatch)
         };
     }
+
+    // Branch out on every pronunciation of the next word.
+    // TODO: is there some way of failing a branch early, rather than checking every combinatoric possiblity?
+    // One possibility would be storing on WordEntry the shortest and longest syllable length of its pronunciations, so that we can pre-emptively check whether our Line is too long or too short.
     let next_word_possible_stresses = words[0].data.stress_patterns();
-    if next_word_possible_stresses.is_empty() {
-        return Err(MeterMatchError::FailedMatch);
-    }
 
     for stresses in next_word_possible_stresses {
         let mut meter_match_suffixes: Vec<&[SyllableStress]> = Vec::new();
@@ -192,7 +196,7 @@ fn matches_recursive(
         }
 
         if !meter_match_suffixes.is_empty() {
-            if matches_recursive(&words[1..], &meter_match_suffixes).is_ok() {
+            if validate_recursive(&words[1..], &meter_match_suffixes).is_ok() {
                 return Ok(());
             }
         }
@@ -233,7 +237,7 @@ impl std::str::FromStr for SyllableCountSpecification {
 
 impl SyllableCountSpecification {
     pub fn matches(&self, line: &Line) -> bool {
-        self.0.matches(line)
+        self.0.validate_line(line)
     }
 }
 
@@ -326,7 +330,7 @@ mod tests {
         // HELLO: AH0 L OW1
         let line = Line::new("hello", dict());
         let spec: MeterSpecification = "_/".parse().unwrap();
-        assert!(spec.matches(&line));
+        assert!(spec.validate_line(&line));
     }
 
     #[test]
@@ -334,14 +338,14 @@ mod tests {
         // KARAOKE: EH2 R IY0 OW1 K IY0
         let line = Line::new("karaoke", dict());
         let spec: MeterSpecification = "/x_x".parse().unwrap();
-        assert!(spec.matches(&line));
+        assert!(spec.validate_line(&line));
     }
 
     #[test]
     fn wildcard_wrong_length_fails() {
         let line = Line::new("hello", dict());
         let spec: MeterSpecification = "_/_".parse().unwrap();
-        assert!(!spec.matches(&line));
+        assert!(!spec.validate_line(&line));
     }
 
     // --- check_meter_validity: single syllable words ---
@@ -350,21 +354,21 @@ mod tests {
     fn single_syllable_iambic_matches() {
         let line = Line::new("I want to suck your blood right now", dict());
         let spec: MeterSpecification = "x/x/x/x/".parse().unwrap();
-        assert!(spec.matches(&line));
+        assert!(spec.validate_line(&line));
     }
 
     #[test]
     fn single_syllable_short_meter_fails() {
         let line = Line::new("I want to suck your blood right now", dict());
         let spec: MeterSpecification = "x/x/x/x".parse().unwrap();
-        assert!(!spec.matches(&line));
+        assert!(!spec.validate_line(&line));
     }
 
     #[test]
     fn single_syllable_long_meter_fails() {
         let line = Line::new("I want to suck your blood right now", dict());
         let spec: MeterSpecification = "x/x/x/x/x".parse().unwrap();
-        assert!(!spec.matches(&line));
+        assert!(!spec.validate_line(&line));
     }
 
     // --- check_meter_validity: multi-syllable words ---
@@ -375,21 +379,21 @@ mod tests {
     fn multisyllable_good_meter_matches() {
         let line = Line::new("karaoke okey-dokey", dict());
         let spec: MeterSpecification = "/x/x /x/x".parse().unwrap();
-        assert!(spec.matches(&line));
+        assert!(spec.validate_line(&line));
     }
 
     #[test]
     fn multisyllable_bad_meter_fails() {
         let line = Line::new("karaoke okey-dokey", dict());
         let spec: MeterSpecification = "x/x/ x/x/".parse().unwrap();
-        assert!(!spec.matches(&line));
+        assert!(!spec.validate_line(&line));
     }
 
     #[test]
     fn multisyllable_short_meter_fails() {
         let line = Line::new("karaoke okey-dokey", dict());
         let spec: MeterSpecification = "/x/x /x/".parse().unwrap();
-        assert!(!spec.matches(&line));
+        assert!(!spec.validate_line(&line));
     }
 
     // --- check_meter_validity: optional meter ---
@@ -398,21 +402,21 @@ mod tests {
     fn optional_meter_good_matches() {
         let line = Line::new("karaoke okey-dokey", dict());
         let spec: MeterSpecification = "/x/x (/)x/x".parse().unwrap();
-        assert!(spec.matches(&line));
+        assert!(spec.validate_line(&line));
     }
 
     #[test]
     fn optional_meter_good2_matches() {
         let line = Line::new("karaoke okey-dokey", dict());
         let spec: MeterSpecification = "(/x)/x (/)x/(x)".parse().unwrap();
-        assert!(spec.matches(&line));
+        assert!(spec.validate_line(&line));
     }
 
     #[test]
     fn optional_meter_bad_fails() {
         let line = Line::new("karaoke okey-dokey", dict());
         let spec: MeterSpecification = "x/x(/ x)/x/".parse().unwrap();
-        assert!(!spec.matches(&line));
+        assert!(!spec.validate_line(&line));
     }
 
     // --- check_meter_validity: stress-shifting words ---
@@ -422,21 +426,21 @@ mod tests {
     fn stress_shifting_good_meter_matches() {
         let line = Line::new("fire conflicts content record", dict());
         let spec: MeterSpecification = "/ /x /x /x".parse().unwrap();
-        assert!(spec.matches(&line));
+        assert!(spec.validate_line(&line));
     }
 
     #[test]
     fn stress_shifting_good_meter2_matches() {
         let line = Line::new("fire conflicts content record", dict());
         let spec: MeterSpecification = "/x x/ /x x/".parse().unwrap();
-        assert!(spec.matches(&line));
+        assert!(spec.validate_line(&line));
     }
 
     #[test]
     fn stress_shifting_bad_meter_fails() {
         let line = Line::new("fire conflicts content record", dict());
         let spec: MeterSpecification = "/(x) x/ x/ xx".parse().unwrap();
-        assert!(!spec.matches(&line));
+        assert!(!spec.validate_line(&line));
     }
 
     // --- SyllableCountSpecification ---

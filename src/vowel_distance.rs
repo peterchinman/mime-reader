@@ -205,11 +205,16 @@ impl Vowel {
         if self == other {
             return 0;
         }
-        let stress_penalty = if self.stress != other.stress { VOWEL_STRESS_PENALTY } else { 0 };
+        let stress_penalty = if self.stress != other.stress {
+            VOWEL_STRESS_PENALTY
+        } else {
+            0
+        };
         if self.phoneme == other.phoneme {
             stress_penalty
         } else {
-            graph.get_distance(self.phoneme, other.phoneme) * VOWEL_DISTANCE_COEFFICIENT + stress_penalty
+            graph.get_distance(self.phoneme, other.phoneme) * VOWEL_DISTANCE_COEFFICIENT
+                + stress_penalty
         }
     }
 }
@@ -245,7 +250,10 @@ mod tests {
     #[test]
     fn vowel_distance_adjacent_same_stress() {
         // AO and OW are adjacent on the hex-graph (dist=1)
-        assert_eq!(v("AO1").distance(&v("OW1"), graph()), VOWEL_DISTANCE_COEFFICIENT);
+        assert_eq!(
+            v("AO1").distance(&v("OW1"), graph()),
+            VOWEL_DISTANCE_COEFFICIENT
+        );
     }
 
     #[test]
@@ -259,7 +267,10 @@ mod tests {
     #[test]
     fn vowel_distance_two_steps() {
         // UW and IH are distance 2 on the hex-graph
-        assert_eq!(v("UW1").distance(&v("IH1"), graph()), 2 * VOWEL_DISTANCE_COEFFICIENT);
+        assert_eq!(
+            v("UW1").distance(&v("IH1"), graph()),
+            2 * VOWEL_DISTANCE_COEFFICIENT
+        );
     }
 
     #[test]

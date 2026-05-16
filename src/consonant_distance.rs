@@ -1,7 +1,7 @@
 use crate::phoneme::{Consonant, ConsonantManner::*, ConsonantPhoneme, ConsonantPhoneme::*};
 
-// furthest related consonants are 7 apart
-// unrelated consonants should be... somewhat further than that??
+// Furthest related consonants are 7 apart
+// Unrelated consonants should be... somewhat further than that??
 pub const UNRELATED_PENALTY: u32 = 10;
 
 // TIN, DIN

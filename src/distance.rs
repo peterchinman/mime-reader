@@ -3,19 +3,28 @@ use std::collections::HashMap;
 use crate::phoneme::Phoneme;
 use crate::vowel_distance::VowelHexGraph;
 
-// We never want to compare a vowel to a consonant, so we can give this an arbitrarily high penalty.
-const VOWEL_TO_CONSONANT_MISMATCH: u32 = 100;
-// Vowel distances get multiplied by this coefficient.
-// Vowel distance ranges from 0-9 (VowelHexGraph distance up to 4, gets multiplied by VOWEL_DISTANCE_COEFFICIENT, and VOWEL_STRESS_PENALTY added), consonant distance range up to 10.
+// We never want to compare a vowel to a consonant, so we should give this an arbitrarily high penalty.
+const VOWEL_TO_CONSONANT_MISMATCH: u32 = 1000;
+// Vowel distance ranges from 0-9 (VowelHexGraph distance (<= 4), gets multiplied by VOWEL_DISTANCE_COEFFICIENT (2), and VOWEL_STRESS_PENALTY (1) added), consonant distance range up to 10.
 // This coefficient determines "how much more important vowels are than consonants"
-const VOWEL_COEFFICIENT: u32 = 2;
-// Insertion/deletion penalty for vowels
-// This should be high! Inserting/deleting is adding/removing an entire syllable.
-const VOWEL_INDEL_PENALTY: u32 = 20;
+// TODO find the correct value for this. My instinct is that vowels should be significantly more important than consonants.
+const VOWEL_COEFFICIENT: u32 = 3;
+// Ideally, we should be comparing equal syllable slices, in which case, the insertion/deletion penalty for vowels should be arbitrarily high, as we always want the vowels to align.
+// TODO: allow comparing different sized syllable slices (in which case I think what you want to do is... find which the smaller-sized slice of the larger one with the lowest distance score)
+const VOWEL_INDEL_PENALTY: u32 = 1000;
 // Insertion/deletion penalty for consonants
-// This should be greater or equal to half of the Consonant's UNRELATED_PENALTY, otherwise it's cheaper to insert/delete a consonant than to compare consonants.
+// This should be greater or equal to half of the Consonant's UNRELATED_PENALTY, otherwise it's cheaper to insert/delete a consonant than to compare unrelated consonants.
+// TODO: Should all inserted consonants have the same insertion penalty? Are some consonants "lighter" than others?
 const CONSONANT_INDEL_PENALTY: u32 = 5;
+// "Reapeated" consonants should be penalized less than standard INDEL penalty, for example when comparing TEN DRY <=> TEND DRY (bad example, you get the idea)
+// TODO: an /R/ following /ER/ should be counted as repeated
+// TODO: a /W/ following /OW/ should be counted as repeated
+// TODO: are there other vowel -> consonant sequences that should count as repeated?
+// TODO: This should take into account cases like RAISING (R EY1 Z IH0 NG) vs RAISE SING (R EY1 Z S IH1 NG), i.e. we should take consonant distance of repeated consonants into account
+// An arbitrary starting point would probably be (1 + distance())/2
 const CONSONANT_REPEATED_PENALTY: u32 = 1;
+// Transposing consonants should incur a smaller penalty than comparing them each in order. E.g. MOST <=> MOATS should have relatively small penalty.
+// TODO: What should this value be?
 const TRANSPOSITION_COST: u32 = 2;
 
 const INF: u32 = u32::MAX / 2;
@@ -37,6 +46,7 @@ impl TranspositionDirection {
     }
 }
 
+// Todo: should this be folded into Edit enum?
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlignmentStep<'a> {
     Match {
@@ -58,6 +68,7 @@ pub enum AlignmentStep<'a> {
     },
 }
 
+// TODO: should this be folded into DpOutput?
 #[derive(Debug, PartialEq, Eq)]
 pub struct DamerauLevenshteinOutput<'a> {
     score: u32,
@@ -529,8 +540,14 @@ mod tests {
         let s = parse("M AO1 S T");
         // consonant gap = 5 each, vowel gap = 20
         // M(5) + AO1(20) + S(5) + T(5) = 35
-        assert_eq!(dl().distance(&[], &s), 35);
-        assert_eq!(dl().distance(&s, &[]), 35);
+        assert_eq!(
+            dl().distance(&[], &s),
+            CONSONANT_INDEL_PENALTY * 3 + VOWEL_INDEL_PENALTY
+        );
+        assert_eq!(
+            dl().distance(&s, &[]),
+            CONSONANT_INDEL_PENALTY * 3 + VOWEL_INDEL_PENALTY
+        );
     }
 
     #[test]
@@ -564,8 +581,8 @@ mod tests {
         // "M AO1 S T" vs "M AO1 T S": last two consonants transposed
         // The two elements between last occurrences of each in the other are empty,
         // so cost = TRANSPOSITION_COST
-        let s1 = parse("M AO1 S T");
-        let s2 = parse("M AO1 T S");
+        let s1 = parse("M OW1 S T");
+        let s2 = parse("M OW1 T S");
         assert_eq!(dl().distance(&s1, &s2), TRANSPOSITION_COST);
     }
 
@@ -628,8 +645,8 @@ mod tests {
     #[test]
     fn repeated_consonant_low_penalty() {
         // Inserting a consonant identical to its neighbour costs CONSONANT_REPEATED_PENALTY
-        let s1 = parse("B AE1 T");
-        let s2 = parse("B AE1 T T");
+        let s1 = parse("B AE1 T IH0 NG");
+        let s2 = parse("B AE1 T T IH0 NG");
         assert_eq!(dl().distance(&s1, &s2), CONSONANT_REPEATED_PENALTY);
     }
 
