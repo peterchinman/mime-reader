@@ -317,6 +317,31 @@ impl std::fmt::Display for Phoneme {
     }
 }
 
+// --- Phoneme Utilities ---
+
+fn get_syllable_count(phonemes: &[Phoneme]) -> usize {
+    phonemes
+        .iter()
+        .filter(|p| matches!(p, Phoneme::Vowel(_)))
+        .count()
+}
+
+pub struct RhymingPart<'a> {
+     pub phonemes: &'a [Phoneme],
+     pub syllable_count: usize,
+ }
+
+pub fn get_rhyming_part<'a>(word: &'a [Phoneme]) -> RhymingPart<'a> {
+    let final_stressed_index = word
+        .iter()
+        .rposition(|p| matches!(p, Phoneme::Vowel(v) if v.stress != Stress::Unstressed));
+    let rhyming_part = &word[final_stressed_index.unwrap_or(0)..];
+    RhymingPart {
+        phonemes: rhyming_part,
+        syllable_count: get_syllable_count(rhyming_part),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,6 +426,80 @@ mod tests {
     fn display_vowel() {
         let phoneme: Phoneme = "AE1".parse().unwrap();
         assert_eq!(phoneme.to_string(), "AE1");
+    }
+
+    // --- get_syllable_count ---
+
+    fn phonemes(arpa: &[&str]) -> Vec<Phoneme> {
+        arpa.iter().map(|s| s.parse().unwrap()).collect()
+    }
+
+    #[test]
+    fn syllable_count_empty() {
+        assert_eq!(get_syllable_count(&[]), 0);
+    }
+
+    #[test]
+    fn syllable_count_only_consonants() {
+        assert_eq!(get_syllable_count(&phonemes(&["K", "T"])), 0);
+    }
+
+    #[test]
+    fn syllable_count_single_vowel() {
+        assert_eq!(get_syllable_count(&phonemes(&["AE1"])), 1);
+    }
+
+    #[test]
+    fn syllable_count_mixed() {
+        // HH EH1 L OW0 = "hello" = 2 syllables
+        assert_eq!(get_syllable_count(&phonemes(&["HH", "EH1", "L", "OW0"])), 2);
+    }
+
+    // --- get_rhyming_part ---
+
+    #[test]
+    fn rhyming_part_starts_at_final_stressed_vowel() {
+        // K AE1 T = "cat": rhyming part is [AE1, T]
+        let word = phonemes(&["K", "AE1", "T"]);
+        let rp = get_rhyming_part(&word);
+        assert_eq!(rp.phonemes, &word[1..]);
+        assert_eq!(rp.syllable_count, 1);
+    }
+
+    #[test]
+    fn rhyming_part_includes_trailing_unstressed_vowels() {
+        // HH EH1 L OW0 = "hello": rhyming part is [EH1, L, OW0]
+        let word = phonemes(&["HH", "EH1", "L", "OW0"]);
+        let rp = get_rhyming_part(&word);
+        assert_eq!(rp.phonemes, &word[1..]);
+        assert_eq!(rp.syllable_count, 2);
+    }
+
+    #[test]
+    fn rhyming_part_uses_last_stressed_vowel() {
+        // AH0 B AH1 V = "above": last stressed is AH1, rhyming part is [AH1, V]
+        let word = phonemes(&["AH0", "B", "AH1", "V"]);
+        let rp = get_rhyming_part(&word);
+        assert_eq!(rp.phonemes, &word[2..]);
+        assert_eq!(rp.syllable_count, 1);
+    }
+
+    #[test]
+    fn rhyming_part_secondary_stress_counts_as_stressed() {
+        // AH0 B AH2 V: secondary stress counts, rhyming part is [AH2, V]
+        let word = phonemes(&["AH0", "B", "AH2", "V"]);
+        let rp = get_rhyming_part(&word);
+        assert_eq!(rp.phonemes, &word[2..]);
+        assert_eq!(rp.syllable_count, 1);
+    }
+
+    #[test]
+    fn rhyming_part_all_unstressed_falls_back_to_start() {
+        // no stressed vowels: fallback to index 0, entire word
+        let word = phonemes(&["AH0", "B", "AH0"]);
+        let rp = get_rhyming_part(&word);
+        assert_eq!(rp.phonemes, &word[..]);
+        assert_eq!(rp.syllable_count, 2);
     }
 
     // --- Round-trip ---

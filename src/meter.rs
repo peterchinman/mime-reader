@@ -236,7 +236,7 @@ impl std::str::FromStr for SyllableCountSpecification {
 }
 
 impl SyllableCountSpecification {
-    pub fn matches(&self, line: &Line) -> bool {
+    pub fn validate_line(&self, line: &Line) -> bool {
         self.0.validate_line(line)
     }
 }
@@ -450,28 +450,28 @@ mod tests {
         let spec: SyllableCountSpecification = "8".parse().unwrap();
         // "I want to suck your blood right now" = 8 single-syllable words
         let line = Line::new("I want to suck your blood right now", dict());
-        assert!(spec.matches(&line));
+        assert!(spec.validate_line(&line));
     }
 
     #[test]
     fn syllable_count_parse_range_matches() {
         let spec: SyllableCountSpecification = "6-10".parse().unwrap();
         let line = Line::new("I want to suck your blood right now", dict());
-        assert!(spec.matches(&line));
+        assert!(spec.validate_line(&line));
     }
 
     #[test]
     fn syllable_count_below_range_fails() {
         let spec: SyllableCountSpecification = "9-12".parse().unwrap();
         let line = Line::new("I want to suck your blood right now", dict());
-        assert!(!spec.matches(&line));
+        assert!(!spec.validate_line(&line));
     }
 
     #[test]
     fn syllable_count_above_range_fails() {
         let spec: SyllableCountSpecification = "4-7".parse().unwrap();
         let line = Line::new("I want to suck your blood right now", dict());
-        assert!(!spec.matches(&line));
+        assert!(!spec.validate_line(&line));
     }
 
     #[test]
@@ -479,7 +479,7 @@ mod tests {
         // karaoke (4) + okey-dokey (4) = 8
         let line = Line::new("karaoke okey-dokey", dict());
         let spec: SyllableCountSpecification = "8".parse().unwrap();
-        assert!(spec.matches(&line));
+        assert!(spec.validate_line(&line));
     }
 
     #[test]
@@ -489,12 +489,12 @@ mod tests {
         assert!(
             "1".parse::<SyllableCountSpecification>()
                 .unwrap()
-                .matches(&line)
+                .validate_line(&line)
         );
         assert!(
             "2".parse::<SyllableCountSpecification>()
                 .unwrap()
-                .matches(&line)
+                .validate_line(&line)
         );
     }
 
@@ -502,7 +502,7 @@ mod tests {
     fn syllable_count_unknown_word_fails() {
         let line = Line::new("hello xyzzy", dict());
         let spec: SyllableCountSpecification = "1-10".parse().unwrap();
-        assert!(!spec.matches(&line));
+        assert!(!spec.validate_line(&line));
     }
 
     #[test]
