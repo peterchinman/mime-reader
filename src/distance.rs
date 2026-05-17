@@ -445,9 +445,7 @@ impl Default for DamerauLevenshtein {
 mod tests {
     use super::*;
     use crate::vowel_distance::VOWEL_DISTANCE_COEFFICIENT;
-    use std::hint::black_box;
     use std::sync::OnceLock;
-    use std::time::{Duration, Instant};
 
     static DL: OnceLock<DamerauLevenshtein> = OnceLock::new();
     fn dl() -> &'static DamerauLevenshtein {
@@ -480,53 +478,6 @@ mod tests {
                 }
             })
             .unzip()
-    }
-
-    fn benchmark_iterations() -> usize {
-        std::env::var("MIME_BENCH_ITERS")
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(10_000)
-    }
-
-    fn nanos_per_iteration(duration: Duration, iterations: usize) -> u128 {
-        duration.as_nanos() / iterations as u128
-    }
-
-    fn time_distance(iterations: usize, s1: &[Phoneme], s2: &[Phoneme]) -> (Duration, u32) {
-        let start = Instant::now();
-        let mut checksum = 0;
-        for _ in 0..iterations {
-            checksum ^= black_box(dl().distance(black_box(s1), black_box(s2)));
-        }
-        (start.elapsed(), checksum)
-    }
-
-    fn time_align_score(iterations: usize, s1: &[Phoneme], s2: &[Phoneme]) -> (Duration, u32) {
-        let start = Instant::now();
-        let mut checksum = 0;
-        for _ in 0..iterations {
-            checksum ^= black_box(dl().align(black_box(s1), black_box(s2)).score());
-        }
-        (start.elapsed(), checksum)
-    }
-
-    fn print_score_benchmark(name: &str, iterations: usize, s1: &[Phoneme], s2: &[Phoneme]) {
-        let distance_score = dl().distance(s1, s2);
-        let align_score = dl().align(s1, s2).score();
-        assert_eq!(align_score, distance_score);
-
-        let (distance_duration, distance_checksum) = time_distance(iterations, s1, s2);
-        let (align_duration, align_checksum) = time_align_score(iterations, s1, s2);
-        assert_eq!(align_checksum, distance_checksum);
-
-        let distance_nanos = nanos_per_iteration(distance_duration, iterations);
-        let align_nanos = nanos_per_iteration(align_duration, iterations);
-        let ratio = align_duration.as_secs_f64() / distance_duration.as_secs_f64();
-
-        println!(
-            "{name}: score={distance_score}, iterations={iterations}, distance={distance_nanos} ns/iter, align().score()={align_nanos} ns/iter, ratio={ratio:.2}x"
-        );
     }
 
     #[test]
@@ -655,30 +606,5 @@ mod tests {
         let s1 = parse("M AO1 S T");
         let s2 = parse("B OW1 T");
         assert_eq!(dl().distance(&s1, &s2), dl().distance(&s2, &s1));
-    }
-
-    #[test]
-    #[ignore]
-    fn benchmark_distance_vs_align_score() {
-        let iterations = benchmark_iterations();
-
-        print_score_benchmark(
-            "short insertion",
-            iterations,
-            &parse("M AO1 T"),
-            &parse("M AO1 S T"),
-        );
-        print_score_benchmark(
-            "adjacent transposition",
-            iterations,
-            &parse("M AO1 S T"),
-            &parse("M AO1 T S"),
-        );
-        print_score_benchmark(
-            "long mixed edits",
-            iterations,
-            &parse("M AE1 N T AH0 N S IH2 V L IY0 S P IY1 CH"),
-            &parse("B AE1 N D AH0 N T S IH2 V R IY0 S P IY1 CH"),
-        );
     }
 }
