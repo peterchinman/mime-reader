@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::{
     Stress,
-    error::{MeterMatchError, ParseMeterError, ParseSyllableCountError},
+    error::{MeterMatchError, ParseMeterError, ParseMeterSchemeError, ParseSyllableCountError},
     line::{Line, WordEntry},
 };
 
@@ -34,43 +34,36 @@ enum Segment {
 fn parse_segments(s: &str) -> Result<Vec<Segment>, ParseMeterError> {
     let mut segments: Vec<Segment> = Vec::new();
     let mut current: Vec<SyllableStress> = Vec::new();
-    let mut in_optional = false;
+    let mut open_col: Option<usize> = None;
 
-    for c in s.chars() {
+    for (i, c) in s.chars().enumerate() {
         match c {
             c if c.is_whitespace() => continue,
-            'x' | '/' | '_' => {
-                let stress = match c {
-                    'x' => SyllableStress::Unstressed,
-                    '_' => SyllableStress::Either,
-                    _ => SyllableStress::Stressed,
-                };
-                current.push(stress);
-            }
+            'x' => current.push(SyllableStress::Unstressed),
+            '/' => current.push(SyllableStress::Stressed),
+            '_' => current.push(SyllableStress::Either),
             '(' => {
-                if in_optional {
-                    return Err(ParseMeterError::InvalidParenNesting);
+                if open_col.is_some() {
+                    return Err(ParseMeterError::InvalidParenNesting { col: i });
                 }
                 if !current.is_empty() {
-                    segments.push(Segment::Required(current));
-                    current = Vec::new();
+                    segments.push(Segment::Required(std::mem::take(&mut current)));
                 }
-                in_optional = true;
+                open_col = Some(i);
             }
             ')' => {
-                if !in_optional {
-                    return Err(ParseMeterError::InvalidParenNesting);
+                if open_col.is_none() {
+                    return Err(ParseMeterError::InvalidParenNesting { col: i });
                 }
-                segments.push(Segment::Optional(current));
-                current = Vec::new();
-                in_optional = false;
+                segments.push(Segment::Optional(std::mem::take(&mut current)));
+                open_col = None;
             }
-            _ => return Err(ParseMeterError::InvalidChar(c)),
+            _ => return Err(ParseMeterError::InvalidChar { c, col: i }),
         }
     }
 
-    if in_optional {
-        return Err(ParseMeterError::InvalidParenNesting);
+    if let Some(col) = open_col {
+        return Err(ParseMeterError::InvalidParenNesting { col });
     }
 
     if !current.is_empty() {
@@ -241,6 +234,27 @@ impl SyllableCountSpecification {
     }
 }
 
+#[derive(Debug)]
+pub struct MeterScheme {
+    scheme: Vec<MeterSpecification>,
+}
+
+impl std::str::FromStr for MeterScheme {
+    type Err = ParseMeterSchemeError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let scheme = s
+            .lines()
+            .enumerate()
+            .map(|(line, text)| {
+                text.parse::<MeterSpecification>()
+                    .map_err(|source| ParseMeterSchemeError { line, source })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(MeterScheme { scheme })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{Dictionary, line::Line};
@@ -296,25 +310,37 @@ mod tests {
     #[test]
     fn unclosed_paren_returns_error() {
         let err = "x/x/(x/".parse::<MeterSpecification>().unwrap_err();
-        assert!(matches!(err, ParseMeterError::InvalidParenNesting));
+        assert!(matches!(
+            err,
+            ParseMeterError::InvalidParenNesting { col: 4 }
+        ));
     }
 
     #[test]
     fn unopened_paren_returns_error() {
         let err = "x/x/)x/".parse::<MeterSpecification>().unwrap_err();
-        assert!(matches!(err, ParseMeterError::InvalidParenNesting));
+        assert!(matches!(
+            err,
+            ParseMeterError::InvalidParenNesting { col: 4 }
+        ));
     }
 
     #[test]
     fn nested_parens_return_error() {
         let err = "x/x/(x/(x/))".parse::<MeterSpecification>().unwrap_err();
-        assert!(matches!(err, ParseMeterError::InvalidParenNesting));
+        assert!(matches!(
+            err,
+            ParseMeterError::InvalidParenNesting { col: 7 }
+        ));
     }
 
     #[test]
     fn unrecognized_character_returns_error() {
         let err = "xjx".parse::<MeterSpecification>().unwrap_err();
-        assert!(matches!(err, ParseMeterError::InvalidChar('j')));
+        assert!(matches!(
+            err,
+            ParseMeterError::InvalidChar { c: 'j', col: 1 }
+        ));
     }
 
     // --- wildcard (_) ---
@@ -515,5 +541,33 @@ mod tests {
     fn syllable_count_inverted_range_returns_error() {
         let err = "11-8".parse::<SyllableCountSpecification>().unwrap_err();
         assert!(matches!(err, ParseSyllableCountError::InvalidRange));
+    }
+
+    // --- MeterScheme ---
+
+    #[test]
+    fn meter_scheme_parses_multiple_lines() {
+        let ms: MeterScheme = "x/x/x/x/x/\n//xx//".parse().unwrap();
+        assert_eq!(ms.scheme.len(), 2);
+        assert!(
+            ms.scheme[0]
+                .possible_meters
+                .contains(&meter(&[U, S, U, S, U, S, U, S, U, S]))
+        );
+        assert!(
+            ms.scheme[1]
+                .possible_meters
+                .contains(&meter(&[S, S, U, U, S, S]))
+        );
+    }
+
+    #[test]
+    fn meter_scheme_propagates_line_parse_error() {
+        let err = "x/x/\nx/j/".parse::<MeterScheme>().unwrap_err();
+        assert_eq!(err.line, 1);
+        assert!(matches!(
+            err.source,
+            ParseMeterError::InvalidChar { c: 'j', col: 2 }
+        ));
     }
 }
