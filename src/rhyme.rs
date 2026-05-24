@@ -49,6 +49,8 @@ impl RhymeScheme {
             Some(leader)
         }
     }
+
+    // TODO: implement rhyme scheme check
 }
 
 fn rhyming_parts_of_last_word<'a>(line: &'a Line) -> HashSet<RhymingPart<'a>> {
@@ -302,5 +304,99 @@ mod tests {
         let a = Line::new("", dict());
         let b = Line::new("cat", dict());
         assert_eq!(compare_rhyming_parts(&a, &b, dl()), None);
+    }
+
+    // --- RhymeScheme::new ---
+
+    #[test]
+    fn rhyme_scheme_basic_pattern() {
+        let rs = RhymeScheme::new("ABAB", 8.0).unwrap();
+        assert_eq!(rs.scheme, vec![Some(0), Some(1), Some(0), Some(1)]);
+    }
+
+    #[test]
+    fn rhyme_scheme_ignores_whitespace() {
+        let rs = RhymeScheme::new("A B\nA B", 8.0).unwrap();
+        assert_eq!(rs.scheme, vec![Some(0), Some(1), Some(0), Some(1)]);
+    }
+
+    #[test]
+    fn rhyme_scheme_underscore_is_unconstrained() {
+        let rs = RhymeScheme::new("A_BA", 8.0).unwrap();
+        assert_eq!(rs.scheme, vec![Some(0), None, Some(1), Some(0)]);
+    }
+
+    #[test]
+    fn rhyme_scheme_ids_assigned_in_order_of_first_appearance() {
+        // 'Z' appears before 'A', so Z gets id 0 and A gets id 1
+        let rs = RhymeScheme::new("ZAZA", 8.0).unwrap();
+        assert_eq!(rs.scheme, vec![Some(0), Some(1), Some(0), Some(1)]);
+    }
+
+    #[test]
+    fn rhyme_scheme_threshold_stored() {
+        let rs = RhymeScheme::new("AABB", 7.5).unwrap();
+        assert_eq!(rs.threshold, 7.5);
+    }
+
+    // --- group_for_line ---
+
+    #[test]
+    fn group_for_line_within_pattern() {
+        let rs = RhymeScheme::new("ABAB", 8.0).unwrap();
+        assert_eq!(rs.group_for_line(0), Some(0));
+        assert_eq!(rs.group_for_line(1), Some(1));
+        assert_eq!(rs.group_for_line(2), Some(0));
+        assert_eq!(rs.group_for_line(3), Some(1));
+    }
+
+    #[test]
+    fn group_for_line_cycles_via_modulo() {
+        let rs = RhymeScheme::new("ABAB", 8.0).unwrap();
+        assert_eq!(rs.group_for_line(4), Some(0));
+        assert_eq!(rs.group_for_line(5), Some(1));
+        assert_eq!(rs.group_for_line(7), Some(1));
+    }
+
+    #[test]
+    fn group_for_line_unconstrained_returns_none() {
+        let rs = RhymeScheme::new("A_BA", 8.0).unwrap();
+        assert_eq!(rs.group_for_line(1), None);
+        // also cycles: line 5 is position 1 in the next cycle
+        assert_eq!(rs.group_for_line(5), None);
+    }
+
+    // --- leader_for_line ---
+
+    #[test]
+    fn leader_for_line_first_occurrence_has_no_leader() {
+        let rs = RhymeScheme::new("ABAB", 8.0).unwrap();
+        assert_eq!(rs.leader_for_line(0), None);
+        assert_eq!(rs.leader_for_line(1), None);
+    }
+
+    #[test]
+    fn leader_for_line_follower_points_to_leader() {
+        let rs = RhymeScheme::new("ABAB", 8.0).unwrap();
+        assert_eq!(rs.leader_for_line(2), Some(0));
+        assert_eq!(rs.leader_for_line(3), Some(1));
+    }
+
+    #[test]
+    fn leader_for_line_resets_per_cycle() {
+        // Each repetition of the pattern is its own group of leaders/followers.
+        let rs = RhymeScheme::new("ABAB", 8.0).unwrap();
+        // line 4 starts cycle 2; it's the new leader for its A group
+        assert_eq!(rs.leader_for_line(4), None);
+        assert_eq!(rs.leader_for_line(5), None);
+        // line 6 is the second A of cycle 2 → leader is line 4
+        assert_eq!(rs.leader_for_line(6), Some(4));
+        assert_eq!(rs.leader_for_line(7), Some(5));
+    }
+
+    #[test]
+    fn leader_for_line_unconstrained_returns_none() {
+        let rs = RhymeScheme::new("A_BA", 8.0).unwrap();
+        assert_eq!(rs.leader_for_line(1), None);
     }
 }
