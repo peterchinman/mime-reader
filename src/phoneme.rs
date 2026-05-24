@@ -1,5 +1,3 @@
-use std::num::NonZeroUsize;
-
 use crate::error::ParseArpabetError;
 
 // --- ConsonantPhoneme ---
@@ -334,10 +332,11 @@ pub struct RhymingPart<'a> {
     pub syllable_count: usize,
 }
 
+// TODO: Should the rhyming part be from the last PRIMARY stress, or the last stressed syllable, either PRIMARY or SECONDARY?? Consider: CALLIOPE... is the rhyming part IOPE or E?
 pub fn get_rhyming_part<'a>(word: &'a [Phoneme]) -> RhymingPart<'a> {
     let final_stressed_index = word
         .iter()
-        .rposition(|p| matches!(p, Phoneme::Vowel(v) if v.stress != Stress::Unstressed));
+        .rposition(|p| matches!(p, Phoneme::Vowel(v) if v.stress == Stress::Primary));
     let rhyming_part = &word[final_stressed_index.unwrap_or(0)..];
     RhymingPart {
         phonemes: rhyming_part,
@@ -494,21 +493,12 @@ mod tests {
     }
 
     #[test]
-    fn rhyming_part_uses_last_stressed_vowel() {
-        // AH0 B AH1 V = "above": last stressed is AH1, rhyming part is [AH1, V]
-        let word = phonemes(&["AH0", "B", "AH1", "V"]);
+    fn rhyming_part_secondary_stress_not_anchor() {
+        // CALLIOPE: K AH0 L AY1 AH0 P IY2 — only AY1 is primary, rhyming part starts there
+        let word = phonemes(&["K", "AH0", "L", "AY1", "AH0", "P", "IY2"]);
         let rp = get_rhyming_part(&word);
-        assert_eq!(rp.phonemes, &word[2..]);
-        assert_eq!(rp.syllable_count, 1);
-    }
-
-    #[test]
-    fn rhyming_part_secondary_stress_counts_as_stressed() {
-        // AH0 B AH2 V: secondary stress counts, rhyming part is [AH2, V]
-        let word = phonemes(&["AH0", "B", "AH2", "V"]);
-        let rp = get_rhyming_part(&word);
-        assert_eq!(rp.phonemes, &word[2..]);
-        assert_eq!(rp.syllable_count, 1);
+        assert_eq!(rp.phonemes, &word[3..]);
+        assert_eq!(rp.syllable_count, 3);
     }
 
     #[test]
@@ -526,7 +516,7 @@ mod tests {
     fn last_n_syllables_one() {
         // K AE1 T = "cat": last 1 syllable starts at AE1
         let word = phonemes(&["K", "AE1", "T"]);
-        let result = get_last_n_syllables(&word, NonZeroUsize::new(1).unwrap());
+        let result = get_last_n_syllables(&word, 1);
         assert_eq!(result, Some(&word[1..]));
     }
 
@@ -534,34 +524,34 @@ mod tests {
     fn last_n_syllables_two() {
         // HH EH1 L OW0 = "hello": last 2 syllables starts at EH1
         let word = phonemes(&["HH", "EH1", "L", "OW0"]);
-        let result = get_last_n_syllables(&word, NonZeroUsize::new(2).unwrap());
+        let result = get_last_n_syllables(&word, 2);
         assert_eq!(result, Some(&word[1..]));
     }
 
     #[test]
     fn last_n_syllables_more_than_available_returns_none() {
         let word = phonemes(&["K", "AE1", "T"]);
-        let result = get_last_n_syllables(&word, NonZeroUsize::new(2).unwrap());
+        let result = get_last_n_syllables(&word, 2);
         assert_eq!(result, None);
     }
 
     #[test]
     fn last_n_syllables_exactly_available() {
         let word = phonemes(&["AE1", "T"]);
-        let result = get_last_n_syllables(&word, NonZeroUsize::new(1).unwrap());
+        let result = get_last_n_syllables(&word, 1);
         assert_eq!(result, Some(&word[0..]));
     }
 
     #[test]
     fn last_n_syllables_no_vowels_returns_none() {
         let word = phonemes(&["K", "T"]);
-        let result = get_last_n_syllables(&word, NonZeroUsize::new(1).unwrap());
+        let result = get_last_n_syllables(&word, 1);
         assert_eq!(result, None);
     }
 
     #[test]
     fn last_n_syllables_empty_returns_none() {
-        let result = get_last_n_syllables(&[], NonZeroUsize::new(1).unwrap());
+        let result = get_last_n_syllables(&[], 1);
         assert_eq!(result, None);
     }
 
