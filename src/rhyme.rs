@@ -8,20 +8,42 @@ use crate::{
 };
 
 pub struct RhymeScheme {
-    scheme: Vec<SchemePosition>,
+    scheme: Vec<SchemeRole>,
     threshold: f32,
 }
 
+/// A role within the stored rhyme scheme pattern.
+///
+/// Positions here are scheme-relative: for example, in `ABAB`, the third
+/// position is a follower whose `leader_position` is `0`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum SchemePosition {
+enum SchemeRole {
+    /// The first occurrence of a rhyme label within the scheme pattern.
+    Leader,
+    /// A scheme position that imposes no rhyme constraint, represented by `_`.
     Unconstrained,
-    Constrained { group: u8, leader_offset: usize },
+    /// A repeated rhyme label that should rhyme with an earlier scheme position.
+    Follower {
+        /// The index within the scheme pattern of the label's first occurrence.
+        leader_position: usize,
+    },
 }
 
+/// A role for a concrete line in a poem after resolving the repeated scheme.
+///
+/// Positions here are poem-line-relative: for example, with repeated `ABAB`,
+/// line `6` is a follower whose `leader_line` is `4`.
+#[derive(Debug, PartialEq)]
 enum LineRole {
+    /// This line establishes the rhyme for its group in the current scheme cycle.
     Leader,
+    /// This line has no rhyme constraint.
     Unconstrained,
-    Follower { leader: usize },
+    /// This line should rhyme with an earlier concrete line.
+    Follower {
+        /// The absolute line index of the leader this line should rhyme with.
+        leader_line: usize,
+    },
 }
 
 pub enum RhymeCheckStatus {
@@ -36,33 +58,27 @@ pub enum RhymeCheckStatus {
 
 impl RhymeScheme {
     pub fn new(s: &str, threshold: f32) -> Result<Self, ParseRhymeError> {
-        // Value is (group, leader_index)
-        let mut map: HashMap<char, (u8, usize)> = HashMap::new();
-        let mut next: u8 = 0;
+        let mut map: HashMap<char, usize> = HashMap::new();
         let scheme = s
             .chars()
             .filter(|c| !c.is_whitespace())
             .enumerate()
             .map(|(i, c)| match c {
-                '_' => SchemePosition::Unconstrained,
-                _ => {
-                    let (group, leader_index) = *map.entry(c).or_insert_with(|| {
-                        let id = next;
-                        next += 1;
-                        (id, i)
-                    });
-                    SchemePosition::Constrained {
-                        group,
-                        leader_offset: i - leader_index,
+                '_' => SchemeRole::Unconstrained,
+                _ => match map.get(&c) {
+                    Some(&leader_position) => SchemeRole::Follower { leader_position },
+                    None => {
+                        map.insert(c, i);
+                        SchemeRole::Leader
                     }
-                }
+                },
             })
             .collect();
         Ok(RhymeScheme { scheme, threshold })
     }
 
-    /// Returns the SchemePosition for a given line index. If line is unconstrained returns None.
-    fn group_for_line(&self, line_index: usize) -> SchemePosition {
+    /// Returns the scheme role for a given line index, cycling through repeated schemes.
+    fn scheme_role_for_line(&self, line_index: usize) -> SchemeRole {
         self.scheme[line_index % self.scheme.len()]
     }
 
@@ -72,19 +88,15 @@ impl RhymeScheme {
     /// - `Follower`: this line should rhyme with the line at the given leader index
     fn line_role(&self, line_index: usize) -> LineRole {
         let pattern_len = self.scheme.len();
-        let SchemePosition::Constrained {
-            group,
-            leader_offset,
-        } = self.scheme[line_index % self.scheme.len()]
-        else {
-            return LineRole::Unconstrained;
-        };
-        let cycle = line_index / pattern_len;
-        let leader = cycle * pattern_len + leader_offset;
-        if leader == line_index {
-            LineRole::Leader
-        } else {
-            LineRole::Follower { leader }
+        let line_position = line_index % pattern_len;
+        let cycle_start = line_index - line_position;
+
+        match self.scheme[line_position] {
+            SchemeRole::Leader => LineRole::Leader,
+            SchemeRole::Unconstrained => LineRole::Unconstrained,
+            SchemeRole::Follower { leader_position } => LineRole::Follower {
+                leader_line: cycle_start + leader_position,
+            },
         }
     }
 
@@ -360,22 +372,10 @@ mod tests {
         assert_eq!(
             rs.scheme,
             vec![
-                SchemePosition::Constrained {
-                    group: 0,
-                    leader_offset: 0
-                },
-                SchemePosition::Constrained {
-                    group: 1,
-                    leader_offset: 0
-                },
-                SchemePosition::Constrained {
-                    group: 0,
-                    leader_offset: 2
-                },
-                SchemePosition::Constrained {
-                    group: 1,
-                    leader_offset: 2
-                }
+                SchemeRole::Leader,
+                SchemeRole::Leader,
+                SchemeRole::Follower { leader_position: 0 },
+                SchemeRole::Follower { leader_position: 1 }
             ]
         );
     }
@@ -383,20 +383,43 @@ mod tests {
     #[test]
     fn rhyme_scheme_ignores_whitespace() {
         let rs = RhymeScheme::new("A B\nA B", 8.0).unwrap();
-        assert_eq!(rs.scheme, vec![Some(0), Some(1), Some(0), Some(1)]);
+        assert_eq!(
+            rs.scheme,
+            vec![
+                SchemeRole::Leader,
+                SchemeRole::Leader,
+                SchemeRole::Follower { leader_position: 0 },
+                SchemeRole::Follower { leader_position: 1 }
+            ]
+        );
     }
 
     #[test]
     fn rhyme_scheme_underscore_is_unconstrained() {
         let rs = RhymeScheme::new("A_BA", 8.0).unwrap();
-        assert_eq!(rs.scheme, vec![Some(0), None, Some(1), Some(0)]);
+        assert_eq!(
+            rs.scheme,
+            vec![
+                SchemeRole::Leader,
+                SchemeRole::Unconstrained,
+                SchemeRole::Leader,
+                SchemeRole::Follower { leader_position: 0 }
+            ]
+        );
     }
 
     #[test]
-    fn rhyme_scheme_ids_assigned_in_order_of_first_appearance() {
-        // 'Z' appears before 'A', so Z gets id 0 and A gets id 1
+    fn rhyme_scheme_repeated_letters_follow_first_appearance() {
         let rs = RhymeScheme::new("ZAZA", 8.0).unwrap();
-        assert_eq!(rs.scheme, vec![Some(0), Some(1), Some(0), Some(1)]);
+        assert_eq!(
+            rs.scheme,
+            vec![
+                SchemeRole::Leader,
+                SchemeRole::Leader,
+                SchemeRole::Follower { leader_position: 0 },
+                SchemeRole::Follower { leader_position: 1 }
+            ]
+        );
     }
 
     #[test]
@@ -405,64 +428,73 @@ mod tests {
         assert_eq!(rs.threshold, 7.5);
     }
 
-    // --- group_for_line ---
+    // --- scheme_role_for_line ---
 
     #[test]
-    fn group_for_line_within_pattern() {
+    fn scheme_role_for_line_within_pattern() {
         let rs = RhymeScheme::new("ABAB", 8.0).unwrap();
-        assert_eq!(rs.group_for_line(0), Some(0));
-        assert_eq!(rs.group_for_line(1), Some(1));
-        assert_eq!(rs.group_for_line(2), Some(0));
-        assert_eq!(rs.group_for_line(3), Some(1));
+        assert_eq!(rs.scheme_role_for_line(0), SchemeRole::Leader);
+        assert_eq!(rs.scheme_role_for_line(1), SchemeRole::Leader);
+        assert_eq!(
+            rs.scheme_role_for_line(2),
+            SchemeRole::Follower { leader_position: 0 }
+        );
+        assert_eq!(
+            rs.scheme_role_for_line(3),
+            SchemeRole::Follower { leader_position: 1 }
+        );
     }
 
     #[test]
-    fn group_for_line_cycles_via_modulo() {
+    fn scheme_role_for_line_cycles_via_modulo() {
         let rs = RhymeScheme::new("ABAB", 8.0).unwrap();
-        assert_eq!(rs.group_for_line(4), Some(0));
-        assert_eq!(rs.group_for_line(5), Some(1));
-        assert_eq!(rs.group_for_line(7), Some(1));
+        assert_eq!(rs.scheme_role_for_line(4), SchemeRole::Leader);
+        assert_eq!(rs.scheme_role_for_line(5), SchemeRole::Leader);
+        assert_eq!(
+            rs.scheme_role_for_line(7),
+            SchemeRole::Follower { leader_position: 1 }
+        );
     }
 
     #[test]
-    fn group_for_line_unconstrained_returns_none() {
+    fn scheme_role_for_line_unconstrained_returns_unconstrained() {
         let rs = RhymeScheme::new("A_BA", 8.0).unwrap();
-        assert_eq!(rs.group_for_line(1), None);
+        assert_eq!(rs.scheme_role_for_line(1), SchemeRole::Unconstrained);
         // also cycles: line 5 is position 1 in the next cycle
-        assert_eq!(rs.group_for_line(5), None);
+        assert_eq!(rs.scheme_role_for_line(5), SchemeRole::Unconstrained);
     }
 
-    // --- leader_for_line ---
+    // --- line_role ---
 
     #[test]
-    fn leader_for_line_first_occurrence_has_no_leader() {
+    fn line_role_first_occurrence_is_leader() {
         let rs = RhymeScheme::new("ABAB", 8.0).unwrap();
-        assert_eq!(rs.line_role(0), None);
-        assert_eq!(rs.line_role(1), None);
+        assert_eq!(rs.line_role(0), LineRole::Leader);
+        assert_eq!(rs.line_role(1), LineRole::Leader);
     }
 
     #[test]
-    fn leader_for_line_follower_points_to_leader() {
+    fn line_role_follower_points_to_leader() {
         let rs = RhymeScheme::new("ABAB", 8.0).unwrap();
-        assert_eq!(rs.line_role(2), Some(0));
-        assert_eq!(rs.line_role(3), Some(1));
+        assert_eq!(rs.line_role(2), LineRole::Follower { leader_line: 0 });
+        assert_eq!(rs.line_role(3), LineRole::Follower { leader_line: 1 });
     }
 
     #[test]
-    fn leader_for_line_resets_per_cycle() {
+    fn line_role_resets_per_cycle() {
         // Each repetition of the pattern is its own group of leaders/followers.
         let rs = RhymeScheme::new("ABAB", 8.0).unwrap();
         // line 4 starts cycle 2; it's the new leader for its A group
-        assert_eq!(rs.line_role(4), None);
-        assert_eq!(rs.line_role(5), None);
+        assert_eq!(rs.line_role(4), LineRole::Leader);
+        assert_eq!(rs.line_role(5), LineRole::Leader);
         // line 6 is the second A of cycle 2 → leader is line 4
-        assert_eq!(rs.line_role(6), Some(4));
-        assert_eq!(rs.line_role(7), Some(5));
+        assert_eq!(rs.line_role(6), LineRole::Follower { leader_line: 4 });
+        assert_eq!(rs.line_role(7), LineRole::Follower { leader_line: 5 });
     }
 
     #[test]
-    fn leader_for_line_unconstrained_returns_none() {
+    fn line_role_unconstrained_returns_unconstrained() {
         let rs = RhymeScheme::new("A_BA", 8.0).unwrap();
-        assert_eq!(rs.line_role(1), None);
+        assert_eq!(rs.line_role(1), LineRole::Unconstrained);
     }
 }
