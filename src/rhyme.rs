@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     DamerauLevenshtein, Line,
-    error::ParseRhymeError,
+    error::{ParseRhymeError, RhymeCheckError},
     line::{WordData, WordEntry},
     phoneme::{Phoneme, RhymingPart, get_last_n_syllables, get_rhyming_part},
 };
@@ -52,9 +52,9 @@ pub enum RhymeCheckResult {
     Unconstrained,
     Follower {
         leader_line: usize,
-        /// The distance between the leader's rhyming part and the follower's rhyming part. None if the distance is unknown.
-        distance: Option<f32>,
-        passed: Option<bool>,
+        /// The distance between the leader's rhyming part and the follower's rhyming part.
+        distance: f32,
+        passed: bool,
     },
 }
 
@@ -97,25 +97,40 @@ impl RhymeScheme {
         }
     }
 
-    /// Checks the Line at the given Target Index. Returns a [`RhymeCheckResult`] indicating whether the line is a Leader, Unconstrained, or a Follower.
-    /// If the line is a Follower, returns the minimum { distance between (all of) the (possible) rhyming part(s) of the last word of the Leader against the same sized portion of Target, divided by the syllable count } and checks whether this is below the threshold defined in the [`RhymeScheme`].
+    /// Checks the rhyme scheme of the line at `target_index`.
+    ///
+    /// Returns whether the line is a leader, unconstrained, or a follower. For followers,
+    /// returns the minimum distance between the leader's possible rhyming parts and the
+    /// target line's matching trailing syllables, divided by the syllable count, along
+    /// with whether that distance is below this scheme's threshold.
     pub fn check_line(
         &self,
         lines: &[Line],
         target_index: usize,
         dl: &DamerauLevenshtein,
-    ) -> RhymeCheckResult {
+    ) -> Result<RhymeCheckResult, RhymeCheckError> {
+        if target_index >= lines.len() {
+            return Err(RhymeCheckError::TargetLineOutOfBounds {
+                target_index,
+                line_count: lines.len(),
+            });
+        }
+
         match self.line_role(target_index) {
-            LineRole::Leader => RhymeCheckResult::Leader,
-            LineRole::Unconstrained => RhymeCheckResult::Unconstrained,
+            LineRole::Leader => Ok(RhymeCheckResult::Leader),
+            LineRole::Unconstrained => Ok(RhymeCheckResult::Unconstrained),
             LineRole::Follower { leader_line } => {
-                let distance = compare_rhyming_parts(&lines[leader_line], &lines[target_index], dl);
-                let passed = distance.map(|d| d <= self.threshold);
-                RhymeCheckResult::Follower {
+                let distance = compare_rhyming_parts(&lines[leader_line], &lines[target_index], dl)
+                    .ok_or(RhymeCheckError::UnableToDetermineDistance {
+                        target_index,
+                        leader_line,
+                    })?;
+                let passed = distance <= self.threshold;
+                Ok(RhymeCheckResult::Follower {
                     leader_line,
                     distance,
                     passed,
-                }
+                })
             }
         }
     }
@@ -549,8 +564,8 @@ mod tests {
         let rs = RhymeScheme::new("ABAB", 1.0).unwrap();
         let lines = vec![Line::new("cat", dict()), Line::new("dog", dict())];
 
-        assert_eq!(rs.check_line(&lines, 0, dl()), RhymeCheckResult::Leader);
-        assert_eq!(rs.check_line(&lines, 1, dl()), RhymeCheckResult::Leader);
+        assert_eq!(rs.check_line(&lines, 0, dl()), Ok(RhymeCheckResult::Leader));
+        assert_eq!(rs.check_line(&lines, 1, dl()), Ok(RhymeCheckResult::Leader));
     }
 
     #[test]
@@ -560,7 +575,7 @@ mod tests {
 
         assert_eq!(
             rs.check_line(&lines, 1, dl()),
-            RhymeCheckResult::Unconstrained
+            Ok(RhymeCheckResult::Unconstrained)
         );
     }
 
@@ -576,19 +591,19 @@ mod tests {
 
         assert_eq!(
             rs.check_line(&lines, 2, dl()),
-            RhymeCheckResult::Follower {
+            Ok(RhymeCheckResult::Follower {
                 leader_line: 0,
-                distance: Some(0.0),
-                passed: Some(true),
-            }
+                distance: 0.0,
+                passed: true,
+            })
         );
         assert_eq!(
             rs.check_line(&lines, 3, dl()),
-            RhymeCheckResult::Follower {
+            Ok(RhymeCheckResult::Follower {
                 leader_line: 1,
-                distance: Some(0.0),
-                passed: Some(true),
-            }
+                distance: 0.0,
+                passed: true,
+            })
         );
     }
 
@@ -608,49 +623,61 @@ mod tests {
 
         assert_eq!(
             rs.check_line(&lines, 6, dl()),
-            RhymeCheckResult::Follower {
+            Ok(RhymeCheckResult::Follower {
                 leader_line: 4,
-                distance: Some(0.0),
-                passed: Some(true),
-            }
+                distance: 0.0,
+                passed: true,
+            })
         );
         assert_eq!(
             rs.check_line(&lines, 7, dl()),
-            RhymeCheckResult::Follower {
+            Ok(RhymeCheckResult::Follower {
                 leader_line: 5,
-                distance: Some(0.0),
-                passed: Some(true),
-            }
+                distance: 0.0,
+                passed: true,
+            })
         );
     }
 
     #[test]
-    fn check_line_follower_unknown_word_returns_unknown_distance() {
+    fn check_line_target_index_out_of_bounds_returns_error() {
+        let rs = RhymeScheme::new("ABAB", 1.0).unwrap();
+        let lines = vec![Line::new("cat", dict()), Line::new("dog", dict())];
+
+        assert_eq!(
+            rs.check_line(&lines, 4, dl()),
+            Err(RhymeCheckError::TargetLineOutOfBounds {
+                target_index: 4,
+                line_count: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn check_line_follower_unknown_word_returns_distance_error() {
         let rs = RhymeScheme::new("AA", 1.0).unwrap();
         let lines = vec![Line::new("cat", dict()), Line::new("xyzzy", dict())];
 
         assert_eq!(
             rs.check_line(&lines, 1, dl()),
-            RhymeCheckResult::Follower {
+            Err(RhymeCheckError::UnableToDetermineDistance {
+                target_index: 1,
                 leader_line: 0,
-                distance: None,
-                passed: None,
-            }
+            })
         );
     }
 
     #[test]
-    fn check_line_follower_empty_line_returns_unknown_distance() {
+    fn check_line_follower_empty_line_returns_distance_error() {
         let rs = RhymeScheme::new("AA", 1.0).unwrap();
         let lines = vec![Line::new("cat", dict()), Line::new("", dict())];
 
         assert_eq!(
             rs.check_line(&lines, 1, dl()),
-            RhymeCheckResult::Follower {
+            Err(RhymeCheckError::UnableToDetermineDistance {
+                target_index: 1,
                 leader_line: 0,
-                distance: None,
-                passed: None,
-            }
+            })
         );
     }
 }

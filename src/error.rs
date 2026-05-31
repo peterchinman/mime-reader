@@ -59,8 +59,7 @@ pub struct ParseMeterSchemeError {
 
 impl std::fmt::Display for ParseMeterSchemeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "line {}: {}", self.line + 1,
-          self.source)  // +1 for human-readable
+        write!(f, "line {}: {}", self.line + 1, self.source) // +1 for human-readable
     }
 }
 
@@ -104,6 +103,39 @@ impl std::fmt::Display for ParseRhymeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ParseRhymeError::InvalidChar(c) => write!(f, "invalid rhyme character '{}'", c),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum RhymeCheckError {
+    TargetLineOutOfBounds {
+        target_index: usize,
+        line_count: usize,
+    },
+    UnableToDetermineDistance {
+        target_index: usize,
+        leader_line: usize,
+    },
+}
+
+impl std::fmt::Display for RhymeCheckError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RhymeCheckError::TargetLineOutOfBounds {
+                target_index,
+                line_count,
+            } => write!(
+                f,
+                "target line index {target_index} is out of bounds for {line_count} lines"
+            ),
+            RhymeCheckError::UnableToDetermineDistance {
+                target_index,
+                leader_line,
+            } => write!(
+                f,
+                "unable to determine rhyme distance between leader line {leader_line} and target line {target_index}"
+            ),
         }
     }
 }
