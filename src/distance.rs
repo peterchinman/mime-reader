@@ -10,7 +10,7 @@ const VOWEL_TO_CONSONANT_MISMATCH: u32 = 1000;
 // TODO find the correct value for this. My instinct is that vowels should be significantly more important than consonants.
 const VOWEL_COEFFICIENT: u32 = 3;
 // Ideally, we should be comparing equal syllable slices, in which case, the insertion/deletion penalty for vowels should be arbitrarily high, as we always want the vowels to align.
-// TODO: allow comparing different sized syllable slices (in which case I think what you want to do is... find which the smaller-sized slice of the larger one with the lowest distance score)
+// TODO: allow comparing different sized syllable slices? (in which case I think what you want to do is... find the smaller-sized slice of the larger one with the lowest distance score)
 const VOWEL_INDEL_PENALTY: u32 = 1000;
 // Insertion/deletion penalty for consonants
 // This should be greater or equal to half of the Consonant's UNRELATED_PENALTY, otherwise it's cheaper to insert/delete a consonant than to compare unrelated consonants.

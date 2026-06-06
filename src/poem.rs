@@ -1,4 +1,15 @@
-use crate::{DamerauLevenshtein, Dictionary, Line, MeterScheme, RhymeScheme};
+use crate::{
+    DamerauLevenshtein, Dictionary, Line, MeterScheme, RhymeScheme,
+    error::{MeterCheckError, RhymeCheckError},
+    meter::MeterMatchResult,
+    rhyme::RhymeCheckResult,
+};
+
+pub struct PoemLine {
+    line: Line,
+    rhyme_check: Option<Result<RhymeCheckResult, RhymeCheckError>>,
+    meter_check: Option<Result<MeterMatchResult, MeterCheckError>>,
+}
 
 pub struct Poem {
     lines: Vec<Line>,
@@ -7,15 +18,19 @@ pub struct Poem {
 }
 
 impl Poem {
+    /// Updates the line at the given index with the given text.
     pub fn update_line(&mut self, index: usize, text: &str, analyzer: &Analyzer) {
         let new_line = Line::new(text, &analyzer.dict);
-        self.lines.splice(..index, std::iter::once(new_line));
+        self.lines[index] = new_line;
     }
+    /// Inserts a new line at the given index with the given text.
     pub fn insert_line(&mut self, index: usize, text: &str, analyzer: &Analyzer) {
-        todo!()
+        let inserted_line = Line::new(text, &analyzer.dict);
+        self.lines.insert(index, inserted_line);
     }
+    /// Deletes the line at the given index.
     pub fn delete_line(&mut self, index: usize) {
-        todo!()
+        self.lines.remove(index);
     }
 }
 

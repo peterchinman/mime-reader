@@ -13,13 +13,16 @@ pub enum WordData {
 }
 
 impl WordData {
-    pub fn stress_patterns(&self) -> HashSet<&[Stress]> {
+    /// Returns the stress patterns of the word, if known.
+    pub fn stress_patterns(&self) -> Option<HashSet<&[Stress]>> {
         match self {
-            WordData::Known(pronunciations) => pronunciations
-                .iter()
-                .map(|p| p.stress_pattern.as_slice())
-                .collect(),
-            WordData::Unknown => HashSet::new(),
+            WordData::Known(pronunciations) => Some(
+                pronunciations
+                    .iter()
+                    .map(|p| p.stress_pattern.as_slice())
+                    .collect(),
+            ),
+            WordData::Unknown => None,
         }
     }
 }
@@ -99,6 +102,12 @@ mod tests {
     // --- Line ---
 
     #[test]
+    fn blank_line_has_no_words() {
+        let line = Line::new("", dict());
+        assert!(line.words.is_empty());
+    }
+
+    #[test]
     fn known_words_have_pronunciations() {
         let line = Line::new("hello world", dict());
         assert_eq!(line.words.len(), 2);
@@ -127,7 +136,7 @@ mod tests {
     fn stress_patterns_deduplicated() {
         // both pronunciations of "hello" have the same stress pattern, so HashSet should have 1 entry
         let line = Line::new("hello", dict());
-        assert_eq!(line.words[0].data.stress_patterns().len(), 1);
+        assert_eq!(line.words[0].data.stress_patterns().unwrap().len(), 1);
     }
 
     #[test]

@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     DamerauLevenshtein, Line,
-    error::{ParseRhymeError, RhymeCheckError},
+    error::{ParseRhymeError, RhymeCheckError, UnknownWordError},
     line::{WordData, WordEntry},
     phoneme::{Phoneme, RhymingPart, get_last_n_syllables, get_rhyming_part},
 };
@@ -97,12 +97,9 @@ impl RhymeScheme {
         }
     }
 
-    /// Checks the rhyme scheme of the line at `target_index`.
-    ///
-    /// Returns whether the line is a leader, unconstrained, or a follower. For followers,
-    /// returns the minimum distance between the leader's possible rhyming parts and the
-    /// target line's matching trailing syllables, divided by the syllable count, along
-    /// with whether that distance is below this scheme's threshold.
+    /// Checks the Rhyme Scheme of a Line at the given Target Index. Returns OK([`RhymeCheckResult`]) indicating whether the line is a Leader, Unconstrained, or a Follower.
+    /// If the line is a Follower, returns the minimum { distance between (all of) the (possible) rhyming part(s) of the last word of the Leader against the same sized portion of Target, divided by the syllable count } and checks whether this is below the threshold defined in the [`RhymeScheme`].
+    /// Returns an error if the Target Index is not contained in `lines`, or if the rhyme distance cannot be determined.
     pub fn check_line(
         &self,
         lines: &[Line],
@@ -120,11 +117,8 @@ impl RhymeScheme {
             LineRole::Leader => Ok(RhymeCheckResult::Leader),
             LineRole::Unconstrained => Ok(RhymeCheckResult::Unconstrained),
             LineRole::Follower { leader_line } => {
-                let distance = compare_rhyming_parts(&lines[leader_line], &lines[target_index], dl)
-                    .ok_or(RhymeCheckError::UnableToDetermineDistance {
-                        target_index,
-                        leader_line,
-                    })?;
+                let distance =
+                    compare_rhyming_parts(&lines[leader_line], &lines[target_index], dl)?;
                 let passed = distance <= self.threshold;
                 Ok(RhymeCheckResult::Follower {
                     leader_line,
@@ -136,30 +130,49 @@ impl RhymeScheme {
     }
 }
 
-fn rhyming_parts_of_last_word<'a>(line: &'a Line) -> HashSet<RhymingPart<'a>> {
-    line.words
-        .last()
-        .and_then(|word| match &word.data {
-            WordData::Known(ps) => Some(ps),
-            WordData::Unknown => None,
-        })
-        .map(|ps| ps.iter().map(|p| get_rhyming_part(&p.phonemes)).collect())
-        .unwrap_or_default()
+fn rhyming_parts_of_last_word<'a>(
+    line: &'a Line,
+) -> Result<HashSet<RhymingPart<'a>>, RhymeCheckError> {
+    let Some(word) = line.words.last() else {
+        return Err(RhymeCheckError::EmptyLine);
+    };
+    let WordData::Known(pronunciations) = &word.data else {
+        return Err(UnknownWordError {
+            word: word.word.clone(),
+        }
+        .into());
+    };
+    Ok(pronunciations
+        .iter()
+        .map(|p| get_rhyming_part(&p.phonemes))
+        .collect())
 }
 
-/// Returns all possible phoneme sequences representing the last `n` syllables of the line,
+/// Returns all possible phoneme sequences representing the last `n` syllables of a sequence of words,
 /// considering all pronunciation combinations across word boundaries.
-fn last_n_syllables_of_line(words: &[WordEntry], n: usize) -> HashSet<Vec<Phoneme>> {
+///
+/// Combinatoric possibilities without enough syllables are skipped.
+///
+/// If `n` is 0, returns an empty set.
+///
+/// Only returns an error if an unknown word is encountered.
+fn last_n_syllables_of_line(
+    words: &[WordEntry],
+    n: usize,
+) -> Result<HashSet<Vec<Phoneme>>, RhymeCheckError> {
     if n == 0 {
-        return HashSet::from([vec![]]);
+        return Ok(HashSet::from([vec![]]));
     }
 
     let Some(last_word) = words.last() else {
-        return HashSet::new();
+        return Ok(HashSet::new());
     };
 
     let WordData::Known(pronunciations) = &last_word.data else {
-        return HashSet::new();
+        return Err(UnknownWordError {
+            word: last_word.word.clone(),
+        }
+        .into());
     };
 
     let preceding_words = &words[..words.len() - 1];
@@ -171,35 +184,53 @@ fn last_n_syllables_of_line(words: &[WordEntry], n: usize) -> HashSet<Vec<Phonem
         if syl_count >= n {
             if let Some(slice) = get_last_n_syllables(&pronunciation.phonemes, n) {
                 results.insert(slice.to_vec());
+            } else {
+                unreachable!();
             }
         } else {
             let needed = n - syl_count;
-            for mut preceding in last_n_syllables_of_line(preceding_words, needed) {
+
+            let Ok(preceding_parts) = last_n_syllables_of_line(preceding_words, needed) else {
+                continue;
+            };
+
+            for mut preceding in preceding_parts {
                 preceding.extend_from_slice(&pronunciation.phonemes);
                 results.insert(preceding);
             }
         }
     }
 
-    results
+    Ok(results)
 }
 
-/// Compares (all of) the (possible) rhyming part(s) of the last word of Line A against the same sized portion of Line B.
+/// Compares (all of) the (possible) rhyming part(s) of the last word of Leader Line against the same sized portion of Target Line.
 /// Returns the minimal distance between the two sections divided by the syllable count of the rhyming part.
-fn compare_rhyming_parts(a: &Line, b: &Line, dl: &DamerauLevenshtein) -> Option<f32> {
-    let parts_a = rhyming_parts_of_last_word(a);
+fn compare_rhyming_parts(
+    leader: &Line,
+    target: &Line,
+    dl: &DamerauLevenshtein,
+) -> Result<f32, RhymeCheckError> {
+    let leader_parts = rhyming_parts_of_last_word(leader)?;
 
-    parts_a
-        .iter()
-        .filter(|rp_a| rp_a.syllable_count > 0)
-        .flat_map(|rp_a| {
-            let parts_b = last_n_syllables_of_line(&b.words, rp_a.syllable_count);
-            let syl_count = rp_a.syllable_count as f32;
-            parts_b
-                .into_iter()
-                .map(move |b_phonemes| dl.distance(rp_a.phonemes, &b_phonemes) as f32 / syl_count)
-        })
-        .reduce(f32::min)
+    let mut min_distance: Option<f32> = None;
+
+    for rp_a in leader_parts.iter().filter(|rp_a| rp_a.syllable_count > 0) {
+        let target_parts = last_n_syllables_of_line(&target.words, rp_a.syllable_count)?;
+
+        let syl_count = rp_a.syllable_count as f32;
+
+        for target_phonemes in target_parts {
+            let distance = dl.distance(rp_a.phonemes, &target_phonemes) as f32 / syl_count;
+
+            min_distance = Some(match min_distance {
+                Some(current_min) => current_min.min(distance),
+                None => distance,
+            });
+        }
+    }
+
+    min_distance.ok_or(RhymeCheckError::NotEnoughSyllablesInTarget)
 }
 
 #[cfg(test)]
@@ -258,20 +289,28 @@ mod tests {
     #[test]
     fn rhyming_parts_empty_line_returns_empty() {
         let line = Line::new("", dict());
-        assert!(rhyming_parts_of_last_word(&line).is_empty());
+        assert_eq!(
+            rhyming_parts_of_last_word(&line),
+            Err(RhymeCheckError::EmptyLine)
+        );
     }
 
     #[test]
     fn rhyming_parts_unknown_word_returns_empty() {
         let line = Line::new("xyzzy", dict());
-        assert!(rhyming_parts_of_last_word(&line).is_empty());
+        assert_eq!(
+            rhyming_parts_of_last_word(&line),
+            Err(RhymeCheckError::UnknownWord(UnknownWordError {
+                word: "xyzzy".to_string(),
+            }))
+        );
     }
 
     #[test]
     fn rhyming_parts_single_known_word() {
         // "cat" = K AE1 T, rhyming part starts at last stressed vowel AE1
         let line = Line::new("cat", dict());
-        let parts = rhyming_parts_of_last_word(&line);
+        let parts = rhyming_parts_of_last_word(&line).unwrap();
         assert_eq!(parts.len(), 1);
         assert_eq!(parts.iter().next().unwrap().phonemes, ph(&["AE1", "T"]));
     }
@@ -280,7 +319,7 @@ mod tests {
     fn rhyming_parts_uses_last_word() {
         // "world" = W ER1 L D, rhyming part starts at ER1
         let line = Line::new("hello world", dict());
-        let parts = rhyming_parts_of_last_word(&line);
+        let parts = rhyming_parts_of_last_word(&line).unwrap();
         assert_eq!(parts.len(), 1);
         assert_eq!(
             parts.iter().next().unwrap().phonemes,
@@ -294,7 +333,7 @@ mod tests {
         // K AA1 N T R AE2 K T → last primary stressed = AA1 → [AA1, N, T, R, AE2, K, T]
         // K AH0 N T R AE1 K T → last primary stressed = AE1 → [AE1, K, T]
         let line = Line::new("contract", dict());
-        let parts = rhyming_parts_of_last_word(&line);
+        let parts = rhyming_parts_of_last_word(&line).unwrap();
         assert_eq!(parts.len(), 2);
         let phoneme_sets: HashSet<&[Phoneme]> = parts.iter().map(|rp| rp.phonemes).collect();
         assert!(phoneme_sets.contains(ph(&["AA1", "N", "T", "R", "AE2", "K", "T"]).as_slice()));
@@ -306,7 +345,7 @@ mod tests {
         // "hello" has two pronunciations: HH AH0 L OW1 and HH EH0 L OW1
         // both share the same rhyming part [OW1], so the HashSet deduplicates to 1 entry
         let line = Line::new("hello", dict());
-        let parts = rhyming_parts_of_last_word(&line);
+        let parts = rhyming_parts_of_last_word(&line).unwrap();
         assert_eq!(parts.len(), 1);
         assert_eq!(parts.iter().next().unwrap().phonemes, ph(&["OW1"]));
     }
@@ -317,7 +356,7 @@ mod tests {
     fn last_n_syllables_zero_returns_empty_vec() {
         let line = Line::new("hello world", dict());
         let result = last_n_syllables_of_line(&line.words, 0);
-        assert_eq!(result, HashSet::from([vec![]]));
+        assert_eq!(result, Ok(HashSet::from([vec![]])));
     }
 
     #[test]
@@ -325,7 +364,7 @@ mod tests {
         // "world" = W ER1 L D — last 1 syllable starts at ER1
         let line = Line::new("hello world", dict());
         let result = last_n_syllables_of_line(&line.words, 1);
-        assert_eq!(result, HashSet::from([ph(&["ER1", "L", "D"])]));
+        assert_eq!(result, Ok(HashSet::from([ph(&["ER1", "L", "D"])])));
     }
 
     #[test]
@@ -334,7 +373,10 @@ mod tests {
         // result: [OW1] prepended to [W, ER1, L, D]
         let line = Line::new("hello world", dict());
         let result = last_n_syllables_of_line(&line.words, 2);
-        assert_eq!(result, HashSet::from([ph(&["OW1", "W", "ER1", "L", "D"])]));
+        assert_eq!(
+            result,
+            Ok(HashSet::from([ph(&["OW1", "W", "ER1", "L", "D"])]))
+        );
     }
 
     #[test]
@@ -347,7 +389,7 @@ mod tests {
         //   K AA1 N T R AE2 K T → last 1 syl = [AE2, K, T], last 2 syl = [AA1, N, T, R, AE2, K, T]
         //   K AH0 N T R AE1 K T → last 1 syl = [AE1, K, T], last 2 syl = [AH0, N, T, R, AE1, K, T]
         let line = Line::new("contract fire", dict());
-        let result = last_n_syllables_of_line(&line.words, 3);
+        let result = last_n_syllables_of_line(&line.words, 3).unwrap();
         assert_eq!(result.len(), 4);
         assert!(result.contains(&ph(&["AE2", "K", "T", "F", "AY1", "ER0"])));
         assert!(result.contains(&ph(&["AE1", "K", "T", "F", "AY1", "ER0"])));
@@ -363,7 +405,12 @@ mod tests {
     fn last_n_syllables_unknown_word_returns_empty() {
         let line = Line::new("xyzzy", dict());
         let result = last_n_syllables_of_line(&line.words, 1);
-        assert!(result.is_empty());
+        assert_eq!(
+            result,
+            Err(RhymeCheckError::UnknownWord(UnknownWordError {
+                word: "xyzzy".to_string(),
+            }))
+        );
     }
 
     #[test]
@@ -371,7 +418,7 @@ mod tests {
         // "cat" has 1 syllable, asking for 2 with no preceding words → empty
         let line = Line::new("cat", dict());
         let result = last_n_syllables_of_line(&line.words, 2);
-        assert!(result.is_empty());
+        assert_eq!(result, Ok(HashSet::new()));
     }
 
     #[test]
@@ -379,7 +426,7 @@ mod tests {
         // "world" has 1 syllable, asking for 2 requires "xyzzy" which is unknown
         let line = Line::new("xyzzy world", dict());
         let result = last_n_syllables_of_line(&line.words, 2);
-        assert!(result.is_empty());
+        assert_eq!(result, Ok(HashSet::new()));
     }
 
     // --- compare_rhyming_parts ---
@@ -388,7 +435,7 @@ mod tests {
     fn compare_rhyming_parts_identical_words_score_zero() {
         let a = Line::new("cat", dict());
         let b = Line::new("cat", dict());
-        assert_eq!(compare_rhyming_parts(&a, &b, dl()), Some(0.0));
+        assert_eq!(compare_rhyming_parts(&a, &b, dl()), Ok(0.0));
     }
 
     #[test]
@@ -406,15 +453,28 @@ mod tests {
     fn compare_rhyming_parts_unknown_word_returns_none() {
         let a = Line::new("xyzzy", dict());
         let b = Line::new("cat", dict());
-        assert_eq!(compare_rhyming_parts(&a, &b, dl()), None);
-        assert_eq!(compare_rhyming_parts(&b, &a, dl()), None);
+        assert_eq!(
+            compare_rhyming_parts(&a, &b, dl()),
+            Err(RhymeCheckError::UnknownWord(UnknownWordError {
+                word: "xyzzy".to_string(),
+            }))
+        );
+        assert_eq!(
+            compare_rhyming_parts(&b, &a, dl()),
+            Err(RhymeCheckError::UnknownWord(UnknownWordError {
+                word: "xyzzy".to_string(),
+            }))
+        );
     }
 
     #[test]
     fn compare_rhyming_parts_empty_line_returns_none() {
         let a = Line::new("", dict());
         let b = Line::new("cat", dict());
-        assert_eq!(compare_rhyming_parts(&a, &b, dl()), None);
+        assert_eq!(
+            compare_rhyming_parts(&a, &b, dl()),
+            Err(RhymeCheckError::EmptyLine)
+        );
     }
 
     #[test]
@@ -432,7 +492,7 @@ mod tests {
             ],
         };
 
-        assert_eq!(compare_rhyming_parts(&leader, &follower, dl()), Some(0.0));
+        assert_eq!(compare_rhyming_parts(&leader, &follower, dl()), Ok(0.0));
     }
 
     #[test]
@@ -456,7 +516,7 @@ mod tests {
             ],
         };
 
-        assert_eq!(compare_rhyming_parts(&leader, &follower, dl()), Some(0.0));
+        assert_eq!(compare_rhyming_parts(&leader, &follower, dl()), Ok(0.0));
     }
 
     // --- RhymeScheme::new ---
@@ -660,10 +720,9 @@ mod tests {
 
         assert_eq!(
             rs.check_line(&lines, 1, dl()),
-            Err(RhymeCheckError::UnableToDetermineDistance {
-                target_index: 1,
-                leader_line: 0,
-            })
+            Err(RhymeCheckError::UnknownWord(UnknownWordError {
+                word: "xyzzy".to_string(),
+            }))
         );
     }
 
@@ -674,10 +733,7 @@ mod tests {
 
         assert_eq!(
             rs.check_line(&lines, 1, dl()),
-            Err(RhymeCheckError::UnableToDetermineDistance {
-                target_index: 1,
-                leader_line: 0,
-            })
+            Err(RhymeCheckError::NotEnoughSyllablesInTarget)
         );
     }
 }

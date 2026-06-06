@@ -32,6 +32,17 @@ impl std::fmt::Display for DictionaryError {
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub struct UnknownWordError {
+    pub word: String,
+}
+
+impl std::fmt::Display for UnknownWordError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unknown word: {}", self.word)
+    }
+}
+
 #[derive(Debug)]
 pub enum ParseMeterError {
     InvalidChar { c: char, col: usize },
@@ -81,20 +92,6 @@ impl std::fmt::Display for ParseSyllableCountError {
 }
 
 #[derive(Debug)]
-pub enum MeterMatchError {
-    // TODO we probably want errors for??? too long, too short, first incorrect word?, unrecognized word?
-    FailedMatch,
-}
-
-impl std::fmt::Display for MeterMatchError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            MeterMatchError::FailedMatch => write!(f, "failed to match meter"),
-        }
-    }
-}
-
-#[derive(Debug)]
 pub enum ParseRhymeError {
     InvalidChar(char),
 }
@@ -113,10 +110,15 @@ pub enum RhymeCheckError {
         target_index: usize,
         line_count: usize,
     },
-    UnableToDetermineDistance {
-        target_index: usize,
-        leader_line: usize,
-    },
+    UnknownWord(UnknownWordError),
+    EmptyLine,
+    NotEnoughSyllablesInTarget,
+}
+
+impl From<UnknownWordError> for RhymeCheckError {
+    fn from(source: UnknownWordError) -> Self {
+        RhymeCheckError::UnknownWord(source)
+    }
 }
 
 impl std::fmt::Display for RhymeCheckError {
@@ -129,13 +131,35 @@ impl std::fmt::Display for RhymeCheckError {
                 f,
                 "target line index {target_index} is out of bounds for {line_count} lines"
             ),
-            RhymeCheckError::UnableToDetermineDistance {
+            RhymeCheckError::UnknownWord(source) => write!(f, "{source}"),
+            RhymeCheckError::EmptyLine => write!(f, "empty line"),
+            RhymeCheckError::NotEnoughSyllablesInTarget => write!(f, "not enough syllables"),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum MeterCheckError {
+    TargetLineOutOfBounds {
+        target_index: usize,
+        line_count: usize,
+    },
+    UnknownWord(UnknownWordError),
+    FailedToCheck,
+}
+
+impl std::fmt::Display for MeterCheckError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MeterCheckError::TargetLineOutOfBounds {
                 target_index,
-                leader_line,
+                line_count,
             } => write!(
                 f,
-                "unable to determine rhyme distance between leader line {leader_line} and target line {target_index}"
+                "target line index {target_index} is out of bounds for {line_count} lines"
             ),
+            MeterCheckError::UnknownWord(source) => write!(f, "{source}"),
+            MeterCheckError::FailedToCheck => write!(f, "failed to check meter"),
         }
     }
 }
