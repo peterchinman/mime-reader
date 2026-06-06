@@ -326,7 +326,7 @@ fn get_syllable_count(phonemes: &[Phoneme]) -> usize {
         .count()
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RhymingPart<'a> {
     pub phonemes: &'a [Phoneme],
     pub syllable_count: usize,
