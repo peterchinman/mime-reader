@@ -97,6 +97,29 @@ impl RhymeScheme {
         }
     }
 
+    pub(crate) fn dependent_follower_indices(
+        &self,
+        line_index: usize,
+        line_count: usize,
+    ) -> Vec<usize> {
+        let pattern_len = self.scheme.len();
+        let line_position = line_index % pattern_len;
+        let cycle_start = line_index - line_position;
+        let cycle_end = (cycle_start + pattern_len).min(line_count);
+
+        match self.line_role(line_index) {
+            LineRole::Leader => (cycle_start..cycle_end)
+                .filter(|&index| {
+                    matches!(
+                        self.line_role(index),
+                        LineRole::Follower { leader_line } if leader_line == line_index
+                    )
+                })
+                .collect(),
+            LineRole::Unconstrained | LineRole::Follower { .. } => Vec::new(),
+        }
+    }
+
     /// Checks the Rhyme Scheme of a Line at the given Target Index. Returns OK([`RhymeCheckResult`]) indicating whether the line is a Leader, Unconstrained, or a Follower.
     /// If the line is a Follower, returns the minimum { distance between (all of) the (possible) rhyming part(s) of the last word of the Leader against the same sized portion of Target, divided by the syllable count } and checks whether this is below the threshold defined in the [`RhymeScheme`].
     /// Returns an error if the Target Index is not contained in `lines`, or if the rhyme distance cannot be determined.
@@ -615,6 +638,47 @@ mod tests {
     fn line_role_unconstrained_returns_unconstrained() {
         let rs = RhymeScheme::new("A_BA", 8.0).unwrap();
         assert_eq!(rs.line_role(1), LineRole::Unconstrained);
+    }
+
+    // --- dependent_follower_indices ---
+
+    #[test]
+    fn dependent_follower_indices_returns_followers_in_same_cycle() {
+        let rs = RhymeScheme::new("ABAB", 8.0).unwrap();
+
+        assert_eq!(rs.dependent_follower_indices(0, 4), vec![2]);
+        assert_eq!(rs.dependent_follower_indices(1, 4), vec![3]);
+    }
+
+    #[test]
+    fn dependent_follower_indices_resets_per_cycle() {
+        let rs = RhymeScheme::new("ABAB", 8.0).unwrap();
+
+        assert_eq!(rs.dependent_follower_indices(4, 8), vec![6]);
+        assert_eq!(rs.dependent_follower_indices(5, 8), vec![7]);
+    }
+
+    #[test]
+    fn dependent_follower_indices_returns_multiple_followers() {
+        let rs = RhymeScheme::new("AAAA", 8.0).unwrap();
+
+        assert_eq!(rs.dependent_follower_indices(0, 4), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn dependent_follower_indices_stops_at_line_count() {
+        let rs = RhymeScheme::new("ABAB", 8.0).unwrap();
+
+        assert_eq!(rs.dependent_follower_indices(0, 3), vec![2]);
+        assert_eq!(rs.dependent_follower_indices(1, 3), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn dependent_follower_indices_returns_empty_for_non_leaders() {
+        let rs = RhymeScheme::new("A_BA", 8.0).unwrap();
+
+        assert_eq!(rs.dependent_follower_indices(1, 4), Vec::<usize>::new());
+        assert_eq!(rs.dependent_follower_indices(3, 4), Vec::<usize>::new());
     }
 
     // --- RhymeScheme::check_line ---
