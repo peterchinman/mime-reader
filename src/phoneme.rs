@@ -263,7 +263,7 @@ impl std::str::FromStr for Vowel {
             "0" => Stress::Unstressed,
             "1" => Stress::Primary,
             "2" => Stress::Secondary,
-            c if c.chars().next().map_or(false, |ch| ch.is_ascii_digit()) => {
+            c if c.chars().next().is_some_and(|ch| ch.is_ascii_digit()) => {
                 return Err(ParseArpabetError::InvalidStress(c.chars().next().unwrap()));
             }
             _ => {

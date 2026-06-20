@@ -10,7 +10,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum SyllableStress {
+pub enum SyllableStress {
     Stressed,
     Unstressed,
     Either,
@@ -235,7 +235,7 @@ fn validate_recursive(
                 continue;
             }
             // Does the meter match the next word's stresses?
-            if word_stresses_matches_meter(&next_word_stresses, &m[..next_word_stresses.len()]) {
+            if word_stresses_matches_meter(next_word_stresses, &m[..next_word_stresses.len()]) {
                 meter_match_suffixes.push(&m[next_word_stresses.len()..]);
             } else {
                 failure_reasons.insert(MeterMismatch::WordsStressMismatch {
@@ -260,9 +260,9 @@ fn validate_recursive(
         }
     }
 
-    return Ok(MeterMatchResult::NoMatch {
+    Ok(MeterMatchResult::NoMatch {
         reasons: failure_reasons,
-    });
+    })
 }
 
 #[derive(Debug)]
@@ -328,7 +328,7 @@ impl MeterScheme {
         &self.scheme[line_index % self.scheme.len()]
     }
 
-    fn check_line(
+    pub fn check_line(
         &self,
         lines: &[Line],
         target_index: usize,

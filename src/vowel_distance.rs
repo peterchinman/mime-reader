@@ -200,6 +200,12 @@ impl VowelHexGraph {
     }
 }
 
+impl Default for VowelHexGraph {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Vowel {
     pub fn distance(&self, other: &Vowel, graph: &VowelHexGraph) -> u32 {
         if self == other {

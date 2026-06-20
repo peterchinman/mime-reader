@@ -115,11 +115,12 @@ impl DamerauLevenshtein {
         match phoneme {
             Phoneme::Vowel(_) => VOWEL_INDEL_PENALTY,
             Phoneme::Consonant(c) => {
-                if let Some(Phoneme::Consonant(p)) = prev {
-                    if c.phoneme == p.phoneme {
-                        return CONSONANT_REPEATED_PENALTY;
-                    }
+                if let Some(Phoneme::Consonant(p)) = prev
+                    && c.phoneme == p.phoneme
+                {
+                    return CONSONANT_REPEATED_PENALTY;
                 }
+
                 CONSONANT_INDEL_PENALTY
             }
         }
