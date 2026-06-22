@@ -1,6 +1,6 @@
 use crate::{
     DamerauLevenshtein, Dictionary, Line, MeterScheme, RhymeScheme,
-    error::{MeterCheckError, RhymeCheckError},
+    error::{MeterCheckError, PoemEditError, RhymeCheckError},
     meter::MeterMatchResult,
     rhyme::RhymeCheckResult,
 };
@@ -19,18 +19,51 @@ pub struct Poem {
 
 impl Poem {
     /// Updates the line at the given index with the given text.
-    pub fn update_line(&mut self, index: usize, text: &str, analyzer: &Analyzer) {
-        let new_line = Line::new(text, &analyzer.dict);
-        self.lines[index] = new_line;
+    pub fn update_line(
+        &mut self,
+        index: usize,
+        text: &str,
+        analyzer: &Analyzer,
+    ) -> Result<(), PoemEditError> {
+        let Some(line) = self.lines.get_mut(index) else {
+            return Err(PoemEditError::LineIndexOutOfBounds {
+                index,
+                line_count: self.lines.len(),
+            });
+        };
+
+        *line = Line::new(text, &analyzer.dict);
+        Ok(())
     }
     /// Inserts a new line at the given index with the given text.
-    pub fn insert_line(&mut self, index: usize, text: &str, analyzer: &Analyzer) {
+    pub fn insert_line(
+        &mut self,
+        index: usize,
+        text: &str,
+        analyzer: &Analyzer,
+    ) -> Result<(), PoemEditError> {
+        if index > self.lines.len() {
+            return Err(PoemEditError::LineIndexOutOfBounds {
+                index,
+                line_count: self.lines.len(),
+            });
+        }
+
         let inserted_line = Line::new(text, &analyzer.dict);
         self.lines.insert(index, inserted_line);
+        Ok(())
     }
     /// Deletes the line at the given index.
-    pub fn delete_line(&mut self, index: usize) {
+    pub fn delete_line(&mut self, index: usize) -> Result<(), PoemEditError> {
+        if index >= self.lines.len() {
+            return Err(PoemEditError::LineIndexOutOfBounds {
+                index,
+                line_count: self.lines.len(),
+            });
+        }
+
         self.lines.remove(index);
+        Ok(())
     }
 }
 

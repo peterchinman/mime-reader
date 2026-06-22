@@ -59,7 +59,7 @@ impl std::str::FromStr for ConsonantPhoneme {
             "K" => Ok(ConsonantPhoneme::K),
             "P" => Ok(ConsonantPhoneme::P),
             "T" => Ok(ConsonantPhoneme::T),
-            _ => Err(ParseArpabetError::UnknownPhoneme),
+            _ => Err(ParseArpabetError::UnknownPhoneme(s.to_string())),
         }
     }
 }
@@ -206,7 +206,7 @@ impl std::str::FromStr for VowelPhoneme {
             "EY" => Ok(VowelPhoneme::EY),
             "OW" => Ok(VowelPhoneme::OW),
             "OY" => Ok(VowelPhoneme::OY),
-            _ => Err(ParseArpabetError::UnknownPhoneme),
+            _ => Err(ParseArpabetError::UnknownPhoneme(s.to_string())),
         }
     }
 }
@@ -256,7 +256,7 @@ impl std::str::FromStr for Vowel {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.is_empty() {
-            return Err(ParseArpabetError::UnknownPhoneme);
+            return Err(ParseArpabetError::UnknownPhoneme(s.to_string()));
         }
         let (vowel_str, stress_char) = s.split_at(s.len() - 1);
         let stress = match stress_char {
@@ -264,16 +264,21 @@ impl std::str::FromStr for Vowel {
             "1" => Stress::Primary,
             "2" => Stress::Secondary,
             c if c.chars().next().is_some_and(|ch| ch.is_ascii_digit()) => {
-                return Err(ParseArpabetError::InvalidStress(c.chars().next().unwrap()));
+                return Err(ParseArpabetError::InvalidStress {
+                    phoneme: s.to_string(),
+                    stress: c.chars().next().unwrap(),
+                });
             }
             _ => {
                 if s.parse::<VowelPhoneme>().is_ok() {
-                    return Err(ParseArpabetError::MissingStress);
+                    return Err(ParseArpabetError::MissingStress(s.to_string()));
                 }
-                return Err(ParseArpabetError::UnknownPhoneme);
+                return Err(ParseArpabetError::UnknownPhoneme(s.to_string()));
             }
         };
-        let phoneme = vowel_str.parse::<VowelPhoneme>()?;
+        let phoneme = vowel_str
+            .parse::<VowelPhoneme>()
+            .map_err(|_| ParseArpabetError::UnknownPhoneme(s.to_string()))?;
         Ok(Vowel { phoneme, stress })
     }
 }
@@ -410,25 +415,37 @@ mod tests {
     #[test]
     fn parse_unknown_phoneme() {
         let err = "XY1".parse::<Phoneme>().unwrap_err();
-        assert!(matches!(err, ParseArpabetError::UnknownPhoneme));
+        assert!(matches!(
+            err,
+            ParseArpabetError::UnknownPhoneme(phoneme) if phoneme == "XY1"
+        ));
     }
 
     #[test]
     fn parse_missing_stress() {
         let err = "AE".parse::<Phoneme>().unwrap_err();
-        assert!(matches!(err, ParseArpabetError::MissingStress));
+        assert!(matches!(
+            err,
+            ParseArpabetError::MissingStress(phoneme) if phoneme == "AE"
+        ));
     }
 
     #[test]
     fn parse_invalid_stress() {
         let err = "AE3".parse::<Phoneme>().unwrap_err();
-        assert!(matches!(err, ParseArpabetError::InvalidStress('3')));
+        assert!(matches!(
+            err,
+            ParseArpabetError::InvalidStress { phoneme, stress: '3' } if phoneme == "AE3"
+        ));
     }
 
     #[test]
     fn parse_empty() {
         let err = "".parse::<Phoneme>().unwrap_err();
-        assert!(matches!(err, ParseArpabetError::UnknownPhoneme));
+        assert!(matches!(
+            err,
+            ParseArpabetError::UnknownPhoneme(phoneme) if phoneme.is_empty()
+        ));
     }
 
     // --- Display ---

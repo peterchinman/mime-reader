@@ -1,165 +1,88 @@
-#[derive(Debug)]
+use thiserror::Error;
+
+#[derive(Debug, Error)]
 pub enum ParseArpabetError {
-    UnknownPhoneme,
-    MissingStress,
-    InvalidStress(char),
+    #[error("unknown ARPAbet phoneme: {0}")]
+    UnknownPhoneme(String),
+    #[error("vowel phoneme '{0}' is missing stress digit")]
+    MissingStress(String),
+    #[error("invalid stress digit '{stress}' in phoneme '{phoneme}'")]
+    InvalidStress { phoneme: String, stress: char },
 }
 
-impl std::fmt::Display for ParseArpabetError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ParseArpabetError::UnknownPhoneme => write!(f, "unknown ARPAbet phoneme"),
-            ParseArpabetError::MissingStress => write!(f, "vowel is missing stress digit"),
-            ParseArpabetError::InvalidStress(c) => write!(f, "invalid stress digit '{}'", c),
-        }
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum DictionaryError {
-    Io(std::io::Error),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("malformed dictionary line: {0:?}")]
     MalformedLine(String),
-    InvalidPhoneme(ParseArpabetError),
+    #[error("invalid phoneme: {0}")]
+    InvalidPhoneme(#[from] ParseArpabetError),
 }
 
-impl std::fmt::Display for DictionaryError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DictionaryError::Io(e) => write!(f, "IO error: {}", e),
-            DictionaryError::MalformedLine(l) => write!(f, "malformed dictionary line: {:?}", l),
-            DictionaryError::InvalidPhoneme(e) => write!(f, "invalid phoneme: {}", e),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Error, PartialEq)]
+#[error("unknown word: {word}")]
 pub struct UnknownWordError {
     pub word: String,
 }
 
-impl std::fmt::Display for UnknownWordError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "unknown word: {}", self.word)
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ParseMeterError {
+    #[error("invalid stress character '{c}' at column {}", col + 1)]
     InvalidChar { c: char, col: usize },
+    #[error("invalid parentheses nesting at column {}", col + 1)]
     InvalidParenNesting { col: usize },
 }
 
-impl std::fmt::Display for ParseMeterError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ParseMeterError::InvalidChar { c, col } => {
-                write!(f, "invalid stress character '{c}' at column {col}")
-            }
-            ParseMeterError::InvalidParenNesting { col } => {
-                write!(f, "invalid parentheses nesting at column {col}")
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Error)]
+#[error("line {}: {source}", line + 1)]
 pub struct ParseMeterSchemeError {
     pub line: usize,
     pub source: ParseMeterError,
 }
 
-impl std::fmt::Display for ParseMeterSchemeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "line {}: {}", self.line + 1, self.source) // +1 for human-readable
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ParseSyllableCountError {
+    #[error("expected a number or 'min-max' range")]
     InvalidNumber,
+    #[error("min must be <= max")]
     InvalidRange,
 }
 
-impl std::fmt::Display for ParseSyllableCountError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ParseSyllableCountError::InvalidNumber => {
-                write!(f, "expected a number or 'min-max' range")
-            }
-            ParseSyllableCountError::InvalidRange => write!(f, "min must be <= max"),
-        }
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ParseRhymeError {
-    InvalidChar(char),
+    #[error("invalid rhyme character '{c}' at column {}", col + 1)]
+    InvalidChar { c: char, col: usize },
 }
 
-impl std::fmt::Display for ParseRhymeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ParseRhymeError::InvalidChar(c) => write!(f, "invalid rhyme character '{}'", c),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Error, PartialEq)]
 pub enum RhymeCheckError {
+    #[error("target line index {target_index} is out of bounds for {line_count} lines")]
     TargetLineOutOfBounds {
         target_index: usize,
         line_count: usize,
     },
-    UnknownWord(UnknownWordError),
+    #[error(transparent)]
+    UnknownWord(#[from] UnknownWordError),
+    #[error("empty line")]
     EmptyLine,
+    #[error("not enough syllables")]
     NotEnoughSyllablesInTarget,
 }
 
-impl From<UnknownWordError> for RhymeCheckError {
-    fn from(source: UnknownWordError) -> Self {
-        RhymeCheckError::UnknownWord(source)
-    }
+#[derive(Debug, Error, PartialEq)]
+pub enum PoemEditError {
+    #[error("line index {index} is out of bounds for {line_count} lines")]
+    LineIndexOutOfBounds { index: usize, line_count: usize },
 }
 
-impl std::fmt::Display for RhymeCheckError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RhymeCheckError::TargetLineOutOfBounds {
-                target_index,
-                line_count,
-            } => write!(
-                f,
-                "target line index {target_index} is out of bounds for {line_count} lines"
-            ),
-            RhymeCheckError::UnknownWord(source) => write!(f, "{source}"),
-            RhymeCheckError::EmptyLine => write!(f, "empty line"),
-            RhymeCheckError::NotEnoughSyllablesInTarget => write!(f, "not enough syllables"),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Error, PartialEq)]
 pub enum MeterCheckError {
+    #[error("target line index {target_index} is out of bounds for {line_count} lines")]
     TargetLineOutOfBounds {
         target_index: usize,
         line_count: usize,
     },
-    UnknownWord(UnknownWordError),
-    FailedToCheck,
-}
-
-impl std::fmt::Display for MeterCheckError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            MeterCheckError::TargetLineOutOfBounds {
-                target_index,
-                line_count,
-            } => write!(
-                f,
-                "target line index {target_index} is out of bounds for {line_count} lines"
-            ),
-            MeterCheckError::UnknownWord(source) => write!(f, "{source}"),
-            MeterCheckError::FailedToCheck => write!(f, "failed to check meter"),
-        }
-    }
+    #[error(transparent)]
+    UnknownWord(#[from] UnknownWordError),
 }

@@ -61,21 +61,28 @@ pub enum RhymeCheckResult {
 impl RhymeScheme {
     pub fn new(s: &str, threshold: f32) -> Result<Self, ParseRhymeError> {
         let mut map: HashMap<char, usize> = HashMap::new();
-        let scheme = s
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .enumerate()
-            .map(|(i, c)| match c {
+        let mut scheme = Vec::new();
+
+        for (col, c) in s.chars().enumerate() {
+            if c.is_whitespace() {
+                continue;
+            }
+
+            let role = match c {
                 '_' => SchemeRole::Unconstrained,
-                _ => match map.get(&c) {
+                c if c.is_ascii_alphabetic() => match map.get(&c) {
                     Some(&leader_position) => SchemeRole::Follower { leader_position },
                     None => {
-                        map.insert(c, i);
+                        map.insert(c, scheme.len());
                         SchemeRole::Leader
                     }
                 },
-            })
-            .collect();
+                _ => return Err(ParseRhymeError::InvalidChar { c, col }),
+            };
+
+            scheme.push(role);
+        }
+
         Ok(RhymeScheme { scheme, threshold })
     }
 
@@ -604,6 +611,19 @@ mod tests {
     fn rhyme_scheme_threshold_stored() {
         let rs = RhymeScheme::new("AABB", 7.5).unwrap();
         assert_eq!(rs.threshold, 7.5);
+    }
+
+    #[test]
+    fn rhyme_scheme_invalid_char_returns_error_with_column() {
+        let err = match RhymeScheme::new("A B1", 8.0) {
+            Ok(_) => panic!("expected invalid rhyme character"),
+            Err(err) => err,
+        };
+        assert!(matches!(
+            err,
+            ParseRhymeError::InvalidChar { c: '1', col: 3 }
+        ));
+        assert_eq!(err.to_string(), "invalid rhyme character '1' at column 4");
     }
 
     // --- line_role ---

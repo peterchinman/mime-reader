@@ -443,6 +443,7 @@ mod tests {
             err,
             ParseMeterError::InvalidChar { c: 'j', col: 1 }
         ));
+        assert_eq!(err.to_string(), "invalid stress character 'j' at column 2");
     }
 
     // --- wildcard (_) ---

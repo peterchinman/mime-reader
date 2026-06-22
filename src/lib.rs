@@ -13,7 +13,10 @@ pub use dictionary::Dictionary;
 pub use distance::{
     AlignmentStep, DamerauLevenshtein, DamerauLevenshteinOutput, TranspositionDirection,
 };
-pub use error::{DictionaryError, ParseArpabetError, ParseSyllableCountError};
+pub use error::{
+    DictionaryError, MeterCheckError, ParseArpabetError, ParseMeterError, ParseMeterSchemeError,
+    ParseRhymeError, ParseSyllableCountError, PoemEditError, RhymeCheckError, UnknownWordError,
+};
 pub use line::Line;
 pub use meter::{
     MeterMatchResult, MeterMismatch, MeterScheme, MeterSpecification, SyllableCountSpecification,
