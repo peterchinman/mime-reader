@@ -116,7 +116,7 @@ impl RhymeScheme {
     /// - `Unconstrained`: the scheme doesn't require this line to rhyme with anything
     /// - `Leader`: this line is the first occurrence of its rhyme group in its cycle
     /// - `Follower`: this line should rhyme with the line at the given leader index
-    fn line_role(&self, line_index: usize) -> LineRole {
+    pub(crate) fn line_role(&self, line_index: usize) -> LineRole {
         let pattern_len = self.scheme.len();
         let line_position = line_index % pattern_len;
         let cycle_start = line_index - line_position;
@@ -130,6 +130,7 @@ impl RhymeScheme {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn dependent_follower_indices(
         &self,
         line_index: usize,
