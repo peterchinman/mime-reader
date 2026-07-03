@@ -330,17 +330,10 @@ impl MeterScheme {
 
     pub fn check_line(
         &self,
-        lines: &[Line],
-        target_index: usize,
+        line: &Line,
+        line_index: usize,
     ) -> Result<MeterMatchResult, MeterCheckError> {
-        if target_index >= lines.len() {
-            return Err(MeterCheckError::TargetLineOutOfBounds {
-                target_index,
-                line_count: lines.len(),
-            });
-        }
-        self.line_specification(target_index)
-            .validate_line(&lines[target_index])
+        self.line_specification(line_index).validate_line(line)
     }
 }
 
@@ -760,6 +753,16 @@ mod tests {
                 .possible_meters
                 .contains(&meter(&[S, U]))
         );
+    }
+
+    #[test]
+    fn meter_scheme_check_line_uses_wrapped_line_index() {
+        let ms: MeterScheme = "x/\n/x".parse().unwrap();
+        let line = Line::new("hello", dict());
+
+        assert_meter_matches(ms.check_line(&line, 0));
+        let _ = assert_meter_no_match(ms.check_line(&line, 1));
+        assert_meter_matches(ms.check_line(&line, 2));
     }
 
     #[test]

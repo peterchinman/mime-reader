@@ -32,9 +32,9 @@ enum SchemeRole {
 /// A role for a concrete line in a poem after resolving the repeated scheme.
 ///
 /// Positions here are poem-line-relative: for example, with repeated `ABAB`,
-/// line `6` is a follower whose `leader_line` is `4`.
+/// line `6` is a follower whose `leader_index` is `4`.
 #[derive(Debug, PartialEq)]
-enum LineRole {
+pub enum LineRole {
     /// This line establishes the rhyme for its group in the current scheme cycle.
     Leader,
     /// This line has no rhyme constraint.
@@ -42,8 +42,35 @@ enum LineRole {
     /// This line should rhyme with an earlier concrete line.
     Follower {
         /// The absolute line index of the leader this line should rhyme with.
-        leader_line: usize,
+        leader_index: usize,
     },
+}
+
+/// A line's rhyme role with any cross-line references resolved.
+///
+/// Unlike [`LineRole`], this type can borrow the concrete leader line needed to
+/// check a follower. It is intended to be constructed temporarily by the caller
+/// that owns the poem lines, then passed to [`RhymeScheme::check_line`].
+pub enum ResolvedLineRole<'a> {
+    /// This line establishes the rhyme for its group.
+    Leader,
+    /// This line has no rhyme constraint.
+    Unconstrained,
+    /// This line should rhyme with the borrowed leader line.
+    Follower {
+        /// The absolute line index of the leader.
+        leader_index: usize,
+        /// The concrete leader line to compare against.
+        leader: &'a Line,
+    },
+}
+
+#[derive(Debug, PartialEq)]
+pub struct RhymeDistance {
+    pub raw_distance: u32,
+    pub syllable_count: usize,
+    // normalized_distance is raw_distance / syllable_count
+    normalized_distance: f32,
 }
 
 #[derive(Debug, PartialEq)]
@@ -51,9 +78,8 @@ pub enum RhymeCheckResult {
     Leader,
     Unconstrained,
     Follower {
-        leader_line: usize,
-        /// The distance between the leader's rhyming part and the follower's rhyming part.
-        distance: f32,
+        leader_index: usize,
+        distance: RhymeDistance,
         passed: bool,
     },
 }
@@ -99,7 +125,7 @@ impl RhymeScheme {
             SchemeRole::Leader => LineRole::Leader,
             SchemeRole::Unconstrained => LineRole::Unconstrained,
             SchemeRole::Follower { leader_position } => LineRole::Follower {
-                leader_line: cycle_start + leader_position,
+                leader_index: cycle_start + leader_position,
             },
         }
     }
@@ -119,7 +145,7 @@ impl RhymeScheme {
                 .filter(|&index| {
                     matches!(
                         self.line_role(index),
-                        LineRole::Follower { leader_line } if leader_line == line_index
+                        LineRole::Follower { leader_index } if leader_index == line_index
                     )
                 })
                 .collect(),
@@ -127,31 +153,27 @@ impl RhymeScheme {
         }
     }
 
-    /// Checks the Rhyme Scheme of a Line at the given Target Index. Returns OK([`RhymeCheckResult`]) indicating whether the line is a Leader, Unconstrained, or a Follower.
-    /// If the line is a Follower, returns the minimum { distance between (all of) the (possible) rhyming part(s) of the last word of the Leader against the same sized portion of Target, divided by the syllable count } and checks whether this is below the threshold defined in the [`RhymeScheme`].
-    /// Returns an error if the Target Index is not contained in `lines`, or if the rhyme distance cannot be determined.
+    /// Checks a line against an already resolved rhyme role.
+    ///
+    /// Follower roles compare (all of) the (possible) rhyming part(s) of the last word of the Leader against the same sized portion of Target, then check whether the minimum normalized distance is below
+    /// this scheme's threshold.
     pub fn check_line(
         &self,
-        lines: &[Line],
-        target_index: usize,
+        line: &Line,
+        role: ResolvedLineRole<'_>,
         dl: &DamerauLevenshtein,
     ) -> Result<RhymeCheckResult, RhymeCheckError> {
-        if target_index >= lines.len() {
-            return Err(RhymeCheckError::TargetLineOutOfBounds {
-                target_index,
-                line_count: lines.len(),
-            });
-        }
-
-        match self.line_role(target_index) {
-            LineRole::Leader => Ok(RhymeCheckResult::Leader),
-            LineRole::Unconstrained => Ok(RhymeCheckResult::Unconstrained),
-            LineRole::Follower { leader_line } => {
-                let distance =
-                    compare_rhyming_parts(&lines[leader_line], &lines[target_index], dl)?;
-                let passed = distance <= self.threshold;
+        match role {
+            ResolvedLineRole::Leader => Ok(RhymeCheckResult::Leader),
+            ResolvedLineRole::Unconstrained => Ok(RhymeCheckResult::Unconstrained),
+            ResolvedLineRole::Follower {
+                leader_index,
+                leader,
+            } => {
+                let distance = compare_rhyming_parts(leader, line, dl)?;
+                let passed = distance.normalized_distance <= self.threshold;
                 Ok(RhymeCheckResult::Follower {
-                    leader_line,
+                    leader_index,
                     distance,
                     passed,
                 })
@@ -240,22 +262,40 @@ fn compare_rhyming_parts(
     leader: &Line,
     target: &Line,
     dl: &DamerauLevenshtein,
-) -> Result<f32, RhymeCheckError> {
+) -> Result<RhymeDistance, RhymeCheckError> {
     let leader_parts = rhyming_parts_of_last_word(leader)?;
 
-    let mut min_distance: Option<f32> = None;
+    let mut min_distance: Option<RhymeDistance> = None;
 
-    for rp_a in leader_parts.iter().filter(|rp_a| rp_a.syllable_count > 0) {
-        let target_parts = last_n_syllables_of_line(&target.words, rp_a.syllable_count)?;
+    for rp_leader in leader_parts
+        .iter()
+        .filter(|rp_leader| rp_leader.syllable_count > 0)
+    {
+        let syllable_count = rp_leader.syllable_count;
 
-        let syl_count = rp_a.syllable_count as f32;
+        let target_parts = last_n_syllables_of_line(&target.words, syllable_count)?;
 
         for target_phonemes in target_parts {
-            let distance = dl.distance(rp_a.phonemes, &target_phonemes) as f32 / syl_count;
+            let raw_distance = dl.distance(rp_leader.phonemes, &target_phonemes);
+            let normalized_distance = raw_distance as f32 / syllable_count as f32;
 
             min_distance = Some(match min_distance {
-                Some(current_min) => current_min.min(distance),
-                None => distance,
+                Some(current_min) => {
+                    if normalized_distance < current_min.normalized_distance {
+                        RhymeDistance {
+                            raw_distance,
+                            syllable_count,
+                            normalized_distance,
+                        }
+                    } else {
+                        current_min
+                    }
+                }
+                None => RhymeDistance {
+                    raw_distance,
+                    syllable_count,
+                    normalized_distance,
+                },
             });
         }
     }
@@ -311,6 +351,14 @@ mod tests {
                     .map(|arpa| pronunciation(arpa))
                     .collect(),
             ),
+        }
+    }
+
+    fn zero_distance(syllable_count: usize) -> RhymeDistance {
+        RhymeDistance {
+            raw_distance: 0,
+            syllable_count,
+            normalized_distance: 0.0,
         }
     }
 
@@ -465,7 +513,7 @@ mod tests {
     fn compare_rhyming_parts_identical_words_score_zero() {
         let a = Line::new("cat", dict());
         let b = Line::new("cat", dict());
-        assert_eq!(compare_rhyming_parts(&a, &b, dl()), Ok(0.0));
+        assert_eq!(compare_rhyming_parts(&a, &b, dl()), Ok(zero_distance(1)));
     }
 
     #[test]
@@ -476,7 +524,7 @@ mod tests {
         let non_rhyme = Line::new("hello", dict());
         let rhyme_score = compare_rhyming_parts(&cat, &hat, dl()).unwrap();
         let non_rhyme_score = compare_rhyming_parts(&cat, &non_rhyme, dl()).unwrap();
-        assert!(rhyme_score < non_rhyme_score);
+        assert!(rhyme_score.normalized_distance < non_rhyme_score.normalized_distance);
     }
 
     #[test]
@@ -522,7 +570,10 @@ mod tests {
             ],
         };
 
-        assert_eq!(compare_rhyming_parts(&leader, &follower, dl()), Ok(0.0));
+        assert_eq!(
+            compare_rhyming_parts(&leader, &follower, dl()),
+            Ok(zero_distance(2))
+        );
     }
 
     #[test]
@@ -546,7 +597,10 @@ mod tests {
             ],
         };
 
-        assert_eq!(compare_rhyming_parts(&leader, &follower, dl()), Ok(0.0));
+        assert_eq!(
+            compare_rhyming_parts(&leader, &follower, dl()),
+            Ok(zero_distance(2))
+        );
     }
 
     // --- RhymeScheme::new ---
@@ -638,8 +692,8 @@ mod tests {
     #[test]
     fn line_role_follower_points_to_leader() {
         let rs = RhymeScheme::new("ABAB", 8.0).unwrap();
-        assert_eq!(rs.line_role(2), LineRole::Follower { leader_line: 0 });
-        assert_eq!(rs.line_role(3), LineRole::Follower { leader_line: 1 });
+        assert_eq!(rs.line_role(2), LineRole::Follower { leader_index: 0 });
+        assert_eq!(rs.line_role(3), LineRole::Follower { leader_index: 1 });
     }
 
     #[test]
@@ -650,8 +704,8 @@ mod tests {
         assert_eq!(rs.line_role(4), LineRole::Leader);
         assert_eq!(rs.line_role(5), LineRole::Leader);
         // line 6 is the second A of cycle 2 → leader is line 4
-        assert_eq!(rs.line_role(6), LineRole::Follower { leader_line: 4 });
-        assert_eq!(rs.line_role(7), LineRole::Follower { leader_line: 5 });
+        assert_eq!(rs.line_role(6), LineRole::Follower { leader_index: 4 });
+        assert_eq!(rs.line_role(7), LineRole::Follower { leader_index: 5 });
     }
 
     #[test]
@@ -708,8 +762,14 @@ mod tests {
         let rs = RhymeScheme::new("ABAB", 1.0).unwrap();
         let lines = vec![Line::new("cat", dict()), Line::new("dog", dict())];
 
-        assert_eq!(rs.check_line(&lines, 0, dl()), Ok(RhymeCheckResult::Leader));
-        assert_eq!(rs.check_line(&lines, 1, dl()), Ok(RhymeCheckResult::Leader));
+        assert_eq!(
+            rs.check_line(&lines[0], ResolvedLineRole::Leader, dl()),
+            Ok(RhymeCheckResult::Leader)
+        );
+        assert_eq!(
+            rs.check_line(&lines[1], ResolvedLineRole::Leader, dl()),
+            Ok(RhymeCheckResult::Leader)
+        );
     }
 
     #[test]
@@ -718,13 +778,13 @@ mod tests {
         let lines = vec![Line::new("cat", dict()), Line::new("orange", dict())];
 
         assert_eq!(
-            rs.check_line(&lines, 1, dl()),
+            rs.check_line(&lines[1], ResolvedLineRole::Unconstrained, dl()),
             Ok(RhymeCheckResult::Unconstrained)
         );
     }
 
     #[test]
-    fn check_line_follower_uses_leader_line() {
+    fn check_line_follower_uses_resolved_leader() {
         let rs = RhymeScheme::new("ABAB", 1.0).unwrap();
         let lines = vec![
             Line::new("cat", dict()),
@@ -734,25 +794,39 @@ mod tests {
         ];
 
         assert_eq!(
-            rs.check_line(&lines, 2, dl()),
+            rs.check_line(
+                &lines[2],
+                ResolvedLineRole::Follower {
+                    leader_index: 0,
+                    leader: &lines[0],
+                },
+                dl()
+            ),
             Ok(RhymeCheckResult::Follower {
-                leader_line: 0,
-                distance: 0.0,
+                leader_index: 0,
+                distance: zero_distance(1),
                 passed: true,
             })
         );
         assert_eq!(
-            rs.check_line(&lines, 3, dl()),
+            rs.check_line(
+                &lines[3],
+                ResolvedLineRole::Follower {
+                    leader_index: 1,
+                    leader: &lines[1],
+                },
+                dl()
+            ),
             Ok(RhymeCheckResult::Follower {
-                leader_line: 1,
-                distance: 0.0,
+                leader_index: 1,
+                distance: zero_distance(1),
                 passed: true,
             })
         );
     }
 
     #[test]
-    fn check_line_follower_resets_leader_per_cycle() {
+    fn check_line_follower_uses_resolved_cycle_leader() {
         let rs = RhymeScheme::new("ABAB", 1.0).unwrap();
         let lines = vec![
             Line::new("cat", dict()),
@@ -766,33 +840,33 @@ mod tests {
         ];
 
         assert_eq!(
-            rs.check_line(&lines, 6, dl()),
+            rs.check_line(
+                &lines[6],
+                ResolvedLineRole::Follower {
+                    leader_index: 4,
+                    leader: &lines[4],
+                },
+                dl()
+            ),
             Ok(RhymeCheckResult::Follower {
-                leader_line: 4,
-                distance: 0.0,
+                leader_index: 4,
+                distance: zero_distance(1),
                 passed: true,
             })
         );
         assert_eq!(
-            rs.check_line(&lines, 7, dl()),
+            rs.check_line(
+                &lines[7],
+                ResolvedLineRole::Follower {
+                    leader_index: 5,
+                    leader: &lines[5],
+                },
+                dl()
+            ),
             Ok(RhymeCheckResult::Follower {
-                leader_line: 5,
-                distance: 0.0,
+                leader_index: 5,
+                distance: zero_distance(1),
                 passed: true,
-            })
-        );
-    }
-
-    #[test]
-    fn check_line_target_index_out_of_bounds_returns_error() {
-        let rs = RhymeScheme::new("ABAB", 1.0).unwrap();
-        let lines = vec![Line::new("cat", dict()), Line::new("dog", dict())];
-
-        assert_eq!(
-            rs.check_line(&lines, 4, dl()),
-            Err(RhymeCheckError::TargetLineOutOfBounds {
-                target_index: 4,
-                line_count: 2,
             })
         );
     }
@@ -803,7 +877,14 @@ mod tests {
         let lines = vec![Line::new("cat", dict()), Line::new("xyzzy", dict())];
 
         assert_eq!(
-            rs.check_line(&lines, 1, dl()),
+            rs.check_line(
+                &lines[1],
+                ResolvedLineRole::Follower {
+                    leader_index: 0,
+                    leader: &lines[0],
+                },
+                dl()
+            ),
             Err(RhymeCheckError::UnknownWord(UnknownWordError {
                 word: "xyzzy".to_string(),
             }))
@@ -816,7 +897,14 @@ mod tests {
         let lines = vec![Line::new("cat", dict()), Line::new("", dict())];
 
         assert_eq!(
-            rs.check_line(&lines, 1, dl()),
+            rs.check_line(
+                &lines[1],
+                ResolvedLineRole::Follower {
+                    leader_index: 0,
+                    leader: &lines[0],
+                },
+                dl()
+            ),
             Err(RhymeCheckError::NotEnoughSyllablesInTarget)
         );
     }
