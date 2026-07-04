@@ -1,6 +1,6 @@
 pub mod consonant_distance;
 pub mod dictionary;
-pub mod distance;
+pub mod rhyme_distance;
 pub mod error;
 pub mod line;
 pub mod meter;
@@ -10,8 +10,8 @@ pub mod rhyme;
 pub mod vowel_distance;
 
 pub use dictionary::Dictionary;
-pub use distance::{
-    AlignmentStep, DamerauLevenshtein, DamerauLevenshteinOutput, TranspositionDirection,
+pub use rhyme_distance::{
+    AlignmentStep, RhymeDistanceOutput, RhymeDistanceScorer, TranspositionDirection,
 };
 pub use error::{
     DictionaryError, MeterCheckError, ParseArpabetError, ParseMeterError, ParseMeterSchemeError,

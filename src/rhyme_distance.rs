@@ -70,12 +70,12 @@ pub enum AlignmentStep<'a> {
 
 // TODO: should this be folded into DpOutput?
 #[derive(Debug, PartialEq, Eq)]
-pub struct DamerauLevenshteinOutput<'a> {
+pub struct RhymeDistanceOutput<'a> {
     score: u32,
     alignment: Vec<AlignmentStep<'a>>,
 }
 
-impl<'a> DamerauLevenshteinOutput<'a> {
+impl<'a> RhymeDistanceOutput<'a> {
     pub fn score(&self) -> u32 {
         self.score
     }
@@ -86,7 +86,7 @@ impl<'a> DamerauLevenshteinOutput<'a> {
     }
 }
 
-pub struct DamerauLevenshtein {
+pub struct RhymeDistanceScorer {
     vowel_graph: VowelHexGraph,
 }
 
@@ -104,7 +104,7 @@ struct DpOutput {
     edits: Option<Vec<Vec<Edit>>>,
 }
 
-impl DamerauLevenshtein {
+impl RhymeDistanceScorer {
     pub fn new() -> Self {
         Self {
             vowel_graph: VowelHexGraph::new(),
@@ -347,7 +347,7 @@ impl DamerauLevenshtein {
         &self,
         slice1: &'a [Phoneme],
         slice2: &'a [Phoneme],
-    ) -> DamerauLevenshteinOutput<'a> {
+    ) -> RhymeDistanceOutput<'a> {
         let prefix = slice1
             .iter()
             .zip(slice2.iter())
@@ -393,7 +393,7 @@ impl DamerauLevenshtein {
             });
         }
 
-        DamerauLevenshteinOutput {
+        RhymeDistanceOutput {
             score: dp.score,
             alignment,
         }
@@ -436,7 +436,7 @@ impl DamerauLevenshtein {
     }
 }
 
-impl Default for DamerauLevenshtein {
+impl Default for RhymeDistanceScorer {
     fn default() -> Self {
         Self::new()
     }
@@ -448,16 +448,16 @@ mod tests {
     use crate::vowel_distance::VOWEL_DISTANCE_COEFFICIENT;
     use std::sync::OnceLock;
 
-    static DL: OnceLock<DamerauLevenshtein> = OnceLock::new();
-    fn dl() -> &'static DamerauLevenshtein {
-        DL.get_or_init(DamerauLevenshtein::new)
+    static SCORER: OnceLock<RhymeDistanceScorer> = OnceLock::new();
+    fn scorer() -> &'static RhymeDistanceScorer {
+        SCORER.get_or_init(RhymeDistanceScorer::new)
     }
 
     fn parse(s: &str) -> Vec<Phoneme> {
         s.split_whitespace().map(|t| t.parse().unwrap()).collect()
     }
 
-    fn aligned_tokens(output: &DamerauLevenshteinOutput<'_>) -> (Vec<String>, Vec<String>) {
+    fn aligned_tokens(output: &RhymeDistanceOutput<'_>) -> (Vec<String>, Vec<String>) {
         output
             .alignment()
             .iter()
@@ -484,7 +484,7 @@ mod tests {
     #[test]
     fn equal_slices_are_zero() {
         let s = parse("M AO1 S T");
-        assert_eq!(dl().distance(&s, &s), 0);
+        assert_eq!(scorer().distance(&s, &s), 0);
     }
 
     #[test]
@@ -493,18 +493,18 @@ mod tests {
         // consonant gap = 5 each, vowel gap = 20
         // M(5) + AO1(20) + S(5) + T(5) = 35
         assert_eq!(
-            dl().distance(&[], &s),
+            scorer().distance(&[], &s),
             CONSONANT_INDEL_PENALTY * 3 + VOWEL_INDEL_PENALTY
         );
         assert_eq!(
-            dl().distance(&s, &[]),
+            scorer().distance(&s, &[]),
             CONSONANT_INDEL_PENALTY * 3 + VOWEL_INDEL_PENALTY
         );
     }
 
     #[test]
     fn both_empty() {
-        assert_eq!(dl().distance(&[], &[]), 0);
+        assert_eq!(scorer().distance(&[], &[]), 0);
     }
 
     #[test]
@@ -514,7 +514,7 @@ mod tests {
         let s1 = parse("M AO1 S T");
         let s2 = parse("M OW1 S T");
         assert_eq!(
-            dl().distance(&s1, &s2),
+            scorer().distance(&s1, &s2),
             1 * VOWEL_DISTANCE_COEFFICIENT * VOWEL_COEFFICIENT
         );
     }
@@ -525,7 +525,7 @@ mod tests {
         let s1 = parse("T AE1 N");
         let s2 = parse("D AE1 N");
         // T vs D: same manner (Plosive), place diff 0, voiced penalty 1
-        assert_eq!(dl().distance(&s1, &s2), 1);
+        assert_eq!(scorer().distance(&s1, &s2), 1);
     }
 
     #[test]
@@ -535,14 +535,14 @@ mod tests {
         // so cost = TRANSPOSITION_COST
         let s1 = parse("M OW1 S T");
         let s2 = parse("M OW1 T S");
-        assert_eq!(dl().distance(&s1, &s2), TRANSPOSITION_COST);
+        assert_eq!(scorer().distance(&s1, &s2), TRANSPOSITION_COST);
     }
 
     #[test]
     fn align_reports_score_and_alignment_for_insertion() {
         let s1 = parse("M AO1 T");
         let s2 = parse("M AO1 S T");
-        let output = dl().align(&s1, &s2);
+        let output = scorer().align(&s1, &s2);
         let (aligned_1, aligned_2) = aligned_tokens(&output);
 
         assert_eq!(output.score(), CONSONANT_INDEL_PENALTY);
@@ -556,7 +556,7 @@ mod tests {
     fn align_marks_adjacent_transposition() {
         let s1 = parse("M AO1 S T");
         let s2 = parse("M AO1 T S");
-        let output = dl().align(&s1, &s2);
+        let output = scorer().align(&s1, &s2);
         let (aligned_1, aligned_2) = aligned_tokens(&output);
 
         assert_eq!(output.score(), TRANSPOSITION_COST);
@@ -583,15 +583,21 @@ mod tests {
         let s1 = parse("M AO1 S T");
         let s2 = parse("B OW1 T");
 
-        assert_eq!(dl().align(&s1, &s2).score(), dl().distance(&s1, &s2));
-        assert_eq!(dl().align(&s2, &s1).score(), dl().distance(&s2, &s1));
+        assert_eq!(
+            scorer().align(&s1, &s2).score(),
+            scorer().distance(&s1, &s2)
+        );
+        assert_eq!(
+            scorer().align(&s2, &s1).score(),
+            scorer().distance(&s2, &s1)
+        );
     }
 
     #[test]
     fn single_consonant_insertion() {
         let s1 = parse("M AO1 T");
         let s2 = parse("M AO1 S T");
-        assert_eq!(dl().distance(&s1, &s2), CONSONANT_INDEL_PENALTY);
+        assert_eq!(scorer().distance(&s1, &s2), CONSONANT_INDEL_PENALTY);
     }
 
     #[test]
@@ -599,13 +605,13 @@ mod tests {
         // Inserting a consonant identical to its neighbour costs CONSONANT_REPEATED_PENALTY
         let s1 = parse("B AE1 T IH0 NG");
         let s2 = parse("B AE1 T T IH0 NG");
-        assert_eq!(dl().distance(&s1, &s2), CONSONANT_REPEATED_PENALTY);
+        assert_eq!(scorer().distance(&s1, &s2), CONSONANT_REPEATED_PENALTY);
     }
 
     #[test]
     fn distance_is_symmetric() {
         let s1 = parse("M AO1 S T");
         let s2 = parse("B OW1 T");
-        assert_eq!(dl().distance(&s1, &s2), dl().distance(&s2, &s1));
+        assert_eq!(scorer().distance(&s1, &s2), scorer().distance(&s2, &s1));
     }
 }

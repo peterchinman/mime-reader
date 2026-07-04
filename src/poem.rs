@@ -1,5 +1,5 @@
 use crate::{
-    DamerauLevenshtein, Dictionary, Line, MeterScheme, RhymeScheme,
+    Dictionary, Line, MeterScheme, RhymeDistanceScorer, RhymeScheme,
     error::{MeterCheckError, PoemEditError, RhymeCheckError},
     meter::MeterMatchResult,
     rhyme::{LineRole, ResolvedLineRole, RhymeCheckResult},
@@ -196,7 +196,7 @@ impl Poem {
         if matches!(self.analyses[index].rhyme, AnalysisState::Dirty) {
             let role = self.resolved_line_role(rhyme_scheme, index);
             let result = role.and_then(|role| {
-                rhyme_scheme.check_line(&self.lines[index].line, role, &analyzer.dl)
+                rhyme_scheme.check_line(&self.lines[index].line, role, &analyzer.rhyme_distance_scorer)
             });
             self.analyses[index].rhyme = AnalysisState::Ready(result);
         }
@@ -282,7 +282,7 @@ impl Poem {
 }
 
 pub struct Analyzer {
-    dl: DamerauLevenshtein,
+    rhyme_distance_scorer: RhymeDistanceScorer,
     dict: Dictionary,
 }
 
@@ -291,12 +291,15 @@ impl Analyzer {
     //     let dict =
     //         Dictionary::from_bytes(dict_bytes).map_err(|e| JsValue::from_str(&e.to_string()))?;
     //     Ok(Self {
-    //         dl: DamerauLevenshtein::new(),
+    //         distance_scorer: RhymeDistanceScorer::new(),
     //         dict,
     //     })
     // }
-    pub fn new(dict: Dictionary, dl: DamerauLevenshtein) -> Self {
-        Self { dict, dl }
+    pub fn new(dict: Dictionary, rhyme_distance_scorer: RhymeDistanceScorer) -> Self {
+        Self {
+            dict,
+            rhyme_distance_scorer,
+        }
     }
 }
 
@@ -312,7 +315,7 @@ mod tests {
     fn analyzer() -> &'static Analyzer {
         ANALYZER.get_or_init(|| {
             let dict = Dictionary::load(DICT_PATH).expect("failed to load dictionary");
-            Analyzer::new(dict, DamerauLevenshtein::new())
+            Analyzer::new(dict, RhymeDistanceScorer::new())
         })
     }
 

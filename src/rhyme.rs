@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    DamerauLevenshtein, Line,
+    Line, RhymeDistanceScorer,
     error::{ParseRhymeError, RhymeCheckError, UnknownWordError},
     line::{WordData, WordEntry},
     phoneme::{Phoneme, RhymingPart, get_last_n_syllables, get_rhyming_part},
@@ -161,7 +161,7 @@ impl RhymeScheme {
         &self,
         line: &Line,
         role: ResolvedLineRole<'_>,
-        dl: &DamerauLevenshtein,
+        scorer: &RhymeDistanceScorer,
     ) -> Result<RhymeCheckResult, RhymeCheckError> {
         match role {
             ResolvedLineRole::Leader => Ok(RhymeCheckResult::Leader),
@@ -170,7 +170,7 @@ impl RhymeScheme {
                 leader_index,
                 leader,
             } => {
-                let distance = compare_rhyming_parts(leader, line, dl)?;
+                let distance = compare_rhyming_parts(leader, line, scorer)?;
                 let passed = distance.normalized_distance <= self.threshold;
                 Ok(RhymeCheckResult::Follower {
                     leader_index,
@@ -261,7 +261,7 @@ fn last_n_syllables_of_line(
 fn compare_rhyming_parts(
     leader: &Line,
     target: &Line,
-    dl: &DamerauLevenshtein,
+    scorer: &RhymeDistanceScorer,
 ) -> Result<RhymeDistance, RhymeCheckError> {
     let leader_parts = rhyming_parts_of_last_word(leader)?;
 
@@ -276,7 +276,7 @@ fn compare_rhyming_parts(
         let target_parts = last_n_syllables_of_line(&target.words, syllable_count)?;
 
         for target_phonemes in target_parts {
-            let raw_distance = dl.distance(rp_leader.phonemes, &target_phonemes);
+            let raw_distance = scorer.distance(rp_leader.phonemes, &target_phonemes);
             let normalized_distance = raw_distance as f32 / syllable_count as f32;
 
             min_distance = Some(match min_distance {
@@ -312,14 +312,14 @@ mod tests {
     const DICT_PATH: &str = "data/CMUdict/cmudict-0.7b";
 
     static DICT: OnceLock<Dictionary> = OnceLock::new();
-    static DL: OnceLock<DamerauLevenshtein> = OnceLock::new();
+    static SCORER: OnceLock<RhymeDistanceScorer> = OnceLock::new();
 
     fn dict() -> &'static Dictionary {
         DICT.get_or_init(|| Dictionary::load(DICT_PATH).expect("failed to load dictionary"))
     }
 
-    fn dl() -> &'static DamerauLevenshtein {
-        DL.get_or_init(DamerauLevenshtein::new)
+    fn scorer() -> &'static RhymeDistanceScorer {
+        SCORER.get_or_init(RhymeDistanceScorer::new)
     }
 
     fn ph(arpa: &[&str]) -> Vec<Phoneme> {
@@ -513,7 +513,10 @@ mod tests {
     fn compare_rhyming_parts_identical_words_score_zero() {
         let a = Line::new("cat", dict());
         let b = Line::new("cat", dict());
-        assert_eq!(compare_rhyming_parts(&a, &b, dl()), Ok(zero_distance(1)));
+        assert_eq!(
+            compare_rhyming_parts(&a, &b, scorer()),
+            Ok(zero_distance(1))
+        );
     }
 
     #[test]
@@ -522,8 +525,8 @@ mod tests {
         let cat = Line::new("cat", dict());
         let hat = Line::new("hat", dict());
         let non_rhyme = Line::new("hello", dict());
-        let rhyme_score = compare_rhyming_parts(&cat, &hat, dl()).unwrap();
-        let non_rhyme_score = compare_rhyming_parts(&cat, &non_rhyme, dl()).unwrap();
+        let rhyme_score = compare_rhyming_parts(&cat, &hat, scorer()).unwrap();
+        let non_rhyme_score = compare_rhyming_parts(&cat, &non_rhyme, scorer()).unwrap();
         assert!(rhyme_score.normalized_distance < non_rhyme_score.normalized_distance);
     }
 
@@ -532,13 +535,13 @@ mod tests {
         let a = Line::new("xyzzy", dict());
         let b = Line::new("cat", dict());
         assert_eq!(
-            compare_rhyming_parts(&a, &b, dl()),
+            compare_rhyming_parts(&a, &b, scorer()),
             Err(RhymeCheckError::UnknownWord(UnknownWordError {
                 word: "xyzzy".to_string(),
             }))
         );
         assert_eq!(
-            compare_rhyming_parts(&b, &a, dl()),
+            compare_rhyming_parts(&b, &a, scorer()),
             Err(RhymeCheckError::UnknownWord(UnknownWordError {
                 word: "xyzzy".to_string(),
             }))
@@ -550,7 +553,7 @@ mod tests {
         let a = Line::new("", dict());
         let b = Line::new("cat", dict());
         assert_eq!(
-            compare_rhyming_parts(&a, &b, dl()),
+            compare_rhyming_parts(&a, &b, scorer()),
             Err(RhymeCheckError::EmptyLine)
         );
     }
@@ -571,7 +574,7 @@ mod tests {
         };
 
         assert_eq!(
-            compare_rhyming_parts(&leader, &follower, dl()),
+            compare_rhyming_parts(&leader, &follower, scorer()),
             Ok(zero_distance(2))
         );
     }
@@ -598,7 +601,7 @@ mod tests {
         };
 
         assert_eq!(
-            compare_rhyming_parts(&leader, &follower, dl()),
+            compare_rhyming_parts(&leader, &follower, scorer()),
             Ok(zero_distance(2))
         );
     }
@@ -763,11 +766,11 @@ mod tests {
         let lines = vec![Line::new("cat", dict()), Line::new("dog", dict())];
 
         assert_eq!(
-            rs.check_line(&lines[0], ResolvedLineRole::Leader, dl()),
+            rs.check_line(&lines[0], ResolvedLineRole::Leader, scorer()),
             Ok(RhymeCheckResult::Leader)
         );
         assert_eq!(
-            rs.check_line(&lines[1], ResolvedLineRole::Leader, dl()),
+            rs.check_line(&lines[1], ResolvedLineRole::Leader, scorer()),
             Ok(RhymeCheckResult::Leader)
         );
     }
@@ -778,7 +781,7 @@ mod tests {
         let lines = vec![Line::new("cat", dict()), Line::new("orange", dict())];
 
         assert_eq!(
-            rs.check_line(&lines[1], ResolvedLineRole::Unconstrained, dl()),
+            rs.check_line(&lines[1], ResolvedLineRole::Unconstrained, scorer()),
             Ok(RhymeCheckResult::Unconstrained)
         );
     }
@@ -800,7 +803,7 @@ mod tests {
                     leader_index: 0,
                     leader: &lines[0],
                 },
-                dl()
+                scorer()
             ),
             Ok(RhymeCheckResult::Follower {
                 leader_index: 0,
@@ -815,7 +818,7 @@ mod tests {
                     leader_index: 1,
                     leader: &lines[1],
                 },
-                dl()
+                scorer()
             ),
             Ok(RhymeCheckResult::Follower {
                 leader_index: 1,
@@ -846,7 +849,7 @@ mod tests {
                     leader_index: 4,
                     leader: &lines[4],
                 },
-                dl()
+                scorer()
             ),
             Ok(RhymeCheckResult::Follower {
                 leader_index: 4,
@@ -861,7 +864,7 @@ mod tests {
                     leader_index: 5,
                     leader: &lines[5],
                 },
-                dl()
+                scorer()
             ),
             Ok(RhymeCheckResult::Follower {
                 leader_index: 5,
@@ -883,7 +886,7 @@ mod tests {
                     leader_index: 0,
                     leader: &lines[0],
                 },
-                dl()
+                scorer()
             ),
             Err(RhymeCheckError::UnknownWord(UnknownWordError {
                 word: "xyzzy".to_string(),
@@ -903,7 +906,7 @@ mod tests {
                     leader_index: 0,
                     leader: &lines[0],
                 },
-                dl()
+                scorer()
             ),
             Err(RhymeCheckError::NotEnoughSyllablesInTarget)
         );
