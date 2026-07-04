@@ -130,7 +130,6 @@ impl RhymeScheme {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn dependent_follower_indices(
         &self,
         line_index: usize,

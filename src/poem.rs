@@ -63,9 +63,7 @@ impl Poem {
         };
 
         line.line = Line::new(text, &analyzer.dict);
-        // TODO: do we create analysis here? or is that separate?
-        // TODO: only invalidate dependent lines
-        self.invalidate_all();
+        self.invalidate_after_update(index);
         Ok(())
     }
     /// Inserts a new line at the given index with the given text.
@@ -91,8 +89,7 @@ impl Poem {
             index,
             Self::set_dirty_for(self.meter_scheme.is_some(), self.rhyme_scheme.is_some()),
         );
-        // TODO optimize: only invalidate what we need to
-        self.invalidate_all();
+        self.invalidate_after_insert_or_delete(index);
         Ok(())
     }
     /// Deletes the line at the given index.
@@ -106,8 +103,7 @@ impl Poem {
 
         self.lines.remove(index);
         self.analyses.remove(index);
-        // TODO optimize
-        self.invalidate_all();
+        self.invalidate_after_insert_or_delete(index);
         Ok(())
     }
 
@@ -232,12 +228,40 @@ impl Poem {
         })
     }
 
-    fn invalidate_all(&mut self) {
-        let has_meter_scheme = self.meter_scheme.is_some();
-        let has_rhyme_scheme = self.rhyme_scheme.is_some();
+    fn invalidate_after_update(&mut self, index: usize) {
+        // Only the line itself has dirty meter
+        if self.meter_scheme.is_some() {
+            self.analyses[index].meter = AnalysisState::Dirty;
+        }
 
-        for index in 0..self.analyses.len() {
-            self.analyses[index] = Self::set_dirty_for(has_meter_scheme, has_rhyme_scheme);
+        let Some(rhyme_scheme) = &self.rhyme_scheme else {
+            return;
+        };
+
+        let dirty_rhyme_indices = match rhyme_scheme.line_role(index) {
+            LineRole::Unconstrained => Vec::new(),
+            // On leader update, dependent lines are dirty
+            LineRole::Leader => rhyme_scheme.dependent_follower_indices(index, self.lines.len()),
+            // On follower update, only line itself is dirty
+            LineRole::Follower { .. } => vec![index],
+        };
+
+        for index in dirty_rhyme_indices {
+            self.analyses[index].rhyme = AnalysisState::Dirty;
+        }
+    }
+
+    fn invalidate_after_insert_or_delete(&mut self, index: usize) {
+        if self.meter_scheme.is_some() {
+            for analysis in &mut self.analyses[index..] {
+                analysis.meter = AnalysisState::Dirty;
+            }
+        }
+
+        if self.rhyme_scheme.is_some() {
+            for analysis in &mut self.analyses[index..] {
+                analysis.rhyme = AnalysisState::Dirty;
+            }
         }
     }
 
@@ -319,7 +343,11 @@ mod tests {
     }
 
     fn poem_with_cached_analyses(lines: &[&str]) -> Poem {
-        let mut poem = poem_with_schemes(lines, Some("x"), Some("AA"));
+        poem_with_cached_analyses_and_rhyme_scheme(lines, "AA")
+    }
+
+    fn poem_with_cached_analyses_and_rhyme_scheme(lines: &[&str], rhyme_scheme: &str) -> Poem {
+        let mut poem = poem_with_schemes(lines, Some("x"), Some(rhyme_scheme));
         poem.analyses = lines.iter().map(|_| cached_analysis()).collect();
         poem
     }
@@ -346,19 +374,24 @@ mod tests {
             .collect()
     }
 
-    fn assert_dirty_analyses_aligned_with_lines(poem: &Poem) {
+    fn assert_analyses_aligned_with_lines(poem: &Poem) {
         assert_eq!(poem.analyses.len(), poem.lines.len());
+    }
 
-        for (index, (_line, analysis)) in poem.lines.iter().zip(&poem.analyses).enumerate() {
-            assert!(
-                matches!(&analysis.meter, AnalysisState::Dirty),
-                "meter analysis at index {index} was not dirty"
-            );
-            assert!(
-                matches!(&analysis.rhyme, AnalysisState::Dirty),
-                "rhyme analysis at index {index} was not dirty"
-            );
-        }
+    fn assert_meter_state_dirty(poem: &Poem, index: usize) {
+        assert!(
+            matches!(&poem.analyses[index].meter, AnalysisState::Dirty),
+            "meter analysis at index {index} was not dirty: {:?}",
+            poem.analyses[index]
+        );
+    }
+
+    fn assert_rhyme_state_dirty(poem: &Poem, index: usize) {
+        assert!(
+            matches!(&poem.analyses[index].rhyme, AnalysisState::Dirty),
+            "rhyme analysis at index {index} was not dirty: {:?}",
+            poem.analyses[index]
+        );
     }
 
     fn assert_meter_ready_match(analysis: MeterAnalysis<'_>) {
@@ -424,6 +457,16 @@ mod tests {
         );
     }
 
+    fn assert_analysis_ready(poem: &Poem, index: usize) {
+        assert_meter_state_ready(poem, index);
+        assert_rhyme_state_ready(poem, index);
+    }
+
+    fn assert_analysis_dirty(poem: &Poem, index: usize) {
+        assert_meter_state_dirty(poem, index);
+        assert_rhyme_state_dirty(poem, index);
+    }
+
     #[test]
     fn insert_line_keeps_lines_and_analyses_aligned() {
         let mut poem = poem_with_cached_analyses(&["cat", "dog"]);
@@ -431,7 +474,10 @@ mod tests {
         poem.insert_line(1, "hat", analyzer()).unwrap();
 
         assert_eq!(line_texts(&poem), ["cat", "hat", "dog"]);
-        assert_dirty_analyses_aligned_with_lines(&poem);
+        assert_analyses_aligned_with_lines(&poem);
+        assert_analysis_ready(&poem, 0);
+        assert_analysis_dirty(&poem, 1);
+        assert_analysis_dirty(&poem, 2);
     }
 
     #[test]
@@ -441,7 +487,9 @@ mod tests {
         poem.delete_line(1).unwrap();
 
         assert_eq!(line_texts(&poem), ["cat", "hat"]);
-        assert_dirty_analyses_aligned_with_lines(&poem);
+        assert_analyses_aligned_with_lines(&poem);
+        assert_analysis_ready(&poem, 0);
+        assert_analysis_dirty(&poem, 1);
     }
 
     #[test]
@@ -451,7 +499,62 @@ mod tests {
         poem.update_line(1, "hat", analyzer()).unwrap();
 
         assert_eq!(line_texts(&poem), ["cat", "hat"]);
-        assert_dirty_analyses_aligned_with_lines(&poem);
+        assert_analyses_aligned_with_lines(&poem);
+        assert_analysis_ready(&poem, 0);
+        assert_analysis_dirty(&poem, 1);
+    }
+
+    #[test]
+    fn invalidate_after_update_on_leader_dirties_meter_and_dependent_followers() {
+        let mut poem = poem_with_cached_analyses_and_rhyme_scheme(&["cat", "dog", "hat"], "A_A");
+
+        poem.invalidate_after_update(0);
+
+        assert_meter_state_dirty(&poem, 0);
+        assert_meter_state_ready(&poem, 1);
+        assert_meter_state_ready(&poem, 2);
+        assert_rhyme_state_ready(&poem, 0);
+        assert_rhyme_state_ready(&poem, 1);
+        assert_rhyme_state_dirty(&poem, 2);
+    }
+
+    #[test]
+    fn invalidate_after_update_on_unconstrained_line_dirties_only_meter() {
+        let mut poem = poem_with_cached_analyses_and_rhyme_scheme(&["cat", "dog", "hat"], "A_A");
+
+        poem.invalidate_after_update(1);
+
+        assert_meter_state_ready(&poem, 0);
+        assert_meter_state_dirty(&poem, 1);
+        assert_meter_state_ready(&poem, 2);
+        for index in 0..poem.lines.len() {
+            assert_rhyme_state_ready(&poem, index);
+        }
+    }
+
+    #[test]
+    fn invalidate_after_update_on_follower_dirties_meter_and_own_rhyme() {
+        let mut poem = poem_with_cached_analyses_and_rhyme_scheme(&["cat", "dog", "hat"], "A_A");
+
+        poem.invalidate_after_update(2);
+
+        assert_meter_state_ready(&poem, 0);
+        assert_meter_state_ready(&poem, 1);
+        assert_meter_state_dirty(&poem, 2);
+        assert_rhyme_state_ready(&poem, 0);
+        assert_rhyme_state_ready(&poem, 1);
+        assert_rhyme_state_dirty(&poem, 2);
+    }
+
+    #[test]
+    fn invalidate_after_insert_or_delete_dirties_suffix_only() {
+        let mut poem = poem_with_cached_analyses(&["cat", "dog", "hat"]);
+
+        poem.invalidate_after_insert_or_delete(1);
+
+        assert_analysis_ready(&poem, 0);
+        assert_analysis_dirty(&poem, 1);
+        assert_analysis_dirty(&poem, 2);
     }
 
     #[test]
