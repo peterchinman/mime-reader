@@ -1,26 +1,36 @@
 use crate::phoneme::{Consonant, ConsonantManner::*, ConsonantPhoneme, ConsonantPhoneme::*};
 
-// Furthest related consonants are 7 apart
-// Unrelated consonants should be... somewhat further than that??
-pub const UNRELATED_PENALTY: u32 = 10;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnalyticConsonantDistanceConfig {
+    /// Furthest related consonants are 7 apart, so unrelated consonants should be... somewhat further than that.
+    pub unrelated_penalty: u32,
+    /// TIN, DIN.
+    pub voiced_penalty: u32,
+    /// ROOT, LOOT.
+    pub r_l_distance: u32,
+    /// WHILE, VIAL.
+    pub w_v_distance: u32,
+    /// CHIN, SHIN.
+    pub affricate_sibilant_fricative_penalty: u32,
+    /// CHIN, TIN.
+    pub affricate_plosive_penalty: u32,
+    /// CHIN, THIN.
+    pub affricate_non_sibilant_fricative_penalty: u32,
+}
 
-// TIN, DIN
-pub const VOICED_PENALTY: u32 = 1;
-
-// ROOT, LOOT
-pub const R_L_DISTANCE: u32 = 1;
-
-// WHILE, VIAL
-pub const W_V_DISTANCE: u32 = 2;
-
-// CHIN, SHIN
-pub const AFFRICATE_SIBILANT_FRICATIVE_PENALTY: u32 = 1;
-
-// CHIN, TIN
-pub const AFFRICATE_PLOSIVE_PENALTY: u32 = 2;
-
-// CHIN, THIN
-pub const AFFRICATE_NON_SIBILANT_FRICATIVE_PENALTY: u32 = 2;
+impl Default for AnalyticConsonantDistanceConfig {
+    fn default() -> Self {
+        Self {
+            unrelated_penalty: 10,
+            voiced_penalty: 1,
+            r_l_distance: 1,
+            w_v_distance: 2,
+            affricate_sibilant_fricative_penalty: 1,
+            affricate_plosive_penalty: 2,
+            affricate_non_sibilant_fricative_penalty: 2,
+        }
+    }
+}
 
 fn is_pair(a: &Consonant, b: &Consonant, x: ConsonantPhoneme, y: ConsonantPhoneme) -> bool {
     (a.phoneme == x && b.phoneme == y) || (a.phoneme == y && b.phoneme == x)
@@ -30,50 +40,76 @@ fn is_approximant(c: &Consonant) -> bool {
     matches!(c.manner, Approximant | LateralApproximant)
 }
 
-impl Consonant {
-    pub fn distance(&self, other: &Consonant) -> u32 {
-        if self.phoneme == other.phoneme {
+pub trait ConsonantDistanceScorer {
+    fn distance(&self, c1: &Consonant, c2: &Consonant) -> u32;
+}
+
+/// Implements a consonant distance score derived from my own analysis of consonant structure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AnalyticConsonantDistance {
+    config: AnalyticConsonantDistanceConfig,
+}
+
+impl AnalyticConsonantDistance {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_config(config: AnalyticConsonantDistanceConfig) -> Self {
+        Self { config }
+    }
+
+    pub fn config(&self) -> AnalyticConsonantDistanceConfig {
+        self.config
+    }
+}
+
+impl ConsonantDistanceScorer for AnalyticConsonantDistance {
+    fn distance(&self, c1: &Consonant, c2: &Consonant) -> u32 {
+        if c1.phoneme == c2.phoneme {
             return 0;
         }
 
         // W/V: special case
-        if is_pair(self, other, W, V) {
-            return W_V_DISTANCE;
+        if is_pair(c1, c2, W, V) {
+            return self.config.w_v_distance;
         }
 
         // Both approximants
-        if is_approximant(self) && is_approximant(other) {
-            return if is_pair(self, other, R, L) {
-                R_L_DISTANCE
+        if is_approximant(c1) && is_approximant(c2) {
+            return if is_pair(c1, c2, R, L) {
+                self.config.r_l_distance
             } else {
-                self.place.abs_diff(other.place) as u32
+                c1.place.abs_diff(c2.place) as u32
             };
         }
 
-        let place_diff = self.place.abs_diff(other.place) as u32;
-        let voiced_penalty = if self.voiced != other.voiced {
-            VOICED_PENALTY
+        let place_diff = c1.place.abs_diff(c2.place) as u32;
+        let voiced_penalty = if c1.voiced != c2.voiced {
+            self.config.voiced_penalty
         } else {
             0
         };
 
-        match (self.manner, other.manner) {
+        match (c1.manner, c2.manner) {
             (a, b) if a == b => place_diff + voiced_penalty,
             (Affricate, Fricative | Plosive) | (Fricative | Plosive, Affricate) => {
-                let non_affricate = if matches!(self.manner, Affricate) {
-                    other
+                let non_affricate = if matches!(c1.manner, Affricate) {
+                    c2
                 } else {
-                    self
+                    c1
                 };
                 let penalty = match non_affricate.manner {
-                    Fricative if non_affricate.sibilant => AFFRICATE_SIBILANT_FRICATIVE_PENALTY,
-                    Plosive => AFFRICATE_PLOSIVE_PENALTY,
-                    Fricative => AFFRICATE_NON_SIBILANT_FRICATIVE_PENALTY,
+                    Fricative if non_affricate.sibilant => {
+                        self.config.affricate_sibilant_fricative_penalty
+                    }
+                    Plosive => self.config.affricate_plosive_penalty,
+                    Fricative => self.config.affricate_non_sibilant_fricative_penalty,
                     _ => unreachable!(),
                 };
                 place_diff + voiced_penalty + penalty
             }
-            _ => UNRELATED_PENALTY,
+            _ => self.config.unrelated_penalty,
         }
     }
 }
@@ -91,59 +127,70 @@ mod tests {
         c(a).place.abs_diff(c(b).place) as u32
     }
 
+    fn config() -> AnalyticConsonantDistanceConfig {
+        AnalyticConsonantDistanceConfig::default()
+    }
+
+    fn distance(a: crate::phoneme::ConsonantPhoneme, b: crate::phoneme::ConsonantPhoneme) -> u32 {
+        AnalyticConsonantDistance::new().distance(&c(a), &c(b))
+    }
+
     #[test]
     fn consonant_distance_same() {
-        assert_eq!(c(B).distance(&c(B)), 0);
+        assert_eq!(distance(B, B), 0);
     }
 
     #[test]
     // BOTH PLOSIVE
     fn consonant_distance_same_manner_plosive() {
-        assert_eq!(c(B).distance(&c(K)), place_diff(B, K) + VOICED_PENALTY);
+        assert_eq!(distance(B, K), place_diff(B, K) + config().voiced_penalty);
     }
 
     #[test]
     // BOTH FRICATIVE
     fn consonant_distance_same_manner_fricative() {
-        assert_eq!(c(F).distance(&c(HH)), place_diff(F, HH));
+        assert_eq!(distance(F, HH), place_diff(F, HH));
     }
 
     #[test]
     // BOTH AFFRICATE
     fn consonant_distance_same_manner_affricate() {
-        assert_eq!(c(CH).distance(&c(JH)), place_diff(CH, JH) + VOICED_PENALTY);
+        assert_eq!(
+            distance(CH, JH),
+            place_diff(CH, JH) + config().voiced_penalty
+        );
     }
 
     #[test]
     // BOTH NASAL
     fn consonant_distance_same_manner_nasal() {
-        assert_eq!(c(M).distance(&c(NG)), place_diff(M, NG));
+        assert_eq!(distance(M, NG), place_diff(M, NG));
     }
 
     #[test]
     // R & L
     fn consonant_distance_r_l() {
-        assert_eq!(c(R).distance(&c(L)), R_L_DISTANCE);
+        assert_eq!(distance(R, L), config().r_l_distance);
     }
 
     #[test]
     // W & V
     fn consonant_distance_w_v() {
-        assert_eq!(c(W).distance(&c(V)), W_V_DISTANCE);
+        assert_eq!(distance(W, V), config().w_v_distance);
     }
 
     #[test]
     // APPROXIMANTS
     fn consonant_distance_approximants() {
-        assert_eq!(c(W).distance(&c(L)), place_diff(W, L));
+        assert_eq!(distance(W, L), place_diff(W, L));
     }
 
     #[test]
     // ONE AFFRICATE ONE SIBILANT FRICATIVE
     fn consonant_distance_affricate_sibilant_fricative() {
         assert_eq!(
-            c(CH).distance(&c(SH)),
-            place_diff(CH, SH) + AFFRICATE_SIBILANT_FRICATIVE_PENALTY
+            distance(CH, SH),
+            place_diff(CH, SH) + config().affricate_sibilant_fricative_penalty
         );
     }
 
@@ -151,8 +198,8 @@ mod tests {
     // ONE AFFRICATE ONE NON SIBILANT FRICATIVE
     fn consonant_distance_affricate_non_sibilant_fricative() {
         assert_eq!(
-            c(CH).distance(&c(TH)),
-            place_diff(CH, TH) + AFFRICATE_NON_SIBILANT_FRICATIVE_PENALTY
+            distance(CH, TH),
+            place_diff(CH, TH) + config().affricate_non_sibilant_fricative_penalty
         );
     }
 
@@ -160,21 +207,42 @@ mod tests {
     // ONE AFFRICATE ONE PLOSIVE
     fn consonant_distance_affricate_plosive() {
         assert_eq!(
-            c(CH).distance(&c(T)),
-            place_diff(CH, T) + AFFRICATE_PLOSIVE_PENALTY
+            distance(CH, T),
+            place_diff(CH, T) + config().affricate_plosive_penalty
         );
     }
 
     #[test]
     // UNRELATED CONSONANTS
     fn consonant_distance_unrelated() {
-        assert_eq!(c(M).distance(&c(F)), UNRELATED_PENALTY);
+        assert_eq!(distance(M, F), config().unrelated_penalty);
     }
 
     #[test]
     fn consonant_distance_is_symmetric() {
-        assert_eq!(c(B).distance(&c(K)), c(K).distance(&c(B)));
-        assert_eq!(c(CH).distance(&c(SH)), c(SH).distance(&c(CH)));
-        assert_eq!(c(W).distance(&c(V)), c(V).distance(&c(W)));
+        assert_eq!(distance(B, K), distance(K, B));
+        assert_eq!(distance(CH, SH), distance(SH, CH));
+        assert_eq!(distance(W, V), distance(V, W));
+    }
+
+    #[test]
+    fn custom_config_controls_penalties() {
+        let scorer = AnalyticConsonantDistance::with_config(AnalyticConsonantDistanceConfig {
+            unrelated_penalty: 30,
+            voiced_penalty: 4,
+            r_l_distance: 5,
+            w_v_distance: 6,
+            affricate_sibilant_fricative_penalty: 7,
+            affricate_plosive_penalty: 8,
+            affricate_non_sibilant_fricative_penalty: 9,
+        });
+
+        assert_eq!(scorer.distance(&c(M), &c(F)), 30);
+        assert_eq!(scorer.distance(&c(B), &c(K)), place_diff(B, K) + 4);
+        assert_eq!(scorer.distance(&c(R), &c(L)), 5);
+        assert_eq!(scorer.distance(&c(W), &c(V)), 6);
+        assert_eq!(scorer.distance(&c(CH), &c(SH)), place_diff(CH, SH) + 7);
+        assert_eq!(scorer.distance(&c(CH), &c(T)), place_diff(CH, T) + 8);
+        assert_eq!(scorer.distance(&c(CH), &c(TH)), place_diff(CH, TH) + 9);
     }
 }

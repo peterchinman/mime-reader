@@ -1,8 +1,10 @@
 use crate::{
     Dictionary, Line, MeterScheme, RhymeDistanceScorer, RhymeScheme,
+    consonant_distance::{AnalyticConsonantDistance, ConsonantDistanceScorer},
     error::{MeterCheckError, PoemEditError, RhymeCheckError},
     meter::MeterMatchResult,
-    rhyme::{LineRole, ResolvedLineRole, RhymeCheckResult},
+    rhyme_scheme::{LineRole, ResolvedLineRole, RhymeCheckResult},
+    vowel_distance::{VowelDistanceScorer, VowelHexGraph},
 };
 
 #[derive(Debug)]
@@ -53,7 +55,7 @@ impl Poem {
         &mut self,
         index: usize,
         text: &str,
-        analyzer: &Analyzer,
+        dict: &Dictionary,
     ) -> Result<(), PoemEditError> {
         let Some(line) = self.lines.get_mut(index) else {
             return Err(PoemEditError::LineIndexOutOfBounds {
@@ -62,7 +64,7 @@ impl Poem {
             });
         };
 
-        line.line = Line::new(text, &analyzer.dict);
+        line.line = Line::new(text, dict);
         self.invalidate_after_update(index);
         Ok(())
     }
@@ -71,7 +73,7 @@ impl Poem {
         &mut self,
         index: usize,
         text: &str,
-        analyzer: &Analyzer,
+        dict: &Dictionary,
     ) -> Result<(), PoemEditError> {
         if index > self.lines.len() {
             return Err(PoemEditError::LineIndexOutOfBounds {
@@ -80,7 +82,7 @@ impl Poem {
             });
         }
 
-        let inserted_line = Line::new(text, &analyzer.dict);
+        let inserted_line = Line::new(text, dict);
         let inserted_poem_line = PoemLine {
             line: inserted_line,
         };
@@ -167,20 +169,28 @@ impl Poem {
         }
     }
 
-    pub fn rhyme_analysis(
+    pub fn rhyme_analysis<V, C>(
         &mut self,
         index: usize,
-        analyzer: &Analyzer,
-    ) -> Result<RhymeAnalysis<'_>, PoemEditError> {
-        self.ensure_rhyme_analysis(index, analyzer)?;
+        scorer: &RhymeDistanceScorer<V, C>,
+    ) -> Result<RhymeAnalysis<'_>, PoemEditError>
+    where
+        V: VowelDistanceScorer,
+        C: ConsonantDistanceScorer,
+    {
+        self.ensure_rhyme_analysis(index, scorer)?;
         Ok(self.cached_rhyme_analysis_after_ensure(index))
     }
 
-    fn ensure_rhyme_analysis(
+    fn ensure_rhyme_analysis<V, C>(
         &mut self,
         index: usize,
-        analyzer: &Analyzer,
-    ) -> Result<(), PoemEditError> {
+        scorer: &RhymeDistanceScorer<V, C>,
+    ) -> Result<(), PoemEditError>
+    where
+        V: VowelDistanceScorer,
+        C: ConsonantDistanceScorer,
+    {
         if index >= self.lines.len() {
             return Err(PoemEditError::LineIndexOutOfBounds {
                 index,
@@ -195,9 +205,8 @@ impl Poem {
 
         if matches!(self.analyses[index].rhyme, AnalysisState::Dirty) {
             let role = self.resolved_line_role(rhyme_scheme, index);
-            let result = role.and_then(|role| {
-                rhyme_scheme.check_line(&self.lines[index].line, role, &analyzer.rhyme_distance_scorer)
-            });
+            let result = role
+                .and_then(|role| rhyme_scheme.check_line(&self.lines[index].line, role, scorer));
             self.analyses[index].rhyme = AnalysisState::Ready(result);
         }
 
@@ -214,13 +223,17 @@ impl Poem {
         }
     }
 
-    pub fn line_analysis(
+    pub fn line_analysis<V, C>(
         &mut self,
         index: usize,
-        analyzer: &Analyzer,
-    ) -> Result<PoemLineAnalysis<'_>, PoemEditError> {
+        scorer: &RhymeDistanceScorer<V, C>,
+    ) -> Result<PoemLineAnalysis<'_>, PoemEditError>
+    where
+        V: VowelDistanceScorer,
+        C: ConsonantDistanceScorer,
+    {
         self.ensure_meter_analysis(index)?;
-        self.ensure_rhyme_analysis(index, analyzer)?;
+        self.ensure_rhyme_analysis(index, scorer)?;
 
         Ok(PoemLineAnalysis {
             meter: self.cached_meter_analysis_after_ensure(index),
@@ -281,12 +294,20 @@ impl Poem {
     }
 }
 
-pub struct Analyzer {
-    rhyme_distance_scorer: RhymeDistanceScorer,
+pub struct Analyzer<V = VowelHexGraph, C = AnalyticConsonantDistance>
+where
+    V: VowelDistanceScorer,
+    C: ConsonantDistanceScorer,
+{
+    rhyme_distance_scorer: RhymeDistanceScorer<V, C>,
     dict: Dictionary,
 }
 
-impl Analyzer {
+impl<V, C> Analyzer<V, C>
+where
+    V: VowelDistanceScorer,
+    C: ConsonantDistanceScorer,
+{
     // pub fn new(dict_bytes: &[u8]) -> Result<Analyzer, JsValue> {
     //     let dict =
     //         Dictionary::from_bytes(dict_bytes).map_err(|e| JsValue::from_str(&e.to_string()))?;
@@ -295,11 +316,19 @@ impl Analyzer {
     //         dict,
     //     })
     // }
-    pub fn new(dict: Dictionary, rhyme_distance_scorer: RhymeDistanceScorer) -> Self {
+    pub fn new(dict: Dictionary, rhyme_distance_scorer: RhymeDistanceScorer<V, C>) -> Self {
         Self {
             dict,
             rhyme_distance_scorer,
         }
+    }
+
+    pub fn dict(&self) -> &Dictionary {
+        &self.dict
+    }
+
+    pub fn rhyme_distance_scorer(&self) -> &RhymeDistanceScorer<V, C> {
+        &self.rhyme_distance_scorer
     }
 }
 
@@ -333,7 +362,7 @@ mod tests {
             lines: lines
                 .iter()
                 .map(|text| PoemLine {
-                    line: Line::new(text, &analyzer().dict),
+                    line: Line::new(text, analyzer().dict()),
                 })
                 .collect(),
             analyses: lines
@@ -474,7 +503,7 @@ mod tests {
     fn insert_line_keeps_lines_and_analyses_aligned() {
         let mut poem = poem_with_cached_analyses(&["cat", "dog"]);
 
-        poem.insert_line(1, "hat", analyzer()).unwrap();
+        poem.insert_line(1, "hat", analyzer().dict()).unwrap();
 
         assert_eq!(line_texts(&poem), ["cat", "hat", "dog"]);
         assert_analyses_aligned_with_lines(&poem);
@@ -499,7 +528,7 @@ mod tests {
     fn update_line_replaces_line_and_invalidates_existing_analyses() {
         let mut poem = poem_with_cached_analyses(&["cat", "dog"]);
 
-        poem.update_line(1, "hat", analyzer()).unwrap();
+        poem.update_line(1, "hat", analyzer().dict()).unwrap();
 
         assert_eq!(line_texts(&poem), ["cat", "hat"]);
         assert_analyses_aligned_with_lines(&poem);
@@ -588,7 +617,9 @@ mod tests {
     fn rhyme_analysis_only_warms_rhyme_cache() {
         let mut poem = poem_with_schemes(&["cat"], Some("/"), Some("A"));
 
-        let analysis = poem.rhyme_analysis(0, analyzer()).unwrap();
+        let analysis = poem
+            .rhyme_analysis(0, analyzer().rhyme_distance_scorer())
+            .unwrap();
 
         assert_rhyme_ready_leader(analysis);
         assert_rhyme_state_ready(&poem, 0);
@@ -602,13 +633,19 @@ mod tests {
     fn rhyme_analysis_computes_leader_unconstrained_and_follower_roles() {
         let mut poem = poem_with_schemes(&["cat", "dog", "hat"], None, Some("A_A"));
 
-        let leader = poem.rhyme_analysis(0, analyzer()).unwrap();
+        let leader = poem
+            .rhyme_analysis(0, analyzer().rhyme_distance_scorer())
+            .unwrap();
         assert_rhyme_ready_leader(leader);
 
-        let unconstrained = poem.rhyme_analysis(1, analyzer()).unwrap();
+        let unconstrained = poem
+            .rhyme_analysis(1, analyzer().rhyme_distance_scorer())
+            .unwrap();
         assert_rhyme_ready_unconstrained(unconstrained);
 
-        let follower = poem.rhyme_analysis(2, analyzer()).unwrap();
+        let follower = poem
+            .rhyme_analysis(2, analyzer().rhyme_distance_scorer())
+            .unwrap();
         assert_rhyme_ready_follower_passes(follower, 0);
 
         for index in 0..poem.lines.len() {
@@ -620,7 +657,9 @@ mod tests {
     fn rhyme_analysis_caches_check_errors_inside_ready_state() {
         let mut poem = poem_with_schemes(&["cat", "xyzzy"], None, Some("AA"));
 
-        let analysis = poem.rhyme_analysis(1, analyzer()).unwrap();
+        let analysis = poem
+            .rhyme_analysis(1, analyzer().rhyme_distance_scorer())
+            .unwrap();
 
         let RhymeAnalysis::Ready(Err(RhymeCheckError::UnknownWord(error))) = analysis else {
             panic!("expected cached unknown-word rhyme error, got {analysis:?}");
@@ -641,7 +680,9 @@ mod tests {
     fn line_analysis_warms_meter_and_rhyme_together() {
         let mut poem = poem_with_schemes(&["cat", "hat"], Some("/"), Some("AA"));
 
-        let analysis = poem.line_analysis(1, analyzer()).unwrap();
+        let analysis = poem
+            .line_analysis(1, analyzer().rhyme_distance_scorer())
+            .unwrap();
 
         assert_meter_ready_match(analysis.meter);
         assert_rhyme_ready_follower_passes(analysis.rhyme, 0);
@@ -653,7 +694,9 @@ mod tests {
     fn line_analysis_returns_not_applicable_for_missing_schemes() {
         let mut poem = poem_with_schemes(&["cat"], None, None);
 
-        let analysis = poem.line_analysis(0, analyzer()).unwrap();
+        let analysis = poem
+            .line_analysis(0, analyzer().rhyme_distance_scorer())
+            .unwrap();
 
         assert!(matches!(analysis.meter, MeterAnalysis::NotApplicable));
         assert!(matches!(analysis.rhyme, RhymeAnalysis::NotApplicable));
@@ -679,14 +722,14 @@ mod tests {
             })
         ));
         assert!(matches!(
-            poem.rhyme_analysis(1, analyzer()),
+            poem.rhyme_analysis(1, analyzer().rhyme_distance_scorer()),
             Err(PoemEditError::LineIndexOutOfBounds {
                 index: 1,
                 line_count: 1
             })
         ));
         assert!(matches!(
-            poem.line_analysis(1, analyzer()),
+            poem.line_analysis(1, analyzer().rhyme_distance_scorer()),
             Err(PoemEditError::LineIndexOutOfBounds {
                 index: 1,
                 line_count: 1

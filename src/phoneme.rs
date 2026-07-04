@@ -186,6 +186,26 @@ pub enum VowelPhoneme {
     OY,
 }
 
+impl VowelPhoneme {
+    pub const ALL: [Self; 15] = [
+        Self::AE,
+        Self::AA,
+        Self::EH,
+        Self::AH,
+        Self::AO,
+        Self::IY,
+        Self::IH,
+        Self::UH,
+        Self::UW,
+        Self::ER,
+        Self::AW,
+        Self::AY,
+        Self::EY,
+        Self::OW,
+        Self::OY,
+    ];
+}
+
 impl std::str::FromStr for VowelPhoneme {
     type Err = ParseArpabetError;
 

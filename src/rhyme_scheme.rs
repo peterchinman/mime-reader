@@ -2,9 +2,11 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     Line, RhymeDistanceScorer,
+    consonant_distance::ConsonantDistanceScorer,
     error::{ParseRhymeError, RhymeCheckError, UnknownWordError},
     line::{WordData, WordEntry},
     phoneme::{Phoneme, RhymingPart, get_last_n_syllables, get_rhyming_part},
+    vowel_distance::VowelDistanceScorer,
 };
 
 pub struct RhymeScheme {
@@ -157,12 +159,16 @@ impl RhymeScheme {
     ///
     /// Follower roles compare (all of) the (possible) rhyming part(s) of the last word of the Leader against the same sized portion of Target, then check whether the minimum normalized distance is below
     /// this scheme's threshold.
-    pub fn check_line(
+    pub fn check_line<V, C>(
         &self,
         line: &Line,
         role: ResolvedLineRole<'_>,
-        scorer: &RhymeDistanceScorer,
-    ) -> Result<RhymeCheckResult, RhymeCheckError> {
+        scorer: &RhymeDistanceScorer<V, C>,
+    ) -> Result<RhymeCheckResult, RhymeCheckError>
+    where
+        V: VowelDistanceScorer,
+        C: ConsonantDistanceScorer,
+    {
         match role {
             ResolvedLineRole::Leader => Ok(RhymeCheckResult::Leader),
             ResolvedLineRole::Unconstrained => Ok(RhymeCheckResult::Unconstrained),
@@ -258,11 +264,15 @@ fn last_n_syllables_of_line(
 
 /// Compares (all of) the (possible) rhyming part(s) of the last word of Leader Line against the same sized portion of Target Line.
 /// Returns the minimal distance between the two sections divided by the syllable count of the rhyming part.
-fn compare_rhyming_parts(
+fn compare_rhyming_parts<V, C>(
     leader: &Line,
     target: &Line,
-    scorer: &RhymeDistanceScorer,
-) -> Result<RhymeDistance, RhymeCheckError> {
+    scorer: &RhymeDistanceScorer<V, C>,
+) -> Result<RhymeDistance, RhymeCheckError>
+where
+    V: VowelDistanceScorer,
+    C: ConsonantDistanceScorer,
+{
     let leader_parts = rhyming_parts_of_last_word(leader)?;
 
     let mut min_distance: Option<RhymeDistance> = None;

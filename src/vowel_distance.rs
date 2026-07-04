@@ -3,55 +3,71 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use crate::phoneme::{Vowel, VowelPhoneme};
 use VowelPhoneme::*;
 
-pub const VOWEL_STRESS_PENALTY: u32 = 1;
-pub const VOWEL_DISTANCE_COEFFICIENT: u32 = 2;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VowelHexGraphConfig {
+    pub vowel_stress_penalty: u32,
+    // How much to weight raw vowel phoneme distance vs the vowel stress penalty.
+    pub vowel_distance_coefficient: u32,
+}
 
-const VOWELS: [VowelPhoneme; 15] = [AE, AA, EH, AH, AO, IY, IH, UH, UW, ER, AW, AY, EY, OW, OY];
+impl Default for VowelHexGraphConfig {
+    fn default() -> Self {
+        Self {
+            vowel_stress_penalty: 1,
+            vowel_distance_coefficient: 2,
+        }
+    }
+}
 
-// The Vowel Hexagonal Graph is a rendering of vowel space that I invented, by arranging the CMU
-// Pronouncing Dictionary monophthong vowels into a hexagonal grid. Imagine the vowels dripping
-// with honey.
-//
-//      ..         .          .         ..
-//   .::  .=.   .=.  ::.  .::  .=.   .=.  ::.
-// .:.       .=.       .::.       .=.       .:
-// ..   IY    =    IH   .    UH    =    UW   .
-// ..         =         .          =         .
-// ..        .=.        ..        .=.        .
-//    =.  .-.   ::   .=    +.   -:   .-.  .=
-//      .-         -.        .-         -.
-//       :   EH    :    AH    :    AO   -
-//       :         :          :         -
-//       -.       .-.        .-.        -
-//        ..=   +..  .-.  .-.  ..=   =..
-//           .=.        ..         =
-//            =    AE   .   AA    =
-//            =         .          =
-//            =:.      .::.      ..=
-//              .:: .-.    .=. ::.
-//
-//
-// DIPHTHONGS:
-//
-//   "AW", "AY", "EY", "OW", "OY" — 5 diphthongs
-//   bout, bite, bait, boat, boy
-//
-// diphthongs mapping:
-//   AW  aʊ  ->  AU* UH
-//   AY  aɪ  ->  AU* IH
-//   EY  eɪ  ->  EE* IH
-//   OW  oʊ  ->  OH* UH
-//   OY  ɔɪ  ->  OH* IH
-//
-// Where AU is IPA a, between AE and AA
-//       EE is IPA e, between EH and IY
-//       OH is IPA o, between AO and UW
-//
-// NOTE: some of the diphthongs start in in-between locations on the hex-graph, but end in either
-// UH or IH.
-
+/// The Vowel Hexagonal Graph is a rendering of vowel space that I invented, by arranging the CMU
+/// Pronouncing Dictionary monophthong vowels into a hexagonal grid. Imagine the vowels dripping
+/// with honey.
+///
+/// ```text
+///      ..         .          .         ..
+///   .::  .=.   .=.  ::.  .::  .=.   .=.  ::.
+/// .:.       .=.       .::.       .=.       .:
+/// ..   IY    =    IH   .    UH    =    UW   .
+/// ..         =         .          =         .
+/// ..        .=.        ..        .=.        .
+///    =.  .-.   ::   .=    +.   -:   .-.  .=
+///      .-         -.        .-         -.
+///       :   EH    :    AH    :    AO   -
+///       :         :          :         -
+///       -.       .-.        .-.        -
+///        ..=   +..  .-.  .-.  ..=   =..
+///           .=.        ..         =
+///            =    AE   .   AA    =
+///            =         .          =
+///            =:.      .::.      ..=
+///              .:: .-.    .=. ::.
+/// ```
+///
+///
+/// DIPHTHONGS:
+///
+///   "AW", "AY", "EY", "OW", "OY" — 5 diphthongs
+///   bout, bite, bait, boat, boy
+///
+/// diphthongs mapping:
+///   AW  aʊ  ->  AU* UH
+///   AY  aɪ  ->  AU* IH
+///   EY  eɪ  ->  EE* IH
+///   OW  oʊ  ->  OH* UH
+///   OY  ɔɪ  ->  OH* IH
+///
+/// Where AU is IPA a, between AE and AA
+///       EE is IPA e, between EH and IY
+///       OH is IPA o, between AO and UW
+///
+/// NOTE: some of the diphthongs start in in-between locations on the hex-graph, but end in either UH or IH.
 pub struct VowelHexGraph {
     distances: HashMap<(VowelPhoneme, VowelPhoneme), u32>,
+    config: VowelHexGraphConfig,
+}
+
+pub trait VowelDistanceScorer {
+    fn distance(&self, v1: &Vowel, v2: &Vowel) -> u32;
 }
 
 fn build_adjacency() -> HashMap<VowelPhoneme, Vec<VowelPhoneme>> {
@@ -180,48 +196,62 @@ fn bfs_distance(
 }
 
 impl VowelHexGraph {
-    fn build() -> Self {
+    fn build(config: VowelHexGraphConfig) -> Self {
         let adj = build_adjacency();
         let mut distances = HashMap::new();
-        for a in VOWELS {
-            for b in VOWELS {
+        for a in VowelPhoneme::ALL {
+            for b in VowelPhoneme::ALL {
                 distances.insert((a, b), bfs_distance(&adj, a, b));
             }
         }
-        VowelHexGraph { distances }
+        VowelHexGraph { distances, config }
     }
 
     pub fn new() -> Self {
-        Self::build()
+        Self::with_config(VowelHexGraphConfig::default())
     }
 
-    pub fn get_distance(&self, v1: VowelPhoneme, v2: VowelPhoneme) -> u32 {
+    pub fn with_config(config: VowelHexGraphConfig) -> Self {
+        Self::build(config)
+    }
+
+    pub fn config(&self) -> VowelHexGraphConfig {
+        self.config
+    }
+
+    fn phoneme_distance(&self, v1: VowelPhoneme, v2: VowelPhoneme) -> u32 {
         self.distances[&(v1, v2)]
+    }
+
+    pub fn distance(&self, v1: &Vowel, v2: &Vowel) -> u32 {
+        if v1 == v2 {
+            return 0;
+        }
+
+        let stress_penalty = if v1.stress != v2.stress {
+            self.config.vowel_stress_penalty
+        } else {
+            0
+        };
+
+        if v1.phoneme == v2.phoneme {
+            stress_penalty
+        } else {
+            self.phoneme_distance(v1.phoneme, v2.phoneme) * self.config.vowel_distance_coefficient
+                + stress_penalty
+        }
+    }
+}
+
+impl VowelDistanceScorer for VowelHexGraph {
+    fn distance(&self, v1: &Vowel, v2: &Vowel) -> u32 {
+        VowelHexGraph::distance(self, v1, v2)
     }
 }
 
 impl Default for VowelHexGraph {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl Vowel {
-    pub fn distance(&self, other: &Vowel, graph: &VowelHexGraph) -> u32 {
-        if self == other {
-            return 0;
-        }
-        let stress_penalty = if self.stress != other.stress {
-            VOWEL_STRESS_PENALTY
-        } else {
-            0
-        };
-        if self.phoneme == other.phoneme {
-            stress_penalty
-        } else {
-            graph.get_distance(self.phoneme, other.phoneme) * VOWEL_DISTANCE_COEFFICIENT
-                + stress_penalty
-        }
     }
 }
 
@@ -237,36 +267,43 @@ mod tests {
         GRAPH.get_or_init(VowelHexGraph::new)
     }
 
+    fn config() -> VowelHexGraphConfig {
+        VowelHexGraphConfig::default()
+    }
+
     fn v(s: &str) -> Vowel {
         s.parse().unwrap()
     }
 
-    // --- Vowel::distance ---
+    // --- VowelHexGraph::distance ---
 
     #[test]
     fn vowel_distance_same_vowel_same_stress() {
-        assert_eq!(v("AO1").distance(&v("AO1"), graph()), 0);
+        assert_eq!(graph().distance(&v("AO1"), &v("AO1")), 0);
     }
 
     #[test]
     fn vowel_distance_same_vowel_different_stress() {
-        assert_eq!(v("AO1").distance(&v("AO0"), graph()), VOWEL_STRESS_PENALTY);
+        assert_eq!(
+            graph().distance(&v("AO1"), &v("AO0")),
+            config().vowel_stress_penalty
+        );
     }
 
     #[test]
     fn vowel_distance_adjacent_same_stress() {
         // AO and OW are adjacent on the hex-graph (dist=1)
         assert_eq!(
-            v("AO1").distance(&v("OW1"), graph()),
-            VOWEL_DISTANCE_COEFFICIENT
+            graph().distance(&v("AO1"), &v("OW1")),
+            config().vowel_distance_coefficient
         );
     }
 
     #[test]
     fn vowel_distance_adjacent_different_stress() {
         assert_eq!(
-            v("AO1").distance(&v("OW0"), graph()),
-            VOWEL_DISTANCE_COEFFICIENT + VOWEL_STRESS_PENALTY
+            graph().distance(&v("AO1"), &v("OW0")),
+            config().vowel_distance_coefficient + config().vowel_stress_penalty
         );
     }
 
@@ -274,79 +311,105 @@ mod tests {
     fn vowel_distance_two_steps() {
         // UW and IH are distance 2 on the hex-graph
         assert_eq!(
-            v("UW1").distance(&v("IH1"), graph()),
-            2 * VOWEL_DISTANCE_COEFFICIENT
+            graph().distance(&v("UW1"), &v("IH1")),
+            2 * config().vowel_distance_coefficient
         );
     }
 
     #[test]
     fn vowel_distance_is_symmetric() {
         assert_eq!(
-            v("AO1").distance(&v("IY2"), graph()),
-            v("IY2").distance(&v("AO1"), graph())
+            graph().distance(&v("AO1"), &v("IY2")),
+            graph().distance(&v("IY2"), &v("AO1"))
         );
     }
 
     #[test]
-    fn same_vowel_distance_is_zero() {
-        assert_eq!(graph().get_distance(AE, AE), 0);
-        assert_eq!(graph().get_distance(OY, OY), 0);
+    fn graph_distance_includes_stress_penalty() {
+        assert_eq!(
+            graph().distance(&v("AO1"), &v("OW0")),
+            config().vowel_distance_coefficient + config().vowel_stress_penalty
+        );
     }
 
     #[test]
-    fn adjacent_vowels_distance_is_one() {
-        assert_eq!(graph().get_distance(AE, AH), 1);
+    fn custom_config_controls_vowel_distance_penalties() {
+        let graph = VowelHexGraph::with_config(VowelHexGraphConfig {
+            vowel_stress_penalty: 5,
+            vowel_distance_coefficient: 7,
+        });
+
+        assert_eq!(graph.distance(&v("AO1"), &v("AO0")), 5);
+        assert_eq!(graph.distance(&v("AO1"), &v("OW1")), 7);
+        assert_eq!(graph.distance(&v("AO1"), &v("OW0")), 12);
     }
 
     #[test]
-    fn distance_two() {
-        assert_eq!(graph().get_distance(UW, IH), 2);
+    fn same_vowel_phoneme_distance_is_zero() {
+        assert_eq!(graph().phoneme_distance(AE, AE), 0);
+        assert_eq!(graph().phoneme_distance(OY, OY), 0);
     }
 
     #[test]
-    fn distance_three() {
-        assert_eq!(graph().get_distance(AO, IY), 3);
+    fn adjacent_vowel_phoneme_distance_is_one() {
+        assert_eq!(graph().phoneme_distance(AE, AH), 1);
     }
 
     #[test]
-    fn distances_are_symmetric() {
-        assert_eq!(graph().get_distance(AH, AE), graph().get_distance(AE, AH));
-        assert_eq!(graph().get_distance(IY, AO), graph().get_distance(AO, IY));
+    fn phoneme_distance_two() {
+        assert_eq!(graph().phoneme_distance(UW, IH), 2);
+    }
+
+    #[test]
+    fn phoneme_distance_three() {
+        assert_eq!(graph().phoneme_distance(AO, IY), 3);
+    }
+
+    #[test]
+    fn phoneme_distances_are_symmetric() {
+        assert_eq!(
+            graph().phoneme_distance(AH, AE),
+            graph().phoneme_distance(AE, AH)
+        );
+        assert_eq!(
+            graph().phoneme_distance(IY, AO),
+            graph().phoneme_distance(AO, IY)
+        );
     }
 
     // --- diphthong adjacencies ---
 
     #[test]
     fn aw_adjacencies() {
-        assert_eq!(graph().get_distance(AW, UH), 1);
-        assert_eq!(graph().get_distance(AW, OW), 1);
-        assert_eq!(graph().get_distance(AW, AH), 1);
+        assert_eq!(graph().phoneme_distance(AW, UH), 1);
+        assert_eq!(graph().phoneme_distance(AW, OW), 1);
+        assert_eq!(graph().phoneme_distance(AW, AH), 1);
     }
 
     #[test]
     fn ay_adjacencies() {
-        assert_eq!(graph().get_distance(AY, IH), 1);
-        assert_eq!(graph().get_distance(AY, EY), 1);
-        assert_eq!(graph().get_distance(AY, AH), 1);
+        assert_eq!(graph().phoneme_distance(AY, IH), 1);
+        assert_eq!(graph().phoneme_distance(AY, EY), 1);
+        assert_eq!(graph().phoneme_distance(AY, AH), 1);
     }
 
     #[test]
     fn ey_adjacencies() {
-        assert_eq!(graph().get_distance(EY, IH), 1);
-        assert_eq!(graph().get_distance(EY, EH), 1);
-        assert_eq!(graph().get_distance(EY, IY), 1);
+        assert_eq!(graph().phoneme_distance(EY, IH), 1);
+        assert_eq!(graph().phoneme_distance(EY, EH), 1);
+        assert_eq!(graph().phoneme_distance(EY, IY), 1);
     }
 
     #[test]
     fn ow_adjacencies() {
-        assert_eq!(graph().get_distance(OW, OY), 1);
-        assert_eq!(graph().get_distance(OW, UH), 1);
-        assert_eq!(graph().get_distance(OW, UW), 1);
-        assert_eq!(graph().get_distance(OW, AO), 1);
+        assert_eq!(graph().phoneme_distance(OW, OY), 1);
+        assert_eq!(graph().phoneme_distance(OW, UH), 1);
+        assert_eq!(graph().phoneme_distance(OW, UW), 1);
+        assert_eq!(graph().phoneme_distance(OW, AO), 1);
     }
 
     #[test]
     fn oy_adjacencies() {
-        assert_eq!(graph().get_distance(OY, IH), 1);
+        assert_eq!(graph().phoneme_distance(OY, IH), 1);
     }
 }

@@ -1,31 +1,62 @@
 use std::collections::HashMap;
 
+use crate::consonant_distance::{AnalyticConsonantDistance, ConsonantDistanceScorer};
 use crate::phoneme::Phoneme;
-use crate::vowel_distance::VowelHexGraph;
+use crate::vowel_distance::{VowelDistanceScorer, VowelHexGraph};
 
-// We never want to compare a vowel to a consonant, so we should give this an arbitrarily high penalty.
-const VOWEL_TO_CONSONANT_MISMATCH: u32 = 1000;
-// Vowel distance ranges from 0-9 (VowelHexGraph distance (<= 4), gets multiplied by VOWEL_DISTANCE_COEFFICIENT (2), and VOWEL_STRESS_PENALTY (1) added), consonant distance range up to 10.
-// This coefficient determines "how much more important vowels are than consonants"
-// TODO find the correct value for this. My instinct is that vowels should be significantly more important than consonants.
-const VOWEL_COEFFICIENT: u32 = 3;
-// Ideally, we should be comparing equal syllable slices, in which case, the insertion/deletion penalty for vowels should be arbitrarily high, as we always want the vowels to align.
-// TODO: allow comparing different sized syllable slices? (in which case I think what you want to do is... find the smaller-sized slice of the larger one with the lowest distance score)
-const VOWEL_INDEL_PENALTY: u32 = 1000;
-// Insertion/deletion penalty for consonants
-// This should be greater or equal to half of the Consonant's UNRELATED_PENALTY, otherwise it's cheaper to insert/delete a consonant than to compare unrelated consonants.
-// TODO: Should all inserted consonants have the same insertion penalty? Are some consonants "lighter" than others?
-const CONSONANT_INDEL_PENALTY: u32 = 5;
-// "Reapeated" consonants should be penalized less than standard INDEL penalty, for example when comparing TEN DRY <=> TEND DRY (bad example, you get the idea)
-// TODO: an /R/ following /ER/ should be counted as repeated
-// TODO: a /W/ following /OW/ should be counted as repeated
-// TODO: are there other vowel -> consonant sequences that should count as repeated?
-// TODO: This should take into account cases like RAISING (R EY1 Z IH0 NG) vs RAISE SING (R EY1 Z S IH1 NG), i.e. we should take consonant distance of repeated consonants into account
-// An arbitrary starting point would probably be (1 + distance())/2
-const CONSONANT_REPEATED_PENALTY: u32 = 1;
-// Transposing consonants should incur a smaller penalty than comparing them each in order. E.g. MOST <=> MOATS should have relatively small penalty.
-// TODO: What should this value be?
-const TRANSPOSITION_COST: u32 = 2;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RhymeDistanceConfig {
+    /// We never want to compare a vowel to a consonant, so we should give this an arbitrarily high penalty.
+    pub vowel_to_consonant_mismatch: u32,
+    /// Vowel distance ranges from 0-9 (VowelHexGraph distance (<= 4), gets multiplied by VOWEL_DISTANCE_COEFFICIENT (2), and VOWEL_STRESS_PENALTY (1) added), consonant distance range up to 10.
+    ///
+    /// This coefficient determines "how much more important vowels are than consonants"
+    ///
+    /// TODO find the correct value for this. My instinct is that vowels should be significantly more important than consonants.
+    pub vowel_coefficient: u32,
+    /// This coefficient determines how much consonant differences contribute to rhyme distance.
+    pub consonant_coefficient: u32,
+    /// Ideally, we should be comparing equal syllable slices, in which case, the insertion/deletion penalty for vowels should be arbitrarily high, as we always want the vowels to align.
+    ///
+    /// TODO: allow comparing different sized syllable slices? (in which case I think what you want to do is... find the smaller-sized slice of the larger one with the lowest distance score)
+    pub vowel_indel_penalty: u32,
+    /// Insertion/deletion penalty for consonants
+    ///
+    /// This should be greater or equal to half of the default unrelated consonant penalty, otherwise it's cheaper to insert/delete a consonant than to compare unrelated consonants.
+    ///
+    /// TODO: Should all inserted consonants have the same insertion penalty? Are some consonants "lighter" than others?
+    pub consonant_indel_penalty: u32,
+    /// "Reapeated" consonants should be penalized less than standard INDEL penalty, for example when comparing TEN DRY <=> TEND DRY (bad example, you get the idea)
+    ///
+    /// TODO: an /R/ following /ER/ should be counted as repeated
+    ///
+    /// TODO: a /W/ following /OW/ should be counted as repeated
+    ///
+    /// TODO: are there other vowel -> consonant sequences that should count as repeated?
+    ///
+    /// TODO: This should take into account cases like RAISING (R EY1 Z IH0 NG) vs RAISE SING (R EY1 Z S IH1 NG), i.e. we should take consonant distance of repeated consonants into account
+    ///
+    /// An arbitrary starting point would probably be (1 + distance())/2
+    pub consonant_repeated_penalty: u32,
+    /// Transposing consonants should incur a smaller penalty than comparing them each in order. E.g. MOST <=> MOATS should have relatively small penalty.
+    ///
+    /// TODO: What should this value be?
+    pub transposition_cost: u32,
+}
+
+impl Default for RhymeDistanceConfig {
+    fn default() -> Self {
+        Self {
+            vowel_to_consonant_mismatch: 1000,
+            vowel_coefficient: 3,
+            consonant_coefficient: 1,
+            vowel_indel_penalty: 1000,
+            consonant_indel_penalty: 5,
+            consonant_repeated_penalty: 1,
+            transposition_cost: 2,
+        }
+    }
+}
 
 const INF: u32 = u32::MAX / 2;
 
@@ -86,8 +117,14 @@ impl<'a> RhymeDistanceOutput<'a> {
     }
 }
 
-pub struct RhymeDistanceScorer {
-    vowel_graph: VowelHexGraph,
+pub struct RhymeDistanceScorer<V = VowelHexGraph, C = AnalyticConsonantDistance>
+where
+    V: VowelDistanceScorer,
+    C: ConsonantDistanceScorer,
+{
+    vowel_scorer: V,
+    consonant_scorer: C,
+    config: RhymeDistanceConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,24 +141,78 @@ struct DpOutput {
     edits: Option<Vec<Vec<Edit>>>,
 }
 
-impl RhymeDistanceScorer {
+impl RhymeDistanceScorer<VowelHexGraph, AnalyticConsonantDistance> {
     pub fn new() -> Self {
+        Self::with_config(RhymeDistanceConfig::default())
+    }
+
+    pub fn with_config(config: RhymeDistanceConfig) -> Self {
+        Self::with_scorers_and_config(
+            VowelHexGraph::new(),
+            AnalyticConsonantDistance::new(),
+            config,
+        )
+    }
+}
+
+impl<V> RhymeDistanceScorer<V, AnalyticConsonantDistance>
+where
+    V: VowelDistanceScorer,
+{
+    pub fn with_vowel_scorer(vowel_scorer: V) -> Self {
+        Self::with_scorers(vowel_scorer, AnalyticConsonantDistance::new())
+    }
+}
+
+impl<C> RhymeDistanceScorer<VowelHexGraph, C>
+where
+    C: ConsonantDistanceScorer,
+{
+    pub fn with_consonant_scorer(consonant_scorer: C) -> Self {
+        Self::with_scorers(VowelHexGraph::new(), consonant_scorer)
+    }
+}
+
+impl<V, C> RhymeDistanceScorer<V, C>
+where
+    V: VowelDistanceScorer,
+    C: ConsonantDistanceScorer,
+{
+    pub fn with_scorers(vowel_scorer: V, consonant_scorer: C) -> Self {
+        Self::with_scorers_and_config(
+            vowel_scorer,
+            consonant_scorer,
+            RhymeDistanceConfig::default(),
+        )
+    }
+
+    pub fn with_scorers_and_config(
+        vowel_scorer: V,
+        consonant_scorer: C,
+        config: RhymeDistanceConfig,
+    ) -> Self {
         Self {
-            vowel_graph: VowelHexGraph::new(),
+            vowel_scorer,
+            consonant_scorer,
+            config,
         }
     }
 
-    fn gap_penalty(phoneme: &Phoneme, prev: Option<&Phoneme>) -> u32 {
+    pub fn config(&self) -> RhymeDistanceConfig {
+        self.config
+    }
+
+    fn gap_penalty(&self, phoneme: &Phoneme, prev: Option<&Phoneme>) -> u32 {
         match phoneme {
-            Phoneme::Vowel(_) => VOWEL_INDEL_PENALTY,
+            Phoneme::Vowel(_) => self.config.vowel_indel_penalty,
             Phoneme::Consonant(c) => {
                 if let Some(Phoneme::Consonant(p)) = prev
                     && c.phoneme == p.phoneme
                 {
-                    return CONSONANT_REPEATED_PENALTY;
+                    return self.config.consonant_repeated_penalty;
                 }
 
-                CONSONANT_INDEL_PENALTY
+                self.config.consonant_indel_penalty
             }
         }
     }
@@ -129,10 +220,12 @@ impl RhymeDistanceScorer {
     fn substitution_score(&self, p1: &Phoneme, p2: &Phoneme) -> u32 {
         match (p1, p2) {
             (Phoneme::Vowel(v1), Phoneme::Vowel(v2)) => {
-                v1.distance(v2, &self.vowel_graph) * VOWEL_COEFFICIENT
+                self.vowel_scorer.distance(v1, v2) * self.config.vowel_coefficient
             }
-            (Phoneme::Consonant(c1), Phoneme::Consonant(c2)) => c1.distance(c2),
-            _ => VOWEL_TO_CONSONANT_MISMATCH,
+            (Phoneme::Consonant(c1), Phoneme::Consonant(c2)) => {
+                self.consonant_scorer.distance(c1, c2) * self.config.consonant_coefficient
+            }
+            _ => self.config.vowel_to_consonant_mismatch,
         }
     }
 
@@ -143,7 +236,7 @@ impl RhymeDistanceScorer {
     }
 
     // first_prev: the phoneme just before slice[0] in the original sequence (stripped prefix context).
-    fn prefix_gap_sums(slice: &[Phoneme], first_prev: Option<&Phoneme>) -> Vec<u32> {
+    fn prefix_gap_sums(&self, slice: &[Phoneme], first_prev: Option<&Phoneme>) -> Vec<u32> {
         let mut sums = vec![0u32; slice.len() + 1];
         for i in 0..slice.len() {
             let prev = if i > 0 {
@@ -151,7 +244,7 @@ impl RhymeDistanceScorer {
             } else {
                 first_prev
             };
-            sums[i + 1] = sums[i] + Self::gap_penalty(&slice[i], prev);
+            sums[i + 1] = sums[i] + self.gap_penalty(&slice[i], prev);
         }
         sums
     }
@@ -166,8 +259,8 @@ impl RhymeDistanceScorer {
         let len1 = s1.len();
         let len2 = s2.len();
 
-        let prefix_gap1 = Self::prefix_gap_sums(s1, prefix_context);
-        let prefix_gap2 = Self::prefix_gap_sums(s2, prefix_context);
+        let prefix_gap1 = self.prefix_gap_sums(s1, prefix_context);
+        let prefix_gap2 = self.prefix_gap_sums(s2, prefix_context);
 
         let rows = len1 + 2;
         let cols = len2 + 2;
@@ -196,7 +289,7 @@ impl RhymeDistanceScorer {
             for (i2, p2) in s2.iter().enumerate() {
                 let l1 = *last_i1.get(p2).unwrap_or(&0);
 
-                let del_cost = Self::gap_penalty(
+                let del_cost = self.gap_penalty(
                     p1,
                     if i1 > 0 {
                         s1.get(i1 - 1)
@@ -204,7 +297,7 @@ impl RhymeDistanceScorer {
                         prefix_context
                     },
                 );
-                let ins_cost = Self::gap_penalty(
+                let ins_cost = self.gap_penalty(
                     p2,
                     if i2 > 0 {
                         s2.get(i2 - 1)
@@ -218,7 +311,7 @@ impl RhymeDistanceScorer {
                 let trans_cost = dists[l1][l2]
                     .saturating_add(trans_gap1)
                     .saturating_add(trans_gap2)
-                    .saturating_add(TRANSPOSITION_COST);
+                    .saturating_add(self.config.transposition_cost);
 
                 let mut best = (INF, u8::MAX, Edit::Start);
                 if l1 > 0 && l2 > 0 {
@@ -436,7 +529,7 @@ impl RhymeDistanceScorer {
     }
 }
 
-impl Default for RhymeDistanceScorer {
+impl Default for RhymeDistanceScorer<VowelHexGraph, AnalyticConsonantDistance> {
     fn default() -> Self {
         Self::new()
     }
@@ -445,12 +538,44 @@ impl Default for RhymeDistanceScorer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vowel_distance::VOWEL_DISTANCE_COEFFICIENT;
+    use crate::{
+        Consonant, Vowel,
+        consonant_distance::{AnalyticConsonantDistanceConfig, ConsonantDistanceScorer},
+        vowel_distance::{VowelDistanceScorer, VowelHexGraphConfig},
+    };
     use std::sync::OnceLock;
+
+    struct FixedVowelScorer;
+
+    impl VowelDistanceScorer for FixedVowelScorer {
+        fn distance(&self, v1: &Vowel, v2: &Vowel) -> u32 {
+            if v1 == v2 { 0 } else { 7 }
+        }
+    }
+
+    struct FixedConsonantScorer;
+
+    impl ConsonantDistanceScorer for FixedConsonantScorer {
+        fn distance(&self, c1: &Consonant, c2: &Consonant) -> u32 {
+            if c1 == c2 { 0 } else { 3 }
+        }
+    }
 
     static SCORER: OnceLock<RhymeDistanceScorer> = OnceLock::new();
     fn scorer() -> &'static RhymeDistanceScorer {
         SCORER.get_or_init(RhymeDistanceScorer::new)
+    }
+
+    fn config() -> RhymeDistanceConfig {
+        RhymeDistanceConfig::default()
+    }
+
+    fn vowel_config() -> VowelHexGraphConfig {
+        VowelHexGraphConfig::default()
+    }
+
+    fn consonant_config() -> AnalyticConsonantDistanceConfig {
+        AnalyticConsonantDistanceConfig::default()
     }
 
     fn parse(s: &str) -> Vec<Phoneme> {
@@ -494,11 +619,11 @@ mod tests {
         // M(5) + AO1(20) + S(5) + T(5) = 35
         assert_eq!(
             scorer().distance(&[], &s),
-            CONSONANT_INDEL_PENALTY * 3 + VOWEL_INDEL_PENALTY
+            config().consonant_indel_penalty * 3 + config().vowel_indel_penalty
         );
         assert_eq!(
             scorer().distance(&s, &[]),
-            CONSONANT_INDEL_PENALTY * 3 + VOWEL_INDEL_PENALTY
+            config().consonant_indel_penalty * 3 + config().vowel_indel_penalty
         );
     }
 
@@ -515,8 +640,50 @@ mod tests {
         let s2 = parse("M OW1 S T");
         assert_eq!(
             scorer().distance(&s1, &s2),
-            1 * VOWEL_DISTANCE_COEFFICIENT * VOWEL_COEFFICIENT
+            vowel_config().vowel_distance_coefficient * config().vowel_coefficient
         );
+    }
+
+    #[test]
+    fn with_vowel_scorer_uses_custom_vowel_distance() {
+        let scorer = RhymeDistanceScorer::with_vowel_scorer(FixedVowelScorer);
+        let s1 = parse("AO1");
+        let s2 = parse("OW1");
+
+        assert_eq!(scorer.distance(&s1, &s2), 7 * config().vowel_coefficient);
+    }
+
+    #[test]
+    fn with_consonant_scorer_uses_custom_consonant_distance() {
+        let scorer = RhymeDistanceScorer::with_consonant_scorer(FixedConsonantScorer);
+        let s1 = parse("B");
+        let s2 = parse("K");
+
+        assert_eq!(scorer.distance(&s1, &s2), 3);
+    }
+
+    #[test]
+    fn with_config_controls_edit_costs() {
+        let config = RhymeDistanceConfig {
+            vowel_to_consonant_mismatch: 5,
+            vowel_coefficient: 4,
+            consonant_coefficient: 4,
+            vowel_indel_penalty: 40,
+            consonant_indel_penalty: 6,
+            consonant_repeated_penalty: 2,
+            transposition_cost: 3,
+        };
+        let scorer = RhymeDistanceScorer::with_config(config);
+
+        assert_eq!(
+            scorer.distance(&parse("AO1"), &parse("OW1")),
+            vowel_config().vowel_distance_coefficient * config.vowel_coefficient
+        );
+        assert_eq!(scorer.distance(&parse("AO1"), &parse("B")), 5);
+        assert_eq!(scorer.distance(&parse("T"), &parse("D")), 4);
+        assert_eq!(scorer.distance(&parse("B"), &[]), 6);
+        assert_eq!(scorer.distance(&parse("B B"), &parse("B")), 2);
+        assert_eq!(scorer.distance(&parse("M OW1 S T"), &parse("M OW1 T S")), 3);
     }
 
     #[test]
@@ -525,7 +692,10 @@ mod tests {
         let s1 = parse("T AE1 N");
         let s2 = parse("D AE1 N");
         // T vs D: same manner (Plosive), place diff 0, voiced penalty 1
-        assert_eq!(scorer().distance(&s1, &s2), 1);
+        assert_eq!(
+            scorer().distance(&s1, &s2),
+            consonant_config().voiced_penalty * config().consonant_coefficient
+        );
     }
 
     #[test]
@@ -535,7 +705,7 @@ mod tests {
         // so cost = TRANSPOSITION_COST
         let s1 = parse("M OW1 S T");
         let s2 = parse("M OW1 T S");
-        assert_eq!(scorer().distance(&s1, &s2), TRANSPOSITION_COST);
+        assert_eq!(scorer().distance(&s1, &s2), config().transposition_cost);
     }
 
     #[test]
@@ -545,7 +715,7 @@ mod tests {
         let output = scorer().align(&s1, &s2);
         let (aligned_1, aligned_2) = aligned_tokens(&output);
 
-        assert_eq!(output.score(), CONSONANT_INDEL_PENALTY);
+        assert_eq!(output.score(), config().consonant_indel_penalty);
         assert_eq!(aligned_1, ["M", "AO1", "_", "T"]);
         assert_eq!(aligned_2, ["M", "AO1", "S", "T"]);
         assert!(matches!(output.alignment()[0], AlignmentStep::Match { .. }));
@@ -559,7 +729,7 @@ mod tests {
         let output = scorer().align(&s1, &s2);
         let (aligned_1, aligned_2) = aligned_tokens(&output);
 
-        assert_eq!(output.score(), TRANSPOSITION_COST);
+        assert_eq!(output.score(), config().transposition_cost);
         assert_eq!(aligned_1, ["M", "AO1", "S\\", "T/"]);
         assert_eq!(aligned_2, ["M", "AO1", "T/", "S\\"]);
         assert!(matches!(
@@ -597,15 +767,21 @@ mod tests {
     fn single_consonant_insertion() {
         let s1 = parse("M AO1 T");
         let s2 = parse("M AO1 S T");
-        assert_eq!(scorer().distance(&s1, &s2), CONSONANT_INDEL_PENALTY);
+        assert_eq!(
+            scorer().distance(&s1, &s2),
+            config().consonant_indel_penalty
+        );
     }
 
     #[test]
-    fn repeated_consonant_low_penalty() {
+    fn repeated_consonant_penalty() {
         // Inserting a consonant identical to its neighbour costs CONSONANT_REPEATED_PENALTY
         let s1 = parse("B AE1 T IH0 NG");
         let s2 = parse("B AE1 T T IH0 NG");
-        assert_eq!(scorer().distance(&s1, &s2), CONSONANT_REPEATED_PENALTY);
+        assert_eq!(
+            scorer().distance(&s1, &s2),
+            config().consonant_repeated_penalty
+        );
     }
 
     #[test]
