@@ -1,5 +1,5 @@
 use crate::{
-    Dictionary, Line, MeterScheme, RhymeDistanceScorer, RhymeScheme,
+    Dictionary, Line, MeterScheme, RhymeDistanceConfig, RhymeDistanceScorer, RhymeScheme,
     consonant_distance::{AnalyticConsonantDistance, ConsonantDistanceScorer},
     error::{MeterCheckError, PoemEditError, RhymeCheckError},
     meter::MeterMatchResult,
@@ -278,6 +278,22 @@ impl Poem {
         }
     }
 
+    pub fn invalidate_rhyme_analysis(&mut self) {
+        if self.rhyme_scheme.is_some() {
+            for analysis in &mut self.analyses {
+                analysis.rhyme = AnalysisState::Dirty;
+            }
+        }
+    }
+
+    pub fn invalidate_meter_analysis(&mut self) {
+        if self.meter_scheme.is_some() {
+            for analysis in &mut self.analyses {
+                analysis.meter = AnalysisState::Dirty;
+            }
+        }
+    }
+
     fn set_dirty_for(has_meter_scheme: bool, has_rhyme_scheme: bool) -> LineAnalysis {
         LineAnalysis {
             meter: if has_meter_scheme {
@@ -330,6 +346,10 @@ where
     pub fn rhyme_distance_scorer(&self) -> &RhymeDistanceScorer<V, C> {
         &self.rhyme_distance_scorer
     }
+
+    pub fn set_rhyme_distance_config(&mut self, config: RhymeDistanceConfig) {
+        self.rhyme_distance_scorer.set_config(config);
+    }
 }
 
 #[cfg(test)]
@@ -346,6 +366,18 @@ mod tests {
             let dict = Dictionary::load(DICT_PATH).expect("failed to load dictionary");
             Analyzer::new(dict, RhymeDistanceScorer::new())
         })
+    }
+
+    #[test]
+    fn analyzer_sets_rhyme_distance_config() {
+        let dict = Dictionary::load(DICT_PATH).expect("failed to load dictionary");
+        let mut analyzer: Analyzer = Analyzer::new(dict, RhymeDistanceScorer::new());
+        let mut config = analyzer.rhyme_distance_scorer().config();
+        config.vowel_coefficient += 1;
+
+        analyzer.set_rhyme_distance_config(config);
+
+        assert_eq!(analyzer.rhyme_distance_scorer().config(), config);
     }
 
     fn poem_with_schemes(
@@ -587,6 +619,30 @@ mod tests {
         assert_analysis_ready(&poem, 0);
         assert_analysis_dirty(&poem, 1);
         assert_analysis_dirty(&poem, 2);
+    }
+
+    #[test]
+    fn invalidate_rhyme_analysis_dirties_only_rhyme_cache() {
+        let mut poem = poem_with_cached_analyses(&["cat", "dog", "hat"]);
+
+        poem.invalidate_rhyme_analysis();
+
+        for index in 0..poem.lines.len() {
+            assert_meter_state_ready(&poem, index);
+            assert_rhyme_state_dirty(&poem, index);
+        }
+    }
+
+    #[test]
+    fn invalidate_meter_analysis_dirties_only_meter_cache() {
+        let mut poem = poem_with_cached_analyses(&["cat", "dog", "hat"]);
+
+        poem.invalidate_meter_analysis();
+
+        for index in 0..poem.lines.len() {
+            assert_meter_state_dirty(&poem, index);
+            assert_rhyme_state_ready(&poem, index);
+        }
     }
 
     #[test]

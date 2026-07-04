@@ -202,6 +202,10 @@ where
         self.config
     }
 
+    pub fn set_config(&mut self, config: RhymeDistanceConfig) {
+        self.config = config;
+    }
+
     fn gap_penalty(&self, phoneme: &Phoneme, prev: Option<&Phoneme>) -> u32 {
         match phoneme {
             Phoneme::Vowel(_) => self.config.vowel_indel_penalty,
@@ -680,10 +684,28 @@ mod tests {
             vowel_config().vowel_distance_coefficient * config.vowel_coefficient
         );
         assert_eq!(scorer.distance(&parse("AO1"), &parse("B")), 5);
-        assert_eq!(scorer.distance(&parse("T"), &parse("D")), 4);
+        assert_eq!(
+            scorer.distance(&parse("T"), &parse("D")),
+            consonant_config().voiced_penalty * config.consonant_coefficient
+        );
         assert_eq!(scorer.distance(&parse("B"), &[]), 6);
         assert_eq!(scorer.distance(&parse("B B"), &parse("B")), 2);
         assert_eq!(scorer.distance(&parse("M OW1 S T"), &parse("M OW1 T S")), 3);
+    }
+
+    #[test]
+    fn set_config_updates_existing_scorer() {
+        let mut scorer = RhymeDistanceScorer::new();
+        let mut config = scorer.config();
+        config.consonant_coefficient = 4;
+
+        scorer.set_config(config);
+
+        assert_eq!(scorer.config(), config);
+        assert_eq!(
+            scorer.distance(&parse("T"), &parse("D")),
+            consonant_config().voiced_penalty * config.consonant_coefficient
+        );
     }
 
     #[test]
