@@ -1,20 +1,36 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::error::DictionaryError;
+use crate::error::CmuDictionaryError;
 use crate::phoneme::Phoneme;
 
-pub struct Dictionary {
+pub trait PronouncingDictionary {
+    fn lookup(&self, word: &str) -> Option<Vec<Box<[Phoneme]>>>;
+}
+
+impl<T: PronouncingDictionary + ?Sized> PronouncingDictionary for &T {
+    fn lookup(&self, word: &str) -> Option<Vec<Box<[Phoneme]>>> {
+        (**self).lookup(word)
+    }
+}
+
+impl<T: PronouncingDictionary + ?Sized> PronouncingDictionary for Box<T> {
+    fn lookup(&self, word: &str) -> Option<Vec<Box<[Phoneme]>>> {
+        (**self).lookup(word)
+    }
+}
+
+pub struct CmuDictionary {
     entries: HashMap<String, Vec<Box<[Phoneme]>>>,
 }
 
-impl Dictionary {
-    pub fn load(path: impl AsRef<Path>) -> Result<Self, DictionaryError> {
-        let bytes = std::fs::read(path).map_err(DictionaryError::Io)?;
+impl CmuDictionary {
+    pub fn load(path: impl AsRef<Path>) -> Result<Self, CmuDictionaryError> {
+        let bytes = std::fs::read(path).map_err(CmuDictionaryError::Io)?;
         Self::from_bytes(&bytes)
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, DictionaryError> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, CmuDictionaryError> {
         let content = bytes.iter().map(|&b| b as char).collect::<String>();
 
         let mut entries: HashMap<String, Vec<Box<[Phoneme]>>> = HashMap::new();
@@ -26,7 +42,7 @@ impl Dictionary {
 
             let (word, phonemes_str) = line
                 .split_once("  ")
-                .ok_or_else(|| DictionaryError::MalformedLine(line.to_string()))?;
+                .ok_or_else(|| CmuDictionaryError::MalformedLine(line.to_string()))?;
 
             // Strip alternate pronunciation suffix: HELLO(1) -> HELLO
             let word = match word.find('(') {
@@ -38,7 +54,7 @@ impl Dictionary {
                 .split_whitespace()
                 .map(|s| s.parse::<Phoneme>())
                 .collect::<Result<_, _>>()
-                .map_err(DictionaryError::InvalidPhoneme)?;
+                .map_err(CmuDictionaryError::InvalidPhoneme)?;
 
             entries
                 .entry(word.to_lowercase())
@@ -46,11 +62,17 @@ impl Dictionary {
                 .push(phonemes.into_boxed_slice());
         }
 
-        Ok(Dictionary { entries })
+        Ok(CmuDictionary { entries })
     }
 
     pub fn lookup(&self, word: &str) -> Option<Vec<Box<[Phoneme]>>> {
         self.entries.get(&word.to_lowercase()).cloned()
+    }
+}
+
+impl PronouncingDictionary for CmuDictionary {
+    fn lookup(&self, word: &str) -> Option<Vec<Box<[Phoneme]>>> {
+        CmuDictionary::lookup(self, word)
     }
 }
 
@@ -62,10 +84,10 @@ mod tests {
 
     const DICT_PATH: &str = "data/CMUdict/cmudict-0.7b";
 
-    static DICT: OnceLock<Dictionary> = OnceLock::new();
+    static DICT: OnceLock<CmuDictionary> = OnceLock::new();
 
-    fn dict() -> &'static Dictionary {
-        DICT.get_or_init(|| Dictionary::load(DICT_PATH).expect("failed to load dictionary"))
+    fn dict() -> &'static CmuDictionary {
+        DICT.get_or_init(|| CmuDictionary::load(DICT_PATH).expect("failed to load dictionary"))
     }
 
     #[test]

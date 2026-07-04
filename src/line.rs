@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::{Dictionary, Stress, phoneme::Phoneme};
+use crate::{PronouncingDictionary, Stress, phoneme::Phoneme};
 
 pub struct Pronunciation {
     pub phonemes: Box<[Phoneme]>,
@@ -33,7 +33,7 @@ pub struct WordEntry {
 }
 
 impl WordEntry {
-    fn new(word: &str, dict: &Dictionary) -> Self {
+    fn new<D: PronouncingDictionary + ?Sized>(word: &str, dict: &D) -> Self {
         let data = match dict.lookup(word) {
             None => WordData::Unknown,
             Some(raw) => {
@@ -68,7 +68,7 @@ pub struct Line {
 }
 
 impl Line {
-    pub fn new(s: &str, dict: &Dictionary) -> Self {
+    pub fn new<D: PronouncingDictionary + ?Sized>(s: &str, dict: &D) -> Self {
         let words = s
             .split_whitespace()
             .map(|w| WordEntry::new(w, dict))
@@ -89,14 +89,33 @@ impl Line {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CmuDictionary;
     use std::sync::OnceLock;
 
     const DICT_PATH: &str = "data/CMUdict/cmudict-0.7b";
 
-    static DICT: OnceLock<Dictionary> = OnceLock::new();
+    static DICT: OnceLock<CmuDictionary> = OnceLock::new();
 
-    fn dict() -> &'static Dictionary {
-        DICT.get_or_init(|| Dictionary::load(DICT_PATH).expect("failed to load dictionary"))
+    fn dict() -> &'static CmuDictionary {
+        DICT.get_or_init(|| CmuDictionary::load(DICT_PATH).expect("failed to load dictionary"))
+    }
+
+    struct TestDictionary;
+
+    impl PronouncingDictionary for TestDictionary {
+        fn lookup(&self, word: &str) -> Option<Vec<Box<[Phoneme]>>> {
+            if word != "gato" {
+                return None;
+            }
+
+            Some(vec![
+                ["G", "AA1", "T", "OW0"]
+                    .into_iter()
+                    .map(|phoneme| phoneme.parse().unwrap())
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            ])
+        }
     }
 
     // --- Line ---
@@ -113,6 +132,14 @@ mod tests {
         assert_eq!(line.words.len(), 2);
         assert!(matches!(line.words[0].data, WordData::Known { .. }));
         assert!(matches!(line.words[1].data, WordData::Known { .. }));
+    }
+
+    #[test]
+    fn accepts_custom_pronouncing_dictionary() {
+        let line = Line::new("gato missing", &TestDictionary);
+
+        assert!(matches!(line.words[0].data, WordData::Known { .. }));
+        assert!(matches!(line.words[1].data, WordData::Unknown));
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use crate::{
-    Dictionary, Line, MeterScheme, RhymeDistanceConfig, RhymeDistanceScorer, RhymeScheme,
+    CmuDictionary, Line, MeterScheme, PronouncingDictionary, RhymeDistanceConfig,
+    RhymeDistanceScorer, RhymeScheme,
     consonant_distance::{AnalyticConsonantDistance, ConsonantDistanceScorer},
     error::{MeterCheckError, PoemEditError, RhymeCheckError},
     meter::MeterMatchResult,
@@ -51,11 +52,11 @@ pub struct Poem {
 
 impl Poem {
     /// Updates the line at the given index with the given text.
-    pub fn update_line(
+    pub fn update_line<D: PronouncingDictionary + ?Sized>(
         &mut self,
         index: usize,
         text: &str,
-        dict: &Dictionary,
+        dict: &D,
     ) -> Result<(), PoemEditError> {
         let Some(line) = self.lines.get_mut(index) else {
             return Err(PoemEditError::LineIndexOutOfBounds {
@@ -69,11 +70,11 @@ impl Poem {
         Ok(())
     }
     /// Inserts a new line at the given index with the given text.
-    pub fn insert_line(
+    pub fn insert_line<D: PronouncingDictionary + ?Sized>(
         &mut self,
         index: usize,
         text: &str,
-        dict: &Dictionary,
+        dict: &D,
     ) -> Result<(), PoemEditError> {
         if index > self.lines.len() {
             return Err(PoemEditError::LineIndexOutOfBounds {
@@ -310,36 +311,30 @@ impl Poem {
     }
 }
 
-pub struct Analyzer<V = VowelHexGraph, C = AnalyticConsonantDistance>
+pub struct Analyzer<V = VowelHexGraph, C = AnalyticConsonantDistance, D = CmuDictionary>
 where
     V: VowelDistanceScorer,
     C: ConsonantDistanceScorer,
+    D: PronouncingDictionary,
 {
     rhyme_distance_scorer: RhymeDistanceScorer<V, C>,
-    dict: Dictionary,
+    dict: D,
 }
 
-impl<V, C> Analyzer<V, C>
+impl<V, C, D> Analyzer<V, C, D>
 where
     V: VowelDistanceScorer,
     C: ConsonantDistanceScorer,
+    D: PronouncingDictionary,
 {
-    // pub fn new(dict_bytes: &[u8]) -> Result<Analyzer, JsValue> {
-    //     let dict =
-    //         Dictionary::from_bytes(dict_bytes).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    //     Ok(Self {
-    //         distance_scorer: RhymeDistanceScorer::new(),
-    //         dict,
-    //     })
-    // }
-    pub fn new(dict: Dictionary, rhyme_distance_scorer: RhymeDistanceScorer<V, C>) -> Self {
+    pub fn new(dict: D, rhyme_distance_scorer: RhymeDistanceScorer<V, C>) -> Self {
         Self {
             dict,
             rhyme_distance_scorer,
         }
     }
 
-    pub fn dict(&self) -> &Dictionary {
+    pub fn dict(&self) -> &D {
         &self.dict
     }
 
@@ -363,14 +358,14 @@ mod tests {
 
     fn analyzer() -> &'static Analyzer {
         ANALYZER.get_or_init(|| {
-            let dict = Dictionary::load(DICT_PATH).expect("failed to load dictionary");
+            let dict = CmuDictionary::load(DICT_PATH).expect("failed to load dictionary");
             Analyzer::new(dict, RhymeDistanceScorer::new())
         })
     }
 
     #[test]
     fn analyzer_sets_rhyme_distance_config() {
-        let dict = Dictionary::load(DICT_PATH).expect("failed to load dictionary");
+        let dict = CmuDictionary::load(DICT_PATH).expect("failed to load dictionary");
         let mut analyzer: Analyzer = Analyzer::new(dict, RhymeDistanceScorer::new());
         let mut config = analyzer.rhyme_distance_scorer().config();
         config.vowel_coefficient += 1;

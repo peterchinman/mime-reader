@@ -12,9 +12,9 @@ pub mod vowel_distance;
 pub use consonant_distance::{
     AnalyticConsonantDistance, AnalyticConsonantDistanceConfig, ConsonantDistanceScorer,
 };
-pub use dictionary::Dictionary;
+pub use dictionary::{CmuDictionary, PronouncingDictionary};
 pub use error::{
-    DictionaryError, MeterCheckError, ParseArpabetError, ParseMeterError, ParseMeterSchemeError,
+    CmuDictionaryError, MeterCheckError, ParseArpabetError, ParseMeterError, ParseMeterSchemeError,
     ParseRhymeError, ParseSyllableCountError, PoemEditError, RhymeCheckError, UnknownWordError,
 };
 pub use line::Line;

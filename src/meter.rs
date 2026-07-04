@@ -339,17 +339,17 @@ impl MeterScheme {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Dictionary, line::Line};
+    use crate::{CmuDictionary, line::Line};
     use std::sync::OnceLock;
 
     use super::*;
 
     const DICT_PATH: &str = "data/CMUdict/cmudict-0.7b";
 
-    static DICT: OnceLock<Dictionary> = OnceLock::new();
+    static DICT: OnceLock<CmuDictionary> = OnceLock::new();
 
-    fn dict() -> &'static Dictionary {
-        DICT.get_or_init(|| Dictionary::load(DICT_PATH).expect("failed to load dictionary"))
+    fn dict() -> &'static CmuDictionary {
+        DICT.get_or_init(|| CmuDictionary::load(DICT_PATH).expect("failed to load dictionary"))
     }
 
     fn meter(stresses: &[SyllableStress]) -> Meter {

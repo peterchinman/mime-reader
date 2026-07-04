@@ -11,7 +11,7 @@ pub enum ParseArpabetError {
 }
 
 #[derive(Debug, Error)]
-pub enum DictionaryError {
+pub enum CmuDictionaryError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     #[error("malformed dictionary line: {0:?}")]
