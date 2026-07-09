@@ -51,6 +51,35 @@ pub struct Poem {
 }
 
 impl Poem {
+    /// Creates a poem from the given lines and optional schemes.
+    ///
+    /// Every line starts with a dirty analysis for whichever schemes are
+    /// present, so the first `*_analysis` call computes and caches it.
+    pub fn new<D: PronouncingDictionary + ?Sized>(
+        lines: &[&str],
+        meter_scheme: Option<MeterScheme>,
+        rhyme_scheme: Option<RhymeScheme>,
+        dict: &D,
+    ) -> Self {
+        let has_meter_scheme = meter_scheme.is_some();
+        let has_rhyme_scheme = rhyme_scheme.is_some();
+
+        Poem {
+            lines: lines
+                .iter()
+                .map(|text| PoemLine {
+                    line: Line::new(text, dict),
+                })
+                .collect(),
+            analyses: lines
+                .iter()
+                .map(|_| Self::set_dirty_for(has_meter_scheme, has_rhyme_scheme))
+                .collect(),
+            meter_scheme,
+            rhyme_scheme,
+        }
+    }
+
     /// Updates the line at the given index with the given text.
     pub fn update_line<D: PronouncingDictionary + ?Sized>(
         &mut self,
@@ -382,23 +411,7 @@ mod tests {
     ) -> Poem {
         let meter_scheme = meter_scheme.map(|scheme| scheme.parse().unwrap());
         let rhyme_scheme = rhyme_scheme.map(|scheme| RhymeScheme::new(scheme, 0.5).unwrap());
-        let has_meter_scheme = meter_scheme.is_some();
-        let has_rhyme_scheme = rhyme_scheme.is_some();
-
-        Poem {
-            lines: lines
-                .iter()
-                .map(|text| PoemLine {
-                    line: Line::new(text, analyzer().dict()),
-                })
-                .collect(),
-            analyses: lines
-                .iter()
-                .map(|_| Poem::set_dirty_for(has_meter_scheme, has_rhyme_scheme))
-                .collect(),
-            meter_scheme,
-            rhyme_scheme,
-        }
+        Poem::new(lines, meter_scheme, rhyme_scheme, analyzer().dict())
     }
 
     fn poem_with_cached_analyses(lines: &[&str]) -> Poem {
