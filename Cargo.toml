@@ -3,11 +3,19 @@ name = "mime_and_reader"
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
-wasm-bindgen = "0.2"
-serde = { version = "1", features = ["derive"] }
-serde-wasm-bindgen = "0.6"
-thiserror = "2"
-
 [lib]
 crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+thiserror = "2"
+
+# JS-binding dependencies
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+serde = { version = "1", features = ["derive"] }
+# Derives TypeScript definitions (and the JS-value ABI) from the DTO structs.
+# Pulls in serde-wasm-bindgen transitively via its `js` feature.
+tsify = { version = "0.5", features = ["js"] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"

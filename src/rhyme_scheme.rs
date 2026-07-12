@@ -72,7 +72,7 @@ pub struct RhymeDistance {
     pub raw_distance: u32,
     pub syllable_count: usize,
     // normalized_distance is raw_distance / syllable_count
-    normalized_distance: f32,
+    pub normalized_distance: f32,
 }
 
 #[derive(Debug, PartialEq)]

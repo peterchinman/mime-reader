@@ -9,6 +9,9 @@ pub mod rhyme_distance;
 pub mod rhyme_scheme;
 pub mod vowel_distance;
 
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
+
 pub use consonant_distance::{
     AnalyticConsonantDistance, AnalyticConsonantDistanceConfig, ConsonantDistanceScorer,
 };
