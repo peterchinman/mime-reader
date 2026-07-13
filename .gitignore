@@ -2,3 +2,5 @@
 .DS_Store
 .zed/settings.json
 /web/pkg
+node_modules
+/web/tuning/dist

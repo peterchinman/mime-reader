@@ -1,0 +1,24 @@
+{
+  "slant_rhymes": [
+    ["person", "rehearsing"],
+    ["potent", "choking"],
+    ["heavy", "spaghetti"],
+    ["magnet", "fragments"]
+  ],
+  "further_slant_rhymes": [
+    ["blueprint", "nuisance"],
+    ["hostages", "coughing fits"],
+    ["hostages", "preposterous"],
+    ["cardinal", "started full"],
+    ["boring", "post-mortem"],
+    ["detergent", "splurge it"],
+    ["tenement", "assemble it"]
+  ],
+  "ehhh": [["accident", "cinnamon"]],
+  "should_not_rhyme": [
+    ["blueprint", "blog dog"],
+    ["person", "coughing"],
+    ["dog", "dig"],
+    ["person", "allowed"]
+  ]
+}

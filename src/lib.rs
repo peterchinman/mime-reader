@@ -27,8 +27,8 @@ pub use meter::{
 };
 pub use phoneme::{Consonant, Phoneme, Stress, Vowel, VowelPhoneme};
 pub use rhyme_distance::{
-    AlignmentStep, RhymeDistanceConfig, RhymeDistanceOutput, RhymeDistanceScorer,
-    TranspositionDirection,
+    AlignmentStep, OwnedAlignmentStep, RhymeDistanceConfig, RhymeDistanceOutput,
+    RhymeDistanceScorer, TranspositionDirection,
 };
 pub use rhyme_scheme::RhymeScheme;
 pub use vowel_distance::{VowelDistanceScorer, VowelHexGraph, VowelHexGraphConfig};

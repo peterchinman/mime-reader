@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>rhyme distance tuning</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, sans-serif;
+      }
+      body {
+        margin: 0;
+        padding: 1.5rem;
+        line-height: 1.4;
+      }
+      h1 {
+        font-size: 1.3rem;
+        margin: 0 0 1rem;
+      }
+      main {
+        display: grid;
+        grid-template-columns: 1fr 22rem;
+        gap: 2rem;
+        align-items: start;
+      }
+      input,
+      button {
+        font: inherit;
+      }
+
+      .pair-inputs {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.75rem;
+      }
+      .pair-inputs input {
+        flex: 1;
+        min-width: 0;
+        padding: 0.3rem 0.4rem;
+      }
+      .pair-inputs .arrow {
+        color: color-mix(in srgb, currentColor 50%, transparent);
+      }
+      #save {
+        padding: 0.3rem 0.9rem;
+        cursor: pointer;
+      }
+
+      .threshold-row {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-size: 0.85rem;
+        margin-bottom: 1rem;
+      }
+      .threshold-row label {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+      }
+      .threshold-row input {
+        width: 5rem;
+      }
+      .threshold-row button {
+        border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+        border-radius: 0.25rem;
+        background: ButtonFace;
+        box-shadow: 2px 2px 0 color-mix(in srgb, currentColor 70%, transparent);
+        padding: 0.2rem 0.55rem;
+        cursor: pointer;
+        transition:
+          transform 80ms ease,
+          box-shadow 80ms ease,
+          background 80ms ease,
+          color 80ms ease,
+          border-color 80ms ease;
+      }
+      .threshold-row button.active {
+        color: #18794e;
+        border-color: #18794e;
+        background: color-mix(in srgb, #22a06b 18%, transparent);
+        box-shadow:
+          inset 2px 2px 0 color-mix(in srgb, #18794e 55%, transparent),
+          0 0 0 1px #18794e;
+        transform: translate(2px, 2px);
+      }
+
+      #output {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+      .pair {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.3rem 0.5rem;
+      }
+      .pair.current {
+        background: color-mix(in srgb, currentColor 6%, transparent);
+        border-radius: 0.4rem;
+      }
+      .pair-words {
+        font-weight: 600;
+        min-width: 10rem;
+      }
+      .pair-group-heading {
+        margin: 1rem 0 0.25rem;
+        padding: 0.15rem 0.5rem;
+        font-family: ui-monospace, monospace;
+        font-size: 0.78rem;
+        color: color-mix(in srgb, currentColor 68%, transparent);
+        border-bottom: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+      }
+      .pair.current .pair-words::after {
+        content: ' · live';
+        font-weight: 400;
+        font-size: 0.72rem;
+        color: color-mix(in srgb, currentColor 50%, transparent);
+      }
+      .remove {
+        margin-left: auto;
+        border: none;
+        background: none;
+        cursor: pointer;
+        color: color-mix(in srgb, currentColor 45%, transparent);
+        font-size: 0.9rem;
+      }
+      .remove:hover {
+        color: #cd2b31;
+      }
+
+      .badge {
+        font-size: 0.8rem;
+        padding: 0.1rem 0.45rem;
+        border-radius: 0.4rem;
+        background: color-mix(in srgb, currentColor 12%, transparent);
+        font-variant-numeric: tabular-nums;
+      }
+      .badge.ok {
+        color: #18794e;
+      }
+      .badge.bad {
+        color: #cd2b31;
+      }
+
+      /* Alignment strip: one column per step, leader phoneme over target
+         phoneme, tinted by step kind (shared with the legend chips). */
+      .align {
+        display: inline-flex;
+        gap: 2px;
+        font-family: ui-monospace, monospace;
+        font-size: 0.7rem;
+        line-height: 1.5;
+      }
+      .align .col {
+        display: grid;
+        grid-template-rows: auto auto auto;
+        text-align: center;
+        border-radius: 0.3rem;
+        overflow: hidden;
+      }
+      .align .col > span {
+        padding: 0 0.35rem;
+      }
+      .align .col > span:nth-child(1),
+      .align .col > span:nth-child(2) {
+        border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+      }
+      .align .cost {
+        font-size: 0.62rem;
+        color: color-mix(in srgb, currentColor 60%, transparent);
+        font-variant-numeric: tabular-nums;
+      }
+      .align .match,
+      .legend .match {
+        background: color-mix(in srgb, #22a06b 20%, transparent);
+      }
+      .align .substitution,
+      .legend .substitution {
+        background: color-mix(in srgb, #e2a500 26%, transparent);
+      }
+      .align .indel,
+      .legend .indel {
+        background: color-mix(in srgb, currentColor 11%, transparent);
+      }
+      .align .transposition,
+      .legend .transposition {
+        background: color-mix(in srgb, #8b6fe0 24%, transparent);
+      }
+
+      .legend {
+        display: flex;
+        gap: 0.5rem;
+        margin: 0 0 1rem;
+        font-size: 0.7rem;
+        color: color-mix(in srgb, currentColor 75%, transparent);
+      }
+      .legend span {
+        padding: 0.05rem 0.45rem;
+        border-radius: 0.3rem;
+      }
+
+      .config h2 {
+        font-size: 1rem;
+      }
+      .config-row {
+        display: grid;
+        grid-template-columns: 1fr 6rem;
+        align-items: center;
+        gap: 0.5rem;
+        margin: 0.5rem 0;
+        font-size: 0.8rem;
+      }
+      .config-row span:first-child {
+        font-family: ui-monospace, monospace;
+      }
+      .config-row input {
+        width: 100%;
+        font-variant-numeric: tabular-nums;
+      }
+      .config-doc {
+        grid-column: 1 / -1;
+        color: color-mix(in srgb, currentColor 55%, transparent);
+        font-size: 0.72rem;
+        line-height: 1.35;
+        white-space: pre-line;
+        margin-top: 0.1rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>rhyme distance tuning</h1>
+    <p id="status">Loading dictionary…</p>
+    <main hidden>
+      <section class="editor">
+        <div class="pair-inputs">
+          <input id="leader" placeholder="leader" aria-label="leader word" />
+          <span class="arrow">→</span>
+          <input id="follower" placeholder="follower" aria-label="follower word" />
+          <button id="save" type="button">Save pair</button>
+        </div>
+        <div class="threshold-row">
+          <label>
+            Threshold
+            <input id="threshold" type="number" min="0" step="0.01" value="15" />
+          </label>
+          <button id="threshold-further" type="button">further max</button>
+        </div>
+        <div class="legend">
+          <span class="match">match</span>
+          <span class="substitution">substitution</span>
+          <span class="indel">insert/delete</span>
+          <span class="transposition">transposition</span>
+        </div>
+        <ul id="output"></ul>
+      </section>
+      <aside class="config">
+        <h2>rhyme distance config</h2>
+        <div id="config-controls"></div>
+      </aside>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

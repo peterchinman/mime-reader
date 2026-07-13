@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    Line, RhymeDistanceScorer,
+    Line, OwnedAlignmentStep, RhymeDistanceScorer,
     consonant_distance::ConsonantDistanceScorer,
     error::{ParseRhymeError, RhymeCheckError, UnknownWordError},
     line::{WordData, WordEntry},
@@ -67,12 +67,42 @@ pub enum ResolvedLineRole<'a> {
     },
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub struct RhymeDistance {
     pub raw_distance: u32,
     pub syllable_count: usize,
     // normalized_distance is raw_distance / syllable_count
     pub normalized_distance: f32,
+    /// Step-by-step alignment of the winning comparison: side `a` is the
+    /// leader rhyming part, side `b` the target slice it was compared against
+    /// (which may span multiple words when the target's last word has fewer
+    /// syllables than the leader's rhyming part). Both sequences are fully
+    /// recoverable from here — see [`Self::leader_part`]/[`Self::target_part`].
+    pub alignment: Vec<OwnedAlignmentStep>,
+}
+
+impl RhymeDistance {
+    /// The leader rhyming part that produced the minimal distance, derived
+    /// from the alignment's `a` sides.
+    pub fn leader_part(&self) -> impl Iterator<Item = &Phoneme> {
+        self.alignment.iter().filter_map(OwnedAlignmentStep::a)
+    }
+
+    /// The target phoneme slice the winning leader part was compared against,
+    /// derived from the alignment's `b` sides.
+    pub fn target_part(&self) -> impl Iterator<Item = &Phoneme> {
+        self.alignment.iter().filter_map(OwnedAlignmentStep::b)
+    }
+}
+
+/// Equality means "same measurement". `alignment` is provenance — which
+/// comparison produced the measurement — and deliberately doesn't participate.
+impl PartialEq for RhymeDistance {
+    fn eq(&self, other: &Self) -> bool {
+        self.raw_distance == other.raw_distance
+            && self.syllable_count == other.syllable_count
+            && self.normalized_distance == other.normalized_distance
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -273,9 +303,20 @@ where
     V: VowelDistanceScorer,
     C: ConsonantDistanceScorer,
 {
+    // The winning candidate: measurement plus the two slices it came from.
+    // The slices only exist to run the traceback below; the returned
+    // RhymeDistance carries them inside `alignment` instead.
+    struct Candidate {
+        raw_distance: u32,
+        syllable_count: usize,
+        normalized_distance: f32,
+        leader_part: Vec<Phoneme>,
+        target_part: Vec<Phoneme>,
+    }
+
     let leader_parts = rhyming_parts_of_last_word(leader)?;
 
-    let mut min_distance: Option<RhymeDistance> = None;
+    let mut min: Option<Candidate> = None;
 
     for rp_leader in leader_parts
         .iter()
@@ -289,28 +330,38 @@ where
             let raw_distance = scorer.distance(rp_leader.phonemes, &target_phonemes);
             let normalized_distance = raw_distance as f32 / syllable_count as f32;
 
-            min_distance = Some(match min_distance {
-                Some(current_min) => {
-                    if normalized_distance < current_min.normalized_distance {
-                        RhymeDistance {
-                            raw_distance,
-                            syllable_count,
-                            normalized_distance,
-                        }
-                    } else {
-                        current_min
-                    }
-                }
-                None => RhymeDistance {
+            let is_new_min = min
+                .as_ref()
+                .is_none_or(|current| normalized_distance < current.normalized_distance);
+            if is_new_min {
+                min = Some(Candidate {
                     raw_distance,
                     syllable_count,
                     normalized_distance,
-                },
-            });
+                    leader_part: rp_leader.phonemes.to_vec(),
+                    target_part: target_phonemes,
+                });
+            }
         }
     }
 
-    min_distance.ok_or(RhymeCheckError::NotEnoughSyllablesInTarget)
+    let winner = min.ok_or(RhymeCheckError::NotEnoughSyllablesInTarget)?;
+
+    // Candidates are scored with the cheap `distance()` (no edit recording);
+    // the traceback runs once, for the winning pair only.
+    let alignment = scorer
+        .align(&winner.leader_part, &winner.target_part)
+        .alignment()
+        .iter()
+        .map(|step| OwnedAlignmentStep::from(*step))
+        .collect();
+
+    Ok(RhymeDistance {
+        raw_distance: winner.raw_distance,
+        syllable_count: winner.syllable_count,
+        normalized_distance: winner.normalized_distance,
+        alignment,
+    })
 }
 
 #[cfg(test)]
@@ -369,6 +420,8 @@ mod tests {
             raw_distance: 0,
             syllable_count,
             normalized_distance: 0.0,
+            // Equality ignores provenance, so expected values leave it empty.
+            alignment: Vec::new(),
         }
     }
 
@@ -526,6 +579,47 @@ mod tests {
         assert_eq!(
             compare_rhyming_parts(&a, &b, scorer()),
             Ok(zero_distance(1))
+        );
+    }
+
+    #[test]
+    fn compare_rhyming_parts_records_compared_parts() {
+        // Equality on RhymeDistance ignores provenance, so assert on the
+        // accessors directly: cat = K AE1 T, hat = HH AE1 T — the winning
+        // comparison is leader part [AE1 T] against target slice [AE1 T],
+        // both recoverable from the alignment's sides.
+        let cat = Line::new("cat", dict());
+        let hat = Line::new("hat", dict());
+        let distance = compare_rhyming_parts(&cat, &hat, scorer()).unwrap();
+        assert_eq!(
+            distance.leader_part().cloned().collect::<Vec<_>>(),
+            ph(&["AE1", "T"])
+        );
+        assert_eq!(
+            distance.target_part().cloned().collect::<Vec<_>>(),
+            ph(&["AE1", "T"])
+        );
+    }
+
+    #[test]
+    fn compare_rhyming_parts_records_alignment_of_winning_pair() {
+        // cat = K AE1 T, cot = K AA1 T: rhyming parts AE1 T vs AA1 T align as
+        // a vowel substitution followed by a consonant match.
+        let cat = Line::new("cat", dict());
+        let cot = Line::new("cot", dict());
+        let distance = compare_rhyming_parts(&cat, &cot, scorer()).unwrap();
+        assert_eq!(
+            distance.alignment,
+            vec![
+                OwnedAlignmentStep::Substitution {
+                    a: ph(&["AE1"])[0].clone(),
+                    b: ph(&["AA1"])[0].clone(),
+                },
+                OwnedAlignmentStep::Match {
+                    a: ph(&["T"])[0].clone(),
+                    b: ph(&["T"])[0].clone(),
+                },
+            ]
         );
     }
 

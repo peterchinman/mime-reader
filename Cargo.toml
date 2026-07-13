@@ -1,5 +1,5 @@
 [package]
-name = "mime_and_reader"
+name = "mime_reader"
 version = "0.1.0"
 edition = "2024"
 
@@ -19,3 +19,11 @@ tsify = { version = "0.5", features = ["js"] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
+
+# Native-only: criterion for benchmarks
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = "0.8"
+
+[[bench]]
+name = "distance_vs_align"
+harness = false

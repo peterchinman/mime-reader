@@ -7,7 +7,8 @@ use tsify::Tsify;
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    CmuDictionary, MeterScheme, RhymeDistanceConfig, RhymeDistanceScorer, RhymeScheme,
+    CmuDictionary, MeterScheme, OwnedAlignmentStep, RhymeDistanceConfig, RhymeDistanceScorer,
+    RhymeScheme, TranspositionDirection,
     meter::{MeterMatchResult, MeterMismatch, SyllableStress},
     poem::{MeterAnalysis, Poem, PoemLineAnalysis, RhymeAnalysis},
     rhyme_scheme::RhymeCheckResult,
@@ -144,6 +145,37 @@ impl WasmPoem {
     pub fn rhyme_analysis(&mut self, index: usize) -> Result<RhymeDto, JsError> {
         let analysis = self.poem.rhyme_analysis(index, &*self.scorer)?;
         Ok(RhymeDto::from(analysis))
+    }
+
+    /// Detailed step-by-step rhyme alignment for a scored follower.
+    ///
+    /// This is intentionally separate from `rhymeAnalysis`: most callers only
+    /// need pass/fail and distance numbers, while this is diagnostic detail.
+    /// Returns `undefined` unless the line is a scored rhyme follower.
+    #[wasm_bindgen(js_name = rhymeAlignment)]
+    pub fn rhyme_alignment(
+        &mut self,
+        index: usize,
+    ) -> Result<Option<Vec<RhymeAlignmentStepDto>>, JsError> {
+        let analysis = self.poem.rhyme_analysis(index, &*self.scorer)?;
+        let alignment = match analysis {
+            RhymeAnalysis::Ready(Ok(RhymeCheckResult::Follower { distance, .. })) => {
+                let costs = self.scorer.step_costs(&distance.alignment);
+                Some(
+                    distance
+                        .alignment
+                        .iter()
+                        .zip(costs)
+                        .map(|(step, cost)| RhymeAlignmentStepDto {
+                            step: AlignmentStepDto::from(step),
+                            cost,
+                        })
+                        .collect(),
+                )
+            }
+            _ => None,
+        };
+        Ok(alignment)
     }
 }
 
@@ -314,6 +346,74 @@ pub struct RhymeDistanceDto {
     normalized_distance: f32,
 }
 
+#[derive(Serialize, Debug, Tsify)]
+#[tsify(into_wasm_abi)]
+pub struct RhymeAlignmentStepDto {
+    step: AlignmentStepDto,
+    cost: u32,
+}
+
+#[derive(Serialize, Debug, Tsify)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AlignmentStepDto {
+    Match {
+        a: String,
+        b: String,
+    },
+    Substitution {
+        a: String,
+        b: String,
+    },
+    /// Insertion/deletion: exactly one side is present.
+    Indel {
+        a: Option<String>,
+        b: Option<String>,
+    },
+    Transposition {
+        a: String,
+        b: String,
+        direction: TranspositionDirectionDto,
+    },
+}
+
+#[derive(Serialize, Debug, Tsify)]
+#[serde(rename_all = "snake_case")]
+pub enum TranspositionDirectionDto {
+    /// This phoneme matches a later/right column in the other sequence.
+    Right,
+    /// This phoneme matches an earlier/left column in the other sequence.
+    Left,
+}
+
+impl From<&OwnedAlignmentStep> for AlignmentStepDto {
+    fn from(step: &OwnedAlignmentStep) -> Self {
+        match step {
+            OwnedAlignmentStep::Match { a, b } => AlignmentStepDto::Match {
+                a: a.to_string(),
+                b: b.to_string(),
+            },
+            OwnedAlignmentStep::Substitution { a, b } => AlignmentStepDto::Substitution {
+                a: a.to_string(),
+                b: b.to_string(),
+            },
+            OwnedAlignmentStep::Indel { a, b } => AlignmentStepDto::Indel {
+                a: a.as_ref().map(|p| p.to_string()),
+                b: b.as_ref().map(|p| p.to_string()),
+            },
+            OwnedAlignmentStep::Transposition { a, b, direction } => {
+                AlignmentStepDto::Transposition {
+                    a: a.to_string(),
+                    b: b.to_string(),
+                    direction: match direction {
+                        TranspositionDirection::Right => TranspositionDirectionDto::Right,
+                        TranspositionDirection::Left => TranspositionDirectionDto::Left,
+                    },
+                }
+            }
+        }
+    }
+}
+
 // ---- Config (round-trips both directions: get + set) ----------------------
 
 #[derive(Serialize, Deserialize, Debug, Tsify)]
@@ -461,6 +561,66 @@ mod tests {
             }
             other => panic!("expected a follower rhyme result, got {other:?}"),
         }
+
+        let alignment = poem
+            .rhyme_alignment(1)
+            .unwrap()
+            .expect("follower has alignment");
+        match &alignment[..] {
+            [
+                RhymeAlignmentStepDto {
+                    step: AlignmentStepDto::Match { a: a0, b: b0 },
+                    cost: cost0,
+                },
+                RhymeAlignmentStepDto {
+                    step: AlignmentStepDto::Match { a: a1, b: b1 },
+                    cost: cost1,
+                },
+            ] => {
+                assert_eq!((a0.as_str(), b0.as_str(), *cost0), ("AE1", "AE1", 0));
+                assert_eq!((a1.as_str(), b1.as_str(), *cost1), ("T", "T", 0));
+            }
+            other => panic!("expected two match steps, got {other:?}"),
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn rhyme_alignment_is_explicit_and_costs_sum_to_raw_distance() {
+        let ws = analyzer();
+        // cat/cot: rhyming parts AE1 T vs AA1 T — a vowel substitution then a
+        // consonant match, so a non-trivial cost breakdown.
+        let mut poem = ws
+            .open_poem(
+                vec!["cat".into(), "cot".into()],
+                None,
+                Some("AA".into()),
+                None,
+            )
+            .unwrap();
+
+        // Non-followers (here, the leader at line 0) have no alignment detail.
+        assert!(poem.rhyme_alignment(0).unwrap().is_none());
+
+        let RhymeDto::Follower { distance, .. } = poem.rhyme_analysis(1).unwrap() else {
+            panic!("expected a follower rhyme result");
+        };
+        let alignment = poem
+            .rhyme_alignment(1)
+            .unwrap()
+            .expect("follower has alignment");
+
+        // One cost per alignment step, summing to the reported raw distance.
+        assert_eq!(
+            alignment.iter().map(|step| step.cost).sum::<u32>(),
+            distance.raw_distance
+        );
+        // The vowel substitution carries cost; the trailing consonant match is free.
+        assert!(alignment[0].cost > 0, "vowel substitution should cost > 0");
+        assert_eq!(
+            alignment.last().unwrap().cost,
+            0,
+            "trailing consonant match is free"
+        );
     }
 
     // ---- config reload semantics -------------------------------------------
