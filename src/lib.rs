@@ -30,5 +30,5 @@ pub use rhyme_distance::{
     AlignmentStep, OwnedAlignmentStep, RhymeDistanceConfig, RhymeDistanceOutput,
     RhymeDistanceScorer, TranspositionDirection,
 };
-pub use rhyme_scheme::RhymeScheme;
+pub use rhyme_scheme::{RhymeComparisonConfig, RhymeNormalization, RhymeScheme};
 pub use vowel_distance::{VowelDistanceScorer, VowelHexGraph, VowelHexGraphConfig};

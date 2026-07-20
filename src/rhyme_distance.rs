@@ -1,6 +1,8 @@
-use crate::consonant_distance::{AnalyticConsonantDistance, ConsonantDistanceScorer};
+use crate::consonant_distance::{
+    AnalyticConsonantDistance, AnalyticConsonantDistanceConfig, ConsonantDistanceScorer,
+};
 use crate::phoneme::Phoneme;
-use crate::vowel_distance::{VowelDistanceScorer, VowelHexGraph};
+use crate::vowel_distance::{VowelDistanceScorer, VowelHexGraph, VowelHexGraphConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RhymeDistanceConfig {
@@ -47,7 +49,7 @@ impl Default for RhymeDistanceConfig {
         Self {
             vowel_to_consonant_mismatch: 1000,
             // A default value of 8 comes experimentation (see web/tuning). This is a much higher coefficient than I would have guessed from the armchair. It is the minimum value with which we can differentiate between distant slant rhymes and words that should not rhyme.
-            vowel_coefficient: 8,
+            vowel_coefficient: 5,
             consonant_coefficient: 1,
             vowel_indel_penalty: 1000,
             consonant_indel_penalty: 5,
@@ -185,6 +187,7 @@ impl<'a> RhymeDistanceOutput<'a> {
     }
 }
 
+#[derive(Clone)]
 pub struct RhymeDistanceScorer<V = VowelHexGraph, C = AnalyticConsonantDistance>
 where
     V: VowelDistanceScorer,
@@ -220,6 +223,22 @@ impl RhymeDistanceScorer<VowelHexGraph, AnalyticConsonantDistance> {
             AnalyticConsonantDistance::new(),
             config,
         )
+    }
+
+    pub fn vowel_config(&self) -> VowelHexGraphConfig {
+        self.vowel_scorer.config()
+    }
+
+    pub fn set_vowel_config(&mut self, config: VowelHexGraphConfig) {
+        self.vowel_scorer = VowelHexGraph::with_config(config);
+    }
+
+    pub fn consonant_config(&self) -> AnalyticConsonantDistanceConfig {
+        self.consonant_scorer.config()
+    }
+
+    pub fn set_consonant_config(&mut self, config: AnalyticConsonantDistanceConfig) {
+        self.consonant_scorer = AnalyticConsonantDistance::with_config(config);
     }
 }
 
@@ -314,8 +333,8 @@ where
         }
     }
 
-    /// Weighted optimal-string-alignment (OSA) distance: substitutions,
-    /// context-aware gaps, and adjacent transpositions.
+    /// Optimal-string-alignment (OSA) distance: substitutions,
+    /// context-aware gaps, and adjacent consonant transpositions.
     ///
     /// Matrix layout: `dists[i][j]` is the minimal cost of aligning `s1[..i]`
     /// with `s2[..j]`; the answer is `dists[len1][len2]`.
@@ -342,14 +361,22 @@ where
         // consonant discount) is the previous phoneme in the same sequence;
         // `prefix_context` stands in before element 0.
         for i in 1..=len1 {
-            let prev = if i > 1 { Some(&s1[i - 2]) } else { prefix_context };
+            let prev = if i > 1 {
+                Some(&s1[i - 2])
+            } else {
+                prefix_context
+            };
             dists[i][0] = dists[i - 1][0].saturating_add(self.gap_penalty(&s1[i - 1], prev));
             if let Some(edits) = edits.as_mut() {
                 edits[i][0] = Edit::GapInSecond;
             }
         }
         for j in 1..=len2 {
-            let prev = if j > 1 { Some(&s2[j - 2]) } else { prefix_context };
+            let prev = if j > 1 {
+                Some(&s2[j - 2])
+            } else {
+                prefix_context
+            };
             dists[0][j] = dists[0][j - 1].saturating_add(self.gap_penalty(&s2[j - 1], prev));
             if let Some(edits) = edits.as_mut() {
                 edits[0][j] = Edit::GapInFirst;
@@ -382,11 +409,19 @@ where
 
                 let mut best = (INF, u8::MAX, Edit::Start);
 
-                // Adjacent transposition (optimal string alignment): the pair
-                // s1[i1-1],s1[i1] mirrors s2[i2-1],s2[i2]. Only immediately
-                // adjacent swaps qualify — nothing may sit between the swapped
-                // phonemes — so this steps back two cells in each sequence.
-                if i1 > 0 && i2 > 0 && p1 == &s2[i2 - 1] && &s1[i1 - 1] == p2 {
+                // Adjacent consonant transposition (optimal string alignment):
+                // the pair s1[i1-1],s1[i1] mirrors s2[i2-1],s2[i2]. Only
+                // immediately adjacent consonants qualify, so this steps back
+                // two cells in each sequence.
+                if i1 > 0
+                    && i2 > 0
+                    && matches!(
+                        (&s1[i1 - 1], p1),
+                        (Phoneme::Consonant(_), Phoneme::Consonant(_))
+                    )
+                    && p1 == &s2[i2 - 1]
+                    && &s1[i1 - 1] == p2
+                {
                     let trans_cost =
                         dists[i - 2][j - 2].saturating_add(self.config.transposition_cost);
                     Self::choose_edit(&mut best, trans_cost, 1, Edit::Transpose);
@@ -706,36 +741,24 @@ mod tests {
             // AlignmentStep is Copy, so matching by value binds &Phoneme (not &&).
             let cost = match *step {
                 AlignmentStep::Match { a, b } | AlignmentStep::Substitution { a, b } => {
-                    prev_a = Some(a);
-                    prev_b = Some(b);
                     s.substitution_score(a, b)
                 }
                 AlignmentStep::Indel {
                     a: Some(a),
                     b: None,
-                } => {
-                    let c = s.gap_penalty(a, prev_a);
-                    prev_a = Some(a);
-                    c
-                }
+                } => s.gap_penalty(a, prev_a),
                 AlignmentStep::Indel {
                     a: None,
                     b: Some(b),
-                } => {
-                    let c = s.gap_penalty(b, prev_b);
-                    prev_b = Some(b);
-                    c
-                }
+                } => s.gap_penalty(b, prev_b),
                 AlignmentStep::Indel { .. } => unreachable!("an indel has exactly one side"),
-                AlignmentStep::Transposition { a, b, direction } => {
+                AlignmentStep::Transposition { direction, .. } => {
                     // The step's `a`/`b` are the column phonemes (which differ),
                     // but the DP matches them diagonally across the swap at cost
                     // 0 — a transposition only fires when the swapped phonemes
                     // are equal. So the endpoints add nothing; the fixed
                     // transposition_cost is counted once, on the closing (Left)
                     // step of the pair.
-                    prev_a = Some(a);
-                    prev_b = Some(b);
                     if direction == TranspositionDirection::Left {
                         s.config().transposition_cost
                     } else {
@@ -744,13 +767,30 @@ mod tests {
                 }
             };
             reference.push(cost);
+
+            match *step {
+                AlignmentStep::Match { a, b }
+                | AlignmentStep::Substitution { a, b }
+                | AlignmentStep::Transposition { a, b, .. } => {
+                    prev_a = Some(a);
+                    prev_b = Some(b);
+                }
+                AlignmentStep::Indel { a, b } => {
+                    if let Some(a) = a {
+                        prev_a = Some(a);
+                    }
+                    if let Some(b) = b {
+                        prev_b = Some(b);
+                    }
+                }
+            }
         }
 
         // 1. The independent derivation must sum to the DP's score — this is the
         //    forward/traceback consistency guard.
         assert_eq!(
             reference.iter().sum::<u32>(),
-            output.score(),
+            output.score,
             "summed step costs must equal align().score()\n  s1 = {s1:?}\n  s2 = {s2:?}\n  alignment = {:?}",
             output.alignment(),
         );
@@ -811,9 +851,10 @@ mod tests {
     }
 
     /// Ground-truth distance by exhaustive recursion over every edit sequence
-    /// (delete / insert / substitute / adjacent transposition), sharing the
-    /// cost primitives but none of the machinery under test: no matrix, no
-    /// boundary initialization, no prefix/suffix stripping, no slice swapping.
+    /// (delete / insert / substitute / adjacent consonant transposition),
+    /// sharing the cost primitives but none of the machinery under test: no
+    /// matrix, no boundary initialization, no prefix/suffix stripping, no
+    /// slice swapping.
     /// This is an *implementation* oracle — it validates that run_dp and its
     /// wrappers faithfully minimize the OSA recurrence, not that OSA is the
     /// right model. Exponential, so only for tiny inputs.
@@ -847,8 +888,17 @@ mod tests {
             let cost = s.substitution_score(&s1[i], &s2[j]);
             best = best.min(cost.saturating_add(oracle_distance(s, s1, s2, i + 1, j + 1)));
         }
-        // Adjacent transposition: s1[i],s1[i+1] crossed with s2[j],s2[j+1].
-        if i + 1 < s1.len() && j + 1 < s2.len() && s1[i] == s2[j + 1] && s1[i + 1] == s2[j] {
+        // Adjacent consonant transposition: s1[i],s1[i+1] crossed with
+        // s2[j],s2[j+1].
+        if i + 1 < s1.len()
+            && j + 1 < s2.len()
+            && matches!(
+                (&s1[i], &s1[i + 1]),
+                (Phoneme::Consonant(_), Phoneme::Consonant(_))
+            )
+            && s1[i] == s2[j + 1]
+            && s1[i + 1] == s2[j]
+        {
             let cost = s.config().transposition_cost;
             best = best.min(cost.saturating_add(oracle_distance(s, s1, s2, i + 2, j + 2)));
         }
@@ -870,6 +920,8 @@ mod tests {
             ("AE1 T", "AA1 T"),
             ("B T", "B IH1 T"),
             ("M OW1 S T", "M OW1 T S"),
+            ("AE1 IH0", "IH0 AE1"),
+            ("AE1 T", "T AE1"),
             ("B B", "B"),
             ("T EH1 N", "T EH1 N D"),
             ("M P S", "S P M"),
@@ -917,7 +969,7 @@ mod tests {
                 "distance() must be symmetric for {s1:?} vs {s2:?}"
             );
             assert_eq!(
-                s.align(&s1, &s2).score(),
+                s.align(&s1, &s2).score,
                 expected,
                 "align() score diverged from the exhaustive oracle for {s1:?} vs {s2:?}"
             );
@@ -1041,6 +1093,7 @@ mod tests {
             consonant_indel_penalty: 6,
             consonant_repeated_penalty: 2,
             transposition_cost: 3,
+            ..RhymeDistanceConfig::default()
         };
         let scorer = RhymeDistanceScorer::with_config(config);
 
@@ -1070,6 +1123,32 @@ mod tests {
         assert_eq!(
             scorer.distance(&parse("T"), &parse("D")),
             consonant_config().voiced_penalty * config.consonant_coefficient
+        );
+    }
+
+    #[test]
+    fn component_configs_update_without_resetting_rhyme_config() {
+        let mut scorer = RhymeDistanceScorer::new();
+        let rhyme_config = scorer.config();
+
+        let mut vowel_config = scorer.vowel_config();
+        vowel_config.vowel_distance_coefficient = 9;
+        scorer.set_vowel_config(vowel_config);
+
+        let mut consonant_config = scorer.consonant_config();
+        consonant_config.voiced_penalty = 7;
+        scorer.set_consonant_config(consonant_config);
+
+        assert_eq!(scorer.config(), rhyme_config);
+        assert_eq!(scorer.vowel_config(), vowel_config);
+        assert_eq!(scorer.consonant_config(), consonant_config);
+        assert_eq!(
+            scorer.distance(&parse("AO1"), &parse("OW1")),
+            vowel_config.vowel_distance_coefficient * rhyme_config.vowel_coefficient
+        );
+        assert_eq!(
+            scorer.distance(&parse("T"), &parse("D")),
+            consonant_config.voiced_penalty * rhyme_config.consonant_coefficient
         );
     }
 
@@ -1111,6 +1190,15 @@ mod tests {
         }
     }
 
+    fn assert_no_transpositions(alignment: &[AlignmentStep<'_>]) {
+        assert!(
+            alignment
+                .iter()
+                .all(|step| !matches!(step, AlignmentStep::Transposition { .. })),
+            "alignment must not contain a transposition: {alignment:?}",
+        );
+    }
+
     #[test]
     fn transpositions_are_only_adjacent() {
         // "M P S" vs "S P M": the old algorithm transposed the *non-adjacent* M
@@ -1133,6 +1221,26 @@ mod tests {
         let s1 = parse("M OW1 S T");
         let s2 = parse("M OW1 T S");
         assert_eq!(scorer().distance(&s1, &s2), config().transposition_cost);
+    }
+
+    #[test]
+    fn vowels_cannot_transpose() {
+        let s1 = parse("M AE1 AH0 T");
+        let s2 = parse("M AH0 AE1 T");
+        let output = scorer().align(&s1, &s2);
+
+        assert!(output.score() > config().transposition_cost);
+        assert_no_transpositions(output.alignment());
+    }
+
+    #[test]
+    fn vowel_and_consonant_cannot_transpose() {
+        let s1 = parse("M AE1 T");
+        let s2 = parse("M T AE1");
+        let output = scorer().align(&s1, &s2);
+
+        assert!(output.score() > config().transposition_cost);
+        assert_no_transpositions(output.alignment());
     }
 
     #[test]

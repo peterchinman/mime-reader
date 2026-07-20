@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 use crate::phoneme::{Vowel, VowelPhoneme};
 use VowelPhoneme::*;
@@ -8,13 +8,16 @@ pub struct VowelHexGraphConfig {
     pub vowel_stress_penalty: u32,
     // How much to weight raw vowel phoneme distance vs the vowel stress penalty.
     pub vowel_distance_coefficient: u32,
+    /// Graph edge distance between ER as in BIRD and AH as in BUT.
+    pub er_ah_distance: u32,
 }
 
 impl Default for VowelHexGraphConfig {
     fn default() -> Self {
         Self {
             vowel_stress_penalty: 1,
-            vowel_distance_coefficient: 2,
+            vowel_distance_coefficient: 3,
+            er_ah_distance: 3,
         }
     }
 }
@@ -61,6 +64,7 @@ impl Default for VowelHexGraphConfig {
 ///       OH is IPA o, between AO and UW
 ///
 /// NOTE: some of the diphthongs start in in-between locations on the hex-graph, but end in either UH or IH.
+#[derive(Clone)]
 pub struct VowelHexGraph {
     distances: HashMap<(VowelPhoneme, VowelPhoneme), u32>,
     config: VowelHexGraphConfig,
@@ -70,36 +74,37 @@ pub trait VowelDistanceScorer {
     fn distance(&self, v1: &Vowel, v2: &Vowel) -> u32;
 }
 
-fn build_adjacency() -> HashMap<VowelPhoneme, Vec<VowelPhoneme>> {
-    let mut adj: HashMap<VowelPhoneme, Vec<VowelPhoneme>> = HashMap::new();
+type VowelAdjacency = HashMap<VowelPhoneme, Vec<(VowelPhoneme, u32)>>;
 
-    let mut add_edge = |a: VowelPhoneme, b: VowelPhoneme| {
-        adj.entry(a).or_default().push(b);
-        adj.entry(b).or_default().push(a);
-    };
+fn add_edge(adj: &mut VowelAdjacency, a: VowelPhoneme, b: VowelPhoneme, distance: u32) {
+    adj.entry(a).or_default().push((b, distance));
+    adj.entry(b).or_default().push((a, distance));
+}
+
+fn build_adjacency(config: VowelHexGraphConfig) -> VowelAdjacency {
+    let mut adj = HashMap::new();
 
     // Monophthong edges
-    add_edge(AE, AA);
-    add_edge(AE, AH);
-    add_edge(AE, EH);
-    add_edge(AA, AO);
-    add_edge(AA, AH);
-    add_edge(EH, AH);
-    add_edge(EH, IH);
-    add_edge(EH, IY);
-    add_edge(AH, AO);
-    add_edge(AH, UH);
-    add_edge(AH, IH);
-    add_edge(AO, UW);
-    add_edge(AO, UH);
-    add_edge(IY, IH);
-    add_edge(IH, UH);
-    add_edge(UH, UW);
+    add_edge(&mut adj, AE, AA, 1);
+    add_edge(&mut adj, AE, AH, 1);
+    add_edge(&mut adj, AE, EH, 1);
+    add_edge(&mut adj, AA, AO, 1);
+    add_edge(&mut adj, AA, AH, 1);
+    add_edge(&mut adj, EH, AH, 1);
+    add_edge(&mut adj, EH, IH, 1);
+    add_edge(&mut adj, EH, IY, 1);
+    add_edge(&mut adj, AH, AO, 1);
+    add_edge(&mut adj, AH, UH, 1);
+    add_edge(&mut adj, AH, IH, 1);
+    add_edge(&mut adj, AO, UW, 1);
+    add_edge(&mut adj, AO, UH, 1);
+    add_edge(&mut adj, IY, IH, 1);
+    add_edge(&mut adj, IH, UH, 1);
+    add_edge(&mut adj, UH, UW, 1);
 
-    // OPINIONATED /ER/ ADJACENCY:
-    // ER as in BIRD is adjacent to:
-    //   AH as in BUT
-    add_edge(ER, AH);
+    // OPINIONATED /ER/ EDGE:
+    // ER as in BIRD has a configurable edge to AH as in BUT.
+    add_edge(&mut adj, ER, AH, config.er_ah_distance);
 
     // DIPHTHONG ADJACENCIES
     // "AW", "AY", "EY", "OW", "OY" — 5 diphthongs
@@ -113,9 +118,9 @@ fn build_adjacency() -> HashMap<VowelPhoneme, Vec<VowelPhoneme>> {
     //    AH as in BUT
     //    AA : 2 (satisfied by AH adjacency)
     //    AE : 2 (satisfied by AH adjacency)
-    add_edge(AW, UH);
-    add_edge(AW, OW);
-    add_edge(AW, AH);
+    add_edge(&mut adj, AW, UH, 1);
+    add_edge(&mut adj, AW, OW, 1);
+    add_edge(&mut adj, AW, AH, 1);
 
     // 2. AY as in BITE is adjacent to:
     //    IH as in BIT
@@ -123,18 +128,18 @@ fn build_adjacency() -> HashMap<VowelPhoneme, Vec<VowelPhoneme>> {
     //    AH as in BUT
     //    AA : 2 (satisfied by AH adjacency)
     //    AE : 2 (satisfied by AH adjacency)
-    add_edge(AY, IH);
-    add_edge(AY, EY);
-    add_edge(AY, AH);
+    add_edge(&mut adj, AY, IH, 1);
+    add_edge(&mut adj, AY, EY, 1);
+    add_edge(&mut adj, AY, AH, 1);
 
     // 3. EY as in BAIT is adjacent to:
     //    AY as in BITE *redundant
     //    IH as in BIT
     //    EH as in BET
     //    IY as in BEAT
-    add_edge(EY, IH);
-    add_edge(EY, EH);
-    add_edge(EY, IY);
+    add_edge(&mut adj, EY, IH, 1);
+    add_edge(&mut adj, EY, EH, 1);
+    add_edge(&mut adj, EY, IY, 1);
 
     // 4. OW as in BOAT is adjacent to:
     //    OY as in BOY
@@ -142,66 +147,72 @@ fn build_adjacency() -> HashMap<VowelPhoneme, Vec<VowelPhoneme>> {
     //    UH as in BUSH
     //    UW as in BOOT
     //    AO as in BOMB
-    add_edge(OW, OY);
-    add_edge(OW, UH);
-    add_edge(OW, UW);
-    add_edge(OW, AO);
+    add_edge(&mut adj, OW, OY, 1);
+    add_edge(&mut adj, OW, UH, 1);
+    add_edge(&mut adj, OW, UW, 1);
+    add_edge(&mut adj, OW, AO, 1);
 
     // 5. OY as in BOY is adjacent to:
     //    IH as in BIT
     //    OW as in BOAT *redundant
-    add_edge(OY, IH);
+    add_edge(&mut adj, OY, IH, 1);
 
     adj
 }
 
-fn bfs_distance(
-    adj: &HashMap<VowelPhoneme, Vec<VowelPhoneme>>,
-    start: VowelPhoneme,
-    end: VowelPhoneme,
-) -> u32 {
-    // If both vowels are the same, the distance is 0
+fn shortest_path_distance(adj: &VowelAdjacency, start: VowelPhoneme, end: VowelPhoneme) -> u32 {
     if start == end {
         return 0;
     }
 
-    // Set up a queue for BFS and a set to track visited nodes
-    let mut queue: VecDeque<(VowelPhoneme, u32)> = VecDeque::new();
+    let mut distances = HashMap::from([(start, 0)]);
     let mut visited: HashSet<VowelPhoneme> = HashSet::new();
 
-    // Initialize BFS
-    queue.push_back((start, 0));
-    visited.insert(start);
+    loop {
+        let Some((current, current_distance)) = distances
+            .iter()
+            .filter(|(phoneme, _)| !visited.contains(phoneme))
+            .min_by_key(|(_, distance)| *distance)
+            .map(|(phoneme, distance)| (*phoneme, *distance))
+        else {
+            panic!(
+                "no path between {:?} and {:?} — graph is disconnected",
+                start, end
+            );
+        };
 
-    // Perform BFS
-    while let Some((current, dist)) = queue.pop_front() {
-        // Check all connected vowels
+        if current == end {
+            return current_distance;
+        }
+        visited.insert(current);
+
         let Some(neighbors) = adj.get(&current) else {
             continue;
         };
-        for &neighbor in neighbors {
-            if neighbor == end {
-                return dist + 1; // Found the target vowel
+
+        for &(neighbor, edge_distance) in neighbors {
+            if visited.contains(&neighbor) {
+                continue;
             }
-            if visited.insert(neighbor) {
-                queue.push_back((neighbor, dist + 1));
-            }
+
+            let candidate = current_distance
+                .checked_add(edge_distance)
+                .expect("vowel path distance overflow");
+            distances
+                .entry(neighbor)
+                .and_modify(|distance| *distance = (*distance).min(candidate))
+                .or_insert(candidate);
         }
     }
-
-    panic!(
-        "no path between {:?} and {:?} — graph is disconnected",
-        start, end
-    );
 }
 
 impl VowelHexGraph {
     fn build(config: VowelHexGraphConfig) -> Self {
-        let adj = build_adjacency();
+        let adj = build_adjacency(config);
         let mut distances = HashMap::new();
         for a in VowelPhoneme::ALL {
             for b in VowelPhoneme::ALL {
-                distances.insert((a, b), bfs_distance(&adj, a, b));
+                distances.insert((a, b), shortest_path_distance(&adj, a, b));
             }
         }
         VowelHexGraph { distances, config }
@@ -317,6 +328,14 @@ mod tests {
     }
 
     #[test]
+    fn vowel_distance_weighted_edge() {
+        assert_eq!(
+            graph().distance(&v("ER1"), &v("AH1")),
+            config().er_ah_distance * config().vowel_distance_coefficient
+        );
+    }
+
+    #[test]
     fn vowel_distance_is_symmetric() {
         assert_eq!(
             graph().distance(&v("AO1"), &v("IY2")),
@@ -337,11 +356,13 @@ mod tests {
         let graph = VowelHexGraph::with_config(VowelHexGraphConfig {
             vowel_stress_penalty: 5,
             vowel_distance_coefficient: 7,
+            er_ah_distance: 3,
         });
 
         assert_eq!(graph.distance(&v("AO1"), &v("AO0")), 5);
         assert_eq!(graph.distance(&v("AO1"), &v("OW1")), 7);
         assert_eq!(graph.distance(&v("AO1"), &v("OW0")), 12);
+        assert_eq!(graph.distance(&v("ER1"), &v("AH1")), 21);
     }
 
     #[test]
@@ -356,8 +377,23 @@ mod tests {
     }
 
     #[test]
-    fn phoneme_distance_two() {
+    fn phoneme_distance_two_steps() {
         assert_eq!(graph().phoneme_distance(UW, IH), 2);
+    }
+
+    #[test]
+    fn er_ah_phoneme_distance_uses_configured_edge_weight() {
+        assert_eq!(graph().phoneme_distance(ER, AH), config().er_ah_distance);
+    }
+
+    #[test]
+    fn weighted_shortest_path_can_beat_direct_edge() {
+        let mut adj = VowelAdjacency::new();
+        add_edge(&mut adj, AE, AA, 5);
+        add_edge(&mut adj, AE, AH, 1);
+        add_edge(&mut adj, AH, AA, 1);
+
+        assert_eq!(shortest_path_distance(&adj, AE, AA), 2);
     }
 
     #[test]

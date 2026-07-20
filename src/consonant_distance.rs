@@ -2,10 +2,14 @@ use crate::phoneme::{Consonant, ConsonantManner::*, ConsonantPhoneme, ConsonantP
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnalyticConsonantDistanceConfig {
+    /// The weight of place distance relative to other consonant penalties.
+    pub place_distance_coefficient: u32,
     /// Furthest related consonants are 7 apart, so unrelated consonants should be... somewhat further than that.
     pub unrelated_penalty: u32,
     /// TIN, DIN.
     pub voiced_penalty: u32,
+    /// SICK, THICK.
+    pub sibilance_penalty: u32,
     /// ROOT, LOOT.
     pub r_l_distance: u32,
     /// WHILE, VIAL.
@@ -21,8 +25,10 @@ pub struct AnalyticConsonantDistanceConfig {
 impl Default for AnalyticConsonantDistanceConfig {
     fn default() -> Self {
         Self {
+            place_distance_coefficient: 1,
             unrelated_penalty: 10,
             voiced_penalty: 1,
+            sibilance_penalty: 1,
             r_l_distance: 1,
             w_v_distance: 2,
             affricate_sibilant_fricative_penalty: 1,
@@ -62,6 +68,10 @@ impl AnalyticConsonantDistance {
     pub fn config(&self) -> AnalyticConsonantDistanceConfig {
         self.config
     }
+
+    fn place_distance(&self, c1: &Consonant, c2: &Consonant) -> u32 {
+        u32::from(c1.place.abs_diff(c2.place)) * self.config.place_distance_coefficient
+    }
 }
 
 impl ConsonantDistanceScorer for AnalyticConsonantDistance {
@@ -80,19 +90,24 @@ impl ConsonantDistanceScorer for AnalyticConsonantDistance {
             return if is_pair(c1, c2, R, L) {
                 self.config.r_l_distance
             } else {
-                c1.place.abs_diff(c2.place) as u32
+                self.place_distance(c1, c2)
             };
         }
 
-        let place_diff = c1.place.abs_diff(c2.place) as u32;
+        let place_diff = self.place_distance(c1, c2);
         let voiced_penalty = if c1.voiced != c2.voiced {
             self.config.voiced_penalty
         } else {
             0
         };
+        let sibilance_penalty = if c1.sibilant != c2.sibilant {
+            self.config.sibilance_penalty
+        } else {
+            0
+        };
 
         match (c1.manner, c2.manner) {
-            (a, b) if a == b => place_diff + voiced_penalty,
+            (a, b) if a == b => place_diff + voiced_penalty + sibilance_penalty,
             (Affricate, Fricative | Plosive) | (Fricative | Plosive, Affricate) => {
                 let non_affricate = if matches!(c1.manner, Affricate) {
                     c2
@@ -150,6 +165,19 @@ mod tests {
     // BOTH FRICATIVE
     fn consonant_distance_same_manner_fricative() {
         assert_eq!(distance(F, HH), place_diff(F, HH));
+    }
+
+    #[test]
+    fn consonant_distance_sibilance_mismatch() {
+        assert_eq!(
+            distance(S, TH),
+            place_diff(S, TH) + config().sibilance_penalty
+        );
+    }
+
+    #[test]
+    fn consonant_distance_voicing_mismatch_is_not_sibilance_mismatch() {
+        assert_eq!(distance(DH, TH), config().voiced_penalty);
     }
 
     #[test]
@@ -228,8 +256,10 @@ mod tests {
     #[test]
     fn custom_config_controls_penalties() {
         let scorer = AnalyticConsonantDistance::with_config(AnalyticConsonantDistanceConfig {
+            place_distance_coefficient: 3,
             unrelated_penalty: 30,
             voiced_penalty: 4,
+            sibilance_penalty: 10,
             r_l_distance: 5,
             w_v_distance: 6,
             affricate_sibilant_fricative_penalty: 7,
@@ -238,11 +268,13 @@ mod tests {
         });
 
         assert_eq!(scorer.distance(&c(M), &c(F)), 30);
-        assert_eq!(scorer.distance(&c(B), &c(K)), place_diff(B, K) + 4);
+        assert_eq!(scorer.distance(&c(B), &c(K)), place_diff(B, K) * 3 + 4);
+        assert_eq!(scorer.distance(&c(T), &c(D)), 4);
+        assert_eq!(scorer.distance(&c(S), &c(TH)), place_diff(S, TH) * 3 + 10);
         assert_eq!(scorer.distance(&c(R), &c(L)), 5);
         assert_eq!(scorer.distance(&c(W), &c(V)), 6);
-        assert_eq!(scorer.distance(&c(CH), &c(SH)), place_diff(CH, SH) + 7);
-        assert_eq!(scorer.distance(&c(CH), &c(T)), place_diff(CH, T) + 8);
-        assert_eq!(scorer.distance(&c(CH), &c(TH)), place_diff(CH, TH) + 9);
+        assert_eq!(scorer.distance(&c(CH), &c(SH)), place_diff(CH, SH) * 3 + 7);
+        assert_eq!(scorer.distance(&c(CH), &c(T)), place_diff(CH, T) * 3 + 8);
+        assert_eq!(scorer.distance(&c(CH), &c(TH)), place_diff(CH, TH) * 3 + 9);
     }
 }

@@ -1,24 +1,71 @@
 {
-  "slant_rhymes": [
-    ["person", "rehearsing"],
-    ["potent", "choking"],
-    ["heavy", "spaghetti"],
-    ["magnet", "fragments"]
-  ],
-  "further_slant_rhymes": [
-    ["blueprint", "nuisance"],
-    ["hostages", "coughing fits"],
-    ["hostages", "preposterous"],
-    ["cardinal", "started full"],
-    ["boring", "post-mortem"],
-    ["detergent", "splurge it"],
-    ["tenement", "assemble it"]
-  ],
-  "ehhh": [["accident", "cinnamon"]],
-  "should_not_rhyme": [
-    ["blueprint", "blog dog"],
-    ["person", "coughing"],
-    ["dog", "dig"],
-    ["person", "allowed"]
-  ]
+  "slant_rhymes": {
+    "comment": "Obviously rhyme.",
+    "pairs": [
+      ["person", "rehearsing"],
+      ["potent", "choking"],
+      ["heavy", "spaghetti"],
+      ["magnet", "fragments"],
+      ["flexible", "lexical"]
+    ]
+  },
+  "further_slant_rhymes": {
+    "comment": "More distant, but still very legible rhymes.",
+    "pairs": [
+      ["blueprint", "nuisance"],
+      ["hostages", "coughing fits"],
+      ["hostages", "preposterous"],
+      ["cardinal", "started full"],
+      ["boring", "post-mortem"],
+      ["detergent", "splurge it"],
+      ["tenement", "assemble it"],
+      ["strategy", "calories"]
+    ]
+  },
+  "ehhh": {
+    "comment": "Some phonemic similarities, but, not obviously rhyming.",
+    "pairs": [
+      ["kissing", "algorithm"],
+      ["managers", "cannabis"],
+      ["christian", "fiscal"],
+      ["texas", "lectures"],
+      ["taken", "fatal"],
+      ["senators", "premises"],
+      ["canada", "ambassador"],
+      ["dimensional", "benjamin"],
+      ["vision", "civil"],
+      ["direction", "lectures"],
+      ["trust", "first"],
+      ["patterns", "dragons"],
+      ["mountain", "councils"],
+      ["accident", "cinnamon"],
+      ["authors", "portion"],
+      ["mama", "honor"],
+      ["spasm", "orphan"]
+    ]
+  },
+  "nope": {
+    "comment": "Does not rhmye.",
+    "pairs": [
+      ["blueprint", "blog dog"],
+      ["person", "coughing"],
+      ["dog", "dig"],
+      ["person", "allowed"],
+      ["downs", "coins"],
+      ["weapon", "stanford"],
+      ["insects", "america"]
+    ]
+  },
+  "weird_outliers": {
+    "comment": "Words with much lower scores than you would expect.",
+    "pairs" : [
+      ["pattern", "latin"],
+      ["delta", "shelter"],
+      ["ears", "kills"],
+      ["north", "false"],
+      ["travel", "spasm"],
+      ["virgin", "churches"],
+      ["fork", "salt"]
+    ]
+  }
 }

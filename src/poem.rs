@@ -1,11 +1,13 @@
 use crate::{
     CmuDictionary, Line, MeterScheme, PronouncingDictionary, RhymeDistanceConfig,
     RhymeDistanceScorer, RhymeScheme,
-    consonant_distance::{AnalyticConsonantDistance, ConsonantDistanceScorer},
+    consonant_distance::{
+        AnalyticConsonantDistance, AnalyticConsonantDistanceConfig, ConsonantDistanceScorer,
+    },
     error::{MeterCheckError, PoemEditError, RhymeCheckError},
     meter::MeterMatchResult,
     rhyme_scheme::{LineRole, ResolvedLineRole, RhymeCheckResult},
-    vowel_distance::{VowelDistanceScorer, VowelHexGraph},
+    vowel_distance::{VowelDistanceScorer, VowelHexGraph, VowelHexGraphConfig},
 };
 
 #[derive(Debug)]
@@ -376,6 +378,27 @@ where
     }
 }
 
+impl<D> Analyzer<VowelHexGraph, AnalyticConsonantDistance, D>
+where
+    D: PronouncingDictionary,
+{
+    pub fn vowel_distance_config(&self) -> VowelHexGraphConfig {
+        self.rhyme_distance_scorer.vowel_config()
+    }
+
+    pub fn set_vowel_distance_config(&mut self, config: VowelHexGraphConfig) {
+        self.rhyme_distance_scorer.set_vowel_config(config);
+    }
+
+    pub fn consonant_distance_config(&self) -> AnalyticConsonantDistanceConfig {
+        self.rhyme_distance_scorer.consonant_config()
+    }
+
+    pub fn set_consonant_distance_config(&mut self, config: AnalyticConsonantDistanceConfig) {
+        self.rhyme_distance_scorer.set_consonant_config(config);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,15 +416,23 @@ mod tests {
     }
 
     #[test]
-    fn analyzer_sets_rhyme_distance_config() {
+    fn analyzer_sets_distance_configs() {
         let dict = CmuDictionary::load(DICT_PATH).expect("failed to load dictionary");
         let mut analyzer: Analyzer = Analyzer::new(dict, RhymeDistanceScorer::new());
-        let mut config = analyzer.rhyme_distance_scorer().config();
-        config.vowel_coefficient += 1;
+        let mut rhyme_config = analyzer.rhyme_distance_scorer().config();
+        rhyme_config.vowel_coefficient += 1;
+        let mut vowel_config = analyzer.vowel_distance_config();
+        vowel_config.vowel_stress_penalty += 1;
+        let mut consonant_config = analyzer.consonant_distance_config();
+        consonant_config.voiced_penalty += 1;
 
-        analyzer.set_rhyme_distance_config(config);
+        analyzer.set_rhyme_distance_config(rhyme_config);
+        analyzer.set_vowel_distance_config(vowel_config);
+        analyzer.set_consonant_distance_config(consonant_config);
 
-        assert_eq!(analyzer.rhyme_distance_scorer().config(), config);
+        assert_eq!(analyzer.rhyme_distance_scorer().config(), rhyme_config);
+        assert_eq!(analyzer.vowel_distance_config(), vowel_config);
+        assert_eq!(analyzer.consonant_distance_config(), consonant_config);
     }
 
     fn poem_with_schemes(

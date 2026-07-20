@@ -7,8 +7,9 @@ use tsify::Tsify;
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    CmuDictionary, MeterScheme, OwnedAlignmentStep, RhymeDistanceConfig, RhymeDistanceScorer,
-    RhymeScheme, TranspositionDirection,
+    AnalyticConsonantDistanceConfig, CmuDictionary, MeterScheme, OwnedAlignmentStep,
+    RhymeComparisonConfig, RhymeDistanceConfig, RhymeDistanceScorer, RhymeNormalization,
+    RhymeScheme, TranspositionDirection, VowelHexGraphConfig,
     meter::{MeterMatchResult, MeterMismatch, SyllableStress},
     poem::{MeterAnalysis, Poem, PoemLineAnalysis, RhymeAnalysis},
     rhyme_scheme::RhymeCheckResult,
@@ -16,6 +17,11 @@ use crate::{
 
 /// The concrete, monomorphized scorer the JS layer uses (the library defaults).
 type Scorer = RhymeDistanceScorer;
+
+#[wasm_bindgen(js_name = defaultRhymeComparisonConfig)]
+pub fn default_rhyme_comparison_config() -> RhymeComparisonConfigDto {
+    RhymeComparisonConfig::default().into()
+}
 
 // ===========================================================================
 // WasmAnalyzer: the long-lived owner of shared, expensive state — the wasm-
@@ -45,21 +51,27 @@ impl WasmAnalyzer {
     ///
     /// `meter_scheme` / `rhyme_scheme` are the same string formats the core
     /// parsers accept (e.g. meter `"x/x/x/x/x/"`, rhyme `"ABAB"`). Pass
-    /// `undefined` to leave a dimension unanalyzed.
+    /// `undefined` to leave a dimension unanalyzed. When a rhyme scheme is
+    /// present, `rhyme_comparison_config` defaults to the core config.
     #[wasm_bindgen(js_name = openPoem)]
     pub fn open_poem(
         &self,
         lines: Vec<String>,
         meter_scheme: Option<String>,
         rhyme_scheme: Option<String>,
-        rhyme_threshold: Option<f32>,
+        rhyme_comparison_config: Option<RhymeComparisonConfigDto>,
     ) -> Result<WasmPoem, JsError> {
         let meter = match meter_scheme {
             Some(s) => Some(s.parse::<MeterScheme>()?),
             None => None,
         };
         let rhyme = match rhyme_scheme {
-            Some(s) => Some(RhymeScheme::new(&s, rhyme_threshold.unwrap_or(0.5))?),
+            Some(s) => Some(RhymeScheme::with_config(
+                &s,
+                rhyme_comparison_config
+                    .map(RhymeComparisonConfig::from)
+                    .unwrap_or_default(),
+            )?),
             None => None,
         };
 
@@ -80,16 +92,38 @@ impl WasmAnalyzer {
         RhymeConfigDto::from(self.scorer.config())
     }
 
-    /// Rebuilds this analyzer's rhyme-distance scorer with the given config.
+    /// Returns the current vowel-distance config as a JS object.
+    #[wasm_bindgen(js_name = vowelConfig)]
+    pub fn vowel_config(&self) -> VowelConfigDto {
+        VowelConfigDto::from(self.scorer.vowel_config())
+    }
+
+    /// Returns the current consonant-distance config as a JS object.
+    #[wasm_bindgen(js_name = consonantConfig)]
+    pub fn consonant_config(&self) -> ConsonantConfigDto {
+        ConsonantConfigDto::from(self.scorer.consonant_config())
+    }
+
+    /// Replaces this analyzer's rhyme-distance config.
     ///
     /// This is a "reload", not a live edit: poems opened *after* this call use
     /// the new config; poems already open keep the config they were opened with.
     /// Re-open a poem to apply a config change to it.
     #[wasm_bindgen(js_name = setRhymeConfig)]
     pub fn set_rhyme_config(&mut self, config: RhymeConfigDto) {
-        let mut scorer = Scorer::new();
-        scorer.set_config(config.into());
-        self.scorer = Rc::new(scorer);
+        Rc::make_mut(&mut self.scorer).set_config(config.into());
+    }
+
+    /// Replaces the vowel-distance config for poems opened afterward.
+    #[wasm_bindgen(js_name = setVowelConfig)]
+    pub fn set_vowel_config(&mut self, config: VowelConfigDto) {
+        Rc::make_mut(&mut self.scorer).set_vowel_config(config.into());
+    }
+
+    /// Replaces the consonant-distance config for poems opened afterward.
+    #[wasm_bindgen(js_name = setConsonantConfig)]
+    pub fn set_consonant_config(&mut self, config: ConsonantConfigDto) {
+        Rc::make_mut(&mut self.scorer).set_consonant_config(config.into());
     }
 }
 
@@ -331,6 +365,8 @@ impl From<RhymeAnalysis<'_>> for RhymeDto {
                     distance: RhymeDistanceDto {
                         raw_distance: distance.raw_distance,
                         syllable_count: distance.syllable_count,
+                        normalization: distance.normalization.into(),
+                        normalization_denominator: distance.normalization_denominator,
                         normalized_distance: distance.normalized_distance,
                     },
                 },
@@ -343,6 +379,8 @@ impl From<RhymeAnalysis<'_>> for RhymeDto {
 pub struct RhymeDistanceDto {
     raw_distance: u32,
     syllable_count: usize,
+    normalization: RhymeNormalizationDto,
+    normalization_denominator: f32,
     normalized_distance: f32,
 }
 
@@ -416,7 +454,60 @@ impl From<&OwnedAlignmentStep> for AlignmentStepDto {
 
 // ---- Config (round-trips both directions: get + set) ----------------------
 
-#[derive(Serialize, Deserialize, Debug, Tsify)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Tsify)]
+#[serde(rename_all = "snake_case")]
+pub enum RhymeNormalizationDto {
+    None,
+    PerSyllable,
+    PerMeanPhoneme,
+}
+
+impl From<RhymeNormalization> for RhymeNormalizationDto {
+    fn from(normalization: RhymeNormalization) -> Self {
+        match normalization {
+            RhymeNormalization::None => Self::None,
+            RhymeNormalization::PerSyllable => Self::PerSyllable,
+            RhymeNormalization::PerMeanPhoneme => Self::PerMeanPhoneme,
+        }
+    }
+}
+
+impl From<RhymeNormalizationDto> for RhymeNormalization {
+    fn from(normalization: RhymeNormalizationDto) -> Self {
+        match normalization {
+            RhymeNormalizationDto::None => Self::None,
+            RhymeNormalizationDto::PerSyllable => Self::PerSyllable,
+            RhymeNormalizationDto::PerMeanPhoneme => Self::PerMeanPhoneme,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct RhymeComparisonConfigDto {
+    threshold: f32,
+    normalization: RhymeNormalizationDto,
+}
+
+impl From<RhymeComparisonConfig> for RhymeComparisonConfigDto {
+    fn from(config: RhymeComparisonConfig) -> Self {
+        Self {
+            threshold: config.threshold,
+            normalization: config.normalization.into(),
+        }
+    }
+}
+
+impl From<RhymeComparisonConfigDto> for RhymeComparisonConfig {
+    fn from(config: RhymeComparisonConfigDto) -> Self {
+        Self {
+            threshold: config.threshold,
+            normalization: config.normalization.into(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct RhymeConfigDto {
     vowel_to_consonant_mismatch: u32,
@@ -452,6 +543,80 @@ impl From<RhymeConfigDto> for RhymeDistanceConfig {
             consonant_indel_penalty: c.consonant_indel_penalty,
             consonant_repeated_penalty: c.consonant_repeated_penalty,
             transposition_cost: c.transposition_cost,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct VowelConfigDto {
+    vowel_stress_penalty: u32,
+    vowel_distance_coefficient: u32,
+    er_ah_distance: u32,
+}
+
+impl From<VowelHexGraphConfig> for VowelConfigDto {
+    fn from(c: VowelHexGraphConfig) -> Self {
+        Self {
+            vowel_stress_penalty: c.vowel_stress_penalty,
+            vowel_distance_coefficient: c.vowel_distance_coefficient,
+            er_ah_distance: c.er_ah_distance,
+        }
+    }
+}
+
+impl From<VowelConfigDto> for VowelHexGraphConfig {
+    fn from(c: VowelConfigDto) -> Self {
+        Self {
+            vowel_stress_penalty: c.vowel_stress_penalty,
+            vowel_distance_coefficient: c.vowel_distance_coefficient,
+            er_ah_distance: c.er_ah_distance,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct ConsonantConfigDto {
+    place_distance_coefficient: u32,
+    unrelated_penalty: u32,
+    voiced_penalty: u32,
+    sibilance_penalty: u32,
+    r_l_distance: u32,
+    w_v_distance: u32,
+    affricate_sibilant_fricative_penalty: u32,
+    affricate_plosive_penalty: u32,
+    affricate_non_sibilant_fricative_penalty: u32,
+}
+
+impl From<AnalyticConsonantDistanceConfig> for ConsonantConfigDto {
+    fn from(c: AnalyticConsonantDistanceConfig) -> Self {
+        Self {
+            place_distance_coefficient: c.place_distance_coefficient,
+            unrelated_penalty: c.unrelated_penalty,
+            voiced_penalty: c.voiced_penalty,
+            sibilance_penalty: c.sibilance_penalty,
+            r_l_distance: c.r_l_distance,
+            w_v_distance: c.w_v_distance,
+            affricate_sibilant_fricative_penalty: c.affricate_sibilant_fricative_penalty,
+            affricate_plosive_penalty: c.affricate_plosive_penalty,
+            affricate_non_sibilant_fricative_penalty: c.affricate_non_sibilant_fricative_penalty,
+        }
+    }
+}
+
+impl From<ConsonantConfigDto> for AnalyticConsonantDistanceConfig {
+    fn from(c: ConsonantConfigDto) -> Self {
+        Self {
+            place_distance_coefficient: c.place_distance_coefficient,
+            unrelated_penalty: c.unrelated_penalty,
+            voiced_penalty: c.voiced_penalty,
+            sibilance_penalty: c.sibilance_penalty,
+            r_l_distance: c.r_l_distance,
+            w_v_distance: c.w_v_distance,
+            affricate_sibilant_fricative_penalty: c.affricate_sibilant_fricative_penalty,
+            affricate_plosive_penalty: c.affricate_plosive_penalty,
+            affricate_non_sibilant_fricative_penalty: c.affricate_non_sibilant_fricative_penalty,
         }
     }
 }
@@ -625,9 +790,72 @@ mod tests {
 
     // ---- config reload semantics -------------------------------------------
     //
-    // `set_rhyme_config` rebuilds the scorer; a poem opened *after* the change
-    // must reflect the new config. (Poems opened before keep their old config —
-    // that's the "reload, not live edit" contract.)
+    // Config setters update the scorer copy used by poems opened *after* the
+    // change. Poems opened before keep their old scorer snapshot.
+
+    #[wasm_bindgen_test]
+    fn component_configs_round_trip_without_resetting_each_other() {
+        let mut ws = analyzer();
+        let rhyme_config = ws.rhyme_config();
+
+        let mut vowel_config = ws.vowel_config();
+        vowel_config.vowel_distance_coefficient = 9;
+        vowel_config.er_ah_distance = 4;
+        ws.set_vowel_config(vowel_config);
+
+        let mut consonant_config = ws.consonant_config();
+        consonant_config.place_distance_coefficient = 3;
+        consonant_config.voiced_penalty = 7;
+        consonant_config.sibilance_penalty = 11;
+        ws.set_consonant_config(consonant_config);
+
+        assert_eq!(ws.rhyme_config(), rhyme_config);
+        assert_eq!(ws.vowel_config(), vowel_config);
+        assert_eq!(ws.consonant_config(), consonant_config);
+    }
+
+    fn distance_with_normalization(normalization: RhymeNormalizationDto) -> RhymeDistanceDto {
+        let mut poem = analyzer()
+            .open_poem(
+                vec!["cat".into(), "cot".into()],
+                None,
+                Some("AA".into()),
+                Some(RhymeComparisonConfigDto {
+                    threshold: 1000.0,
+                    normalization,
+                }),
+            )
+            .unwrap();
+
+        let RhymeDto::Follower { distance, .. } = poem.rhyme_analysis(1).unwrap() else {
+            panic!("expected a follower rhyme result");
+        };
+        distance
+    }
+
+    #[wasm_bindgen_test]
+    fn comparison_config_controls_normalization() {
+        assert_eq!(
+            default_rhyme_comparison_config().normalization,
+            RhymeNormalizationDto::PerMeanPhoneme
+        );
+
+        let none = distance_with_normalization(RhymeNormalizationDto::None);
+        let per_syllable = distance_with_normalization(RhymeNormalizationDto::PerSyllable);
+        let per_mean_phoneme = distance_with_normalization(RhymeNormalizationDto::PerMeanPhoneme);
+
+        assert!(none.raw_distance > 0);
+        assert_eq!(none.raw_distance, per_syllable.raw_distance);
+        assert_eq!(none.raw_distance, per_mean_phoneme.raw_distance);
+        assert_eq!(none.normalization_denominator, 1.0);
+        assert_eq!(per_syllable.normalization_denominator, 1.0);
+        assert_eq!(per_mean_phoneme.normalization_denominator, 2.0);
+        assert_eq!(none.normalized_distance, none.raw_distance as f32);
+        assert_eq!(
+            per_mean_phoneme.normalized_distance,
+            none.raw_distance as f32 / 2.0
+        );
+    }
 
     #[wasm_bindgen_test]
     fn rhyme_config_reload_affects_poems_opened_after() {
