@@ -276,7 +276,7 @@ mod tests {
         let matches = analyzer()
             .find_rhymes(
                 "cat",
-                0.0..=10.0,
+                0.0..=1000.0,
                 RhymeNormalization::PerMeanPhoneme,
                 Compare::RhymingPart,
             )
@@ -305,7 +305,7 @@ mod tests {
         let matches = analyzer()
             .find_rhymes(
                 "cot",
-                0.1..=10.0,
+                0.1..=1000.0,
                 RhymeNormalization::PerMeanPhoneme,
                 Compare::RhymingPart,
             )

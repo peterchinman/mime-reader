@@ -4,17 +4,24 @@ use crate::consonant_distance::{
 use crate::phoneme::Phoneme;
 use crate::vowel_distance::{VowelDistanceScorer, VowelHexGraph, VowelHexGraphConfig};
 
+/// Costs for the rhyme-distance DP.
+///
+/// Both phoneme-distance engines return distances normalized to
+/// `0..=`[`crate::NORMALIZED_DISTANCE_MAX`] (1000 = the engine's most distant
+/// pair), so every value here is calibrated against that fixed scale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RhymeDistanceConfig {
     /// We never want to compare a vowel to a consonant, so we should give this an arbitrarily high penalty.
     pub vowel_to_consonant_mismatch: u32,
-    /// Vowel distance ranges from 0-9 (VowelHexGraph distance (<= 4), gets multiplied by VOWEL_DISTANCE_COEFFICIENT (2), and VOWEL_STRESS_PENALTY (1) added), consonant distance range up to 10.
+    /// Multiplier on normalized vowel distances (0-1000).
     ///
-    /// This coefficient determines "how much more important vowels are than consonants"
-    ///
-    /// TODO find the correct value for this. My instinct is that vowels should be significantly more important than consonants.
+    /// Together with `consonant_coefficient` this determines "how much more
+    /// important vowels are than consonants": the default 8:1 comes from
+    /// experimentation (see web/tuning) — a much higher ratio than I would
+    /// have guessed from the armchair.
     pub vowel_coefficient: u32,
-    /// This coefficient determines how much consonant differences contribute to rhyme distance.
+    /// Multiplier on normalized consonant distances (0-1000): how much
+    /// consonant differences contribute to rhyme distance.
     pub consonant_coefficient: u32,
     /// Ideally, we should be comparing equal syllable slices, in which case, the insertion/deletion penalty for vowels should be arbitrarily high, as we always want the vowels to align.
     ///
@@ -22,7 +29,7 @@ pub struct RhymeDistanceConfig {
     pub vowel_indel_penalty: u32,
     /// Insertion/deletion penalty for consonants
     ///
-    /// This should be greater or equal to half of the default unrelated consonant penalty, otherwise it's cheaper to insert/delete a consonant than to compare unrelated consonants.
+    /// This should be greater or equal to half the cost of substituting maximally distant consonants (`1000 * consonant_coefficient`), otherwise it's cheaper to insert/delete a consonant than to compare unrelated consonants.
     ///
     /// TODO: Should all inserted consonants have the same insertion penalty? Are some consonants "lighter" than others? For example adding a /z/ (to form a plural) seems like it should be lighter than adding a /k/?.
     pub consonant_indel_penalty: u32,
@@ -36,7 +43,7 @@ pub struct RhymeDistanceConfig {
     ///
     /// TODO: This should take into account cases like RAISING (R EY1 Z IH0 NG) vs RAISE SING (R EY1 Z S IH1 NG), i.e. we should take consonant distance of repeated consonants into account
     ///
-    /// An arbitrary starting point would probably be (1 + distance())/2
+    /// An arbitrary starting point would probably be (consonant_indel_penalty + distance())/2
     pub consonant_repeated_penalty: u32,
     /// Transposing consonants should incur a smaller penalty than comparing them each in order. E.g. MOST <=> MOATS should have relatively small penalty.
     ///
@@ -47,14 +54,13 @@ pub struct RhymeDistanceConfig {
 impl Default for RhymeDistanceConfig {
     fn default() -> Self {
         Self {
-            vowel_to_consonant_mismatch: 1000,
-            // A default value of 8 comes experimentation (see web/tuning). This is a much higher coefficient than I would have guessed from the armchair. It is the minimum value with which we can differentiate between distant slant rhymes and words that should not rhyme.
-            vowel_coefficient: 5,
+            vowel_to_consonant_mismatch: 100_000,
+            vowel_coefficient: 8,
             consonant_coefficient: 1,
-            vowel_indel_penalty: 1000,
-            consonant_indel_penalty: 5,
-            consonant_repeated_penalty: 1,
-            transposition_cost: 2,
+            vowel_indel_penalty: 100_000,
+            consonant_indel_penalty: 500,
+            consonant_repeated_penalty: 100,
+            transposition_cost: 200,
         }
     }
 }
@@ -741,9 +747,8 @@ where
 mod tests {
     use super::*;
     use crate::{
-        Consonant, Vowel,
-        consonant_distance::{AnalyticConsonantDistanceConfig, ConsonantDistanceScorer},
-        vowel_distance::{VowelDistanceScorer, VowelHexGraphConfig},
+        Consonant, Vowel, consonant_distance::ConsonantDistanceScorer,
+        vowel_distance::VowelDistanceScorer,
     };
     use std::sync::OnceLock;
 
@@ -772,16 +777,19 @@ mod tests {
         RhymeDistanceConfig::default()
     }
 
-    fn vowel_config() -> VowelHexGraphConfig {
-        VowelHexGraphConfig::default()
-    }
-
-    fn consonant_config() -> AnalyticConsonantDistanceConfig {
-        AnalyticConsonantDistanceConfig::default()
-    }
-
     fn parse(s: &str) -> Vec<Phoneme> {
         s.split_whitespace().map(|t| t.parse().unwrap()).collect()
+    }
+
+    fn vowel(s: &str) -> Vowel {
+        s.parse().unwrap()
+    }
+
+    fn consonant(s: &str) -> Consonant {
+        match s.parse::<Phoneme>().unwrap() {
+            Phoneme::Consonant(c) => c,
+            other => panic!("not a consonant: {other:?}"),
+        }
     }
 
     /// Recomputes the cost of an `align` result from its own steps, using the
@@ -1095,8 +1103,8 @@ mod tests {
     #[test]
     fn empty_vs_consonants() {
         let s = parse("M AO1 S T");
-        // consonant gap = 5 each, vowel gap = 20
-        // M(5) + AO1(20) + S(5) + T(5) = 35
+        // Aligning against nothing gaps every phoneme: three consonant
+        // indels plus one (much pricier) vowel indel.
         assert_eq!(
             scorer().distance(&[], &s),
             config().consonant_indel_penalty * 3 + config().vowel_indel_penalty
@@ -1114,13 +1122,14 @@ mod tests {
 
     #[test]
     fn adjacent_vowel_substitution() {
-        // AO1 vs OW1: adjacent on hex-graph (dist=1), same stress
-        // cost = (1 * VOWEL_DISTANCE_COEFFICIENT + 0) * VOWEL_COEFFICIENT
+        // AO1 vs OW1: adjacent on the hex-graph, same stress. The DP charges
+        // the engine's normalized distance times the vowel coefficient.
         let s1 = parse("M AO1 S T");
         let s2 = parse("M OW1 S T");
         assert_eq!(
             scorer().distance(&s1, &s2),
-            vowel_config().vowel_distance_coefficient * config().vowel_coefficient
+            VowelHexGraph::new().distance(&vowel("AO1"), &vowel("OW1"))
+                * config().vowel_coefficient
         );
     }
 
@@ -1144,30 +1153,35 @@ mod tests {
 
     #[test]
     fn with_config_controls_edit_costs() {
+        // Values sized against the engines' normalized 0-1000 scale, so that
+        // each assertion's intended edit stays the cheapest option.
         let config = RhymeDistanceConfig {
-            vowel_to_consonant_mismatch: 5,
+            vowel_to_consonant_mismatch: 500,
             vowel_coefficient: 4,
             consonant_coefficient: 4,
-            vowel_indel_penalty: 40,
-            consonant_indel_penalty: 6,
-            consonant_repeated_penalty: 2,
-            transposition_cost: 3,
-            ..RhymeDistanceConfig::default()
+            vowel_indel_penalty: 4000,
+            consonant_indel_penalty: 600,
+            consonant_repeated_penalty: 200,
+            transposition_cost: 300,
         };
         let scorer = RhymeDistanceScorer::with_config(config);
 
         assert_eq!(
             scorer.distance(&parse("AO1"), &parse("OW1")),
-            vowel_config().vowel_distance_coefficient * config.vowel_coefficient
+            VowelHexGraph::new().distance(&vowel("AO1"), &vowel("OW1")) * config.vowel_coefficient
         );
-        assert_eq!(scorer.distance(&parse("AO1"), &parse("B")), 5);
+        assert_eq!(scorer.distance(&parse("AO1"), &parse("B")), 500);
         assert_eq!(
             scorer.distance(&parse("T"), &parse("D")),
-            consonant_config().voiced_penalty * config.consonant_coefficient
+            AnalyticConsonantDistance::new().distance(&consonant("T"), &consonant("D"))
+                * config.consonant_coefficient
         );
-        assert_eq!(scorer.distance(&parse("B"), &[]), 6);
-        assert_eq!(scorer.distance(&parse("B B"), &parse("B")), 2);
-        assert_eq!(scorer.distance(&parse("M OW1 S T"), &parse("M OW1 T S")), 3);
+        assert_eq!(scorer.distance(&parse("B"), &[]), 600);
+        assert_eq!(scorer.distance(&parse("B B"), &parse("B")), 200);
+        assert_eq!(
+            scorer.distance(&parse("M OW1 S T"), &parse("M OW1 T S")),
+            300
+        );
     }
 
     #[test]
@@ -1181,7 +1195,8 @@ mod tests {
         assert_eq!(scorer.config(), config);
         assert_eq!(
             scorer.distance(&parse("T"), &parse("D")),
-            consonant_config().voiced_penalty * config.consonant_coefficient
+            AnalyticConsonantDistance::new().distance(&consonant("T"), &consonant("D"))
+                * config.consonant_coefficient
         );
     }
 
@@ -1201,25 +1216,32 @@ mod tests {
         assert_eq!(scorer.config(), rhyme_config);
         assert_eq!(scorer.vowel_config(), vowel_config);
         assert_eq!(scorer.consonant_config(), consonant_config);
+        // The updated component configs must actually drive scoring: costs
+        // match engines freshly built with the same configs.
         assert_eq!(
             scorer.distance(&parse("AO1"), &parse("OW1")),
-            vowel_config.vowel_distance_coefficient * rhyme_config.vowel_coefficient
+            VowelHexGraph::with_config(vowel_config).distance(&vowel("AO1"), &vowel("OW1"))
+                * rhyme_config.vowel_coefficient
         );
         assert_eq!(
             scorer.distance(&parse("T"), &parse("D")),
-            consonant_config.voiced_penalty * rhyme_config.consonant_coefficient
+            AnalyticConsonantDistance::with_config(consonant_config)
+                .distance(&consonant("T"), &consonant("D"))
+                * rhyme_config.consonant_coefficient
         );
     }
 
     #[test]
     fn consonant_substitution_voiced_pair() {
-        // T vs D: same place (4), voiced penalty only
+        // T vs D: same manner (Plosive), same place, differ only in voicing.
+        // The DP charges the engine's normalized distance times the
+        // consonant coefficient.
         let s1 = parse("T AE1 N");
         let s2 = parse("D AE1 N");
-        // T vs D: same manner (Plosive), place diff 0, voiced penalty 1
         assert_eq!(
             scorer().distance(&s1, &s2),
-            consonant_config().voiced_penalty * config().consonant_coefficient
+            AnalyticConsonantDistance::new().distance(&consonant("T"), &consonant("D"))
+                * config().consonant_coefficient
         );
     }
 

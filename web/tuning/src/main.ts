@@ -91,17 +91,16 @@ const CONFIG_DOCS: Record<keyof RhymeConfigDto, string> = {
 	vowel_to_consonant_mismatch:
 		"We never want to compare a vowel to a consonant, so we should give this an arbitrarily high penalty.",
 	vowel_coefficient:
-		"Vowel distance ranges from 0-9 (VowelHexGraph distance (<= 4), gets multiplied by VOWEL_DISTANCE_COEFFICIENT (2), and VOWEL_STRESS_PENALTY (1) added), consonant distance range up to 10.\n\n" +
-		'This coefficient determines "how much more important vowels are than consonants"\n\n' +
-		"TODO find the correct value for this. My instinct is that vowels should be significantly more important than consonants.",
+		"Multiplier on normalized vowel distances (0-1000).\n\n" +
+		'Together with the consonant coefficient this determines "how much more important vowels are than consonants": the default 8:1 comes from experimentation — a much higher ratio than I would have guessed from the armchair. It is the minimum with which we can differentiate between distant slant rhymes and words that should not rhyme.',
 	consonant_coefficient:
-		"This coefficient determines how much consonant differences contribute to rhyme distance.",
+		"Multiplier on normalized consonant distances (0-1000): how much consonant differences contribute to rhyme distance.",
 	vowel_indel_penalty:
 		"Ideally, we should be comparing equal syllable slices, in which case, the insertion/deletion penalty for vowels should be arbitrarily high, as we always want the vowels to align.\n\n" +
 		"TODO: allow comparing different sized syllable slices? (in which case I think what you want to do is... find the smaller-sized slice of the larger one with the lowest distance score)",
 	consonant_indel_penalty:
 		"Insertion/deletion penalty for consonants\n\n" +
-		"This should be greater or equal to half of the default unrelated consonant penalty, otherwise it's cheaper to insert/delete a consonant than to compare unrelated consonants.\n\n" +
+		"This should be greater or equal to half the cost of substituting maximally distant consonants (1000 * consonant_coefficient), otherwise it's cheaper to insert/delete a consonant than to compare unrelated consonants.\n\n" +
 		'TODO: Should all inserted consonants have the same insertion penalty? Are some consonants "lighter" than others?',
 	consonant_repeated_penalty:
 		'"Reapeated" consonants should be penalized less than standard INDEL penalty, for example when comparing TEN DRY <=> TEND DRY (bad example, you get the idea)\n\n' +

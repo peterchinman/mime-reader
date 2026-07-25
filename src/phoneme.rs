@@ -30,6 +30,35 @@ pub(crate) enum ConsonantPhoneme {
     T,
 }
 
+impl ConsonantPhoneme {
+    pub(crate) const ALL: [Self; 24] = [
+        Self::CH,
+        Self::JH,
+        Self::R,
+        Self::W,
+        Self::Y,
+        Self::DH,
+        Self::F,
+        Self::HH,
+        Self::S,
+        Self::SH,
+        Self::TH,
+        Self::V,
+        Self::Z,
+        Self::ZH,
+        Self::L,
+        Self::M,
+        Self::N,
+        Self::NG,
+        Self::B,
+        Self::D,
+        Self::G,
+        Self::K,
+        Self::P,
+        Self::T,
+    ];
+}
+
 impl std::str::FromStr for ConsonantPhoneme {
     type Err = ParseArpabetError;
 

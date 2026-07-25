@@ -39,7 +39,7 @@ fn bench_find_rhymes(c: &mut Criterion) {
                 analyzer
                     .find_rhymes(
                         black_box(target),
-                        0.0..=1.0,
+                        0.0..=100.0,
                         RhymeNormalization::PerMeanPhoneme,
                         Compare::RhymingPart,
                     )
@@ -55,7 +55,7 @@ fn bench_find_rhymes(c: &mut Criterion) {
             analyzer
                 .find_rhymes(
                     black_box("cat"),
-                    0.0..=1.0,
+                    0.0..=100.0,
                     RhymeNormalization::PerMeanPhoneme,
                     Compare::WholeWord,
                 )

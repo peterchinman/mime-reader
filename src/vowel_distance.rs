@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::NORMALIZED_DISTANCE_MAX;
 use crate::phoneme::{Vowel, VowelPhoneme};
 use VowelPhoneme::*;
 
@@ -68,9 +69,16 @@ impl Default for VowelHexGraphConfig {
 pub struct VowelHexGraph {
     distances: HashMap<(VowelPhoneme, VowelPhoneme), u32>,
     config: VowelHexGraphConfig,
+    /// The largest raw (pre-normalization) distance this graph can produce
+    /// under its config: the graph's diameter times the distance coefficient,
+    /// plus the stress penalty. Denominator for normalization.
+    max_raw: u32,
 }
 
 pub trait VowelDistanceScorer {
+    /// Distance on the shared normalized scale: `0` (identical) through
+    /// [`NORMALIZED_DISTANCE_MAX`] (the most distant vowel pair this engine
+    /// can produce).
     fn distance(&self, v1: &Vowel, v2: &Vowel) -> u32;
 }
 
@@ -215,7 +223,15 @@ impl VowelHexGraph {
                 distances.insert((a, b), shortest_path_distance(&adj, a, b));
             }
         }
-        VowelHexGraph { distances, config }
+        // Derived from the actual table
+        let max_raw = distances.values().max().copied().unwrap_or(0)
+            * config.vowel_distance_coefficient
+            + config.vowel_stress_penalty;
+        VowelHexGraph {
+            distances,
+            config,
+            max_raw,
+        }
     }
 
     pub fn new() -> Self {
@@ -234,6 +250,17 @@ impl VowelHexGraph {
         self.distances[&(v1, v2)]
     }
 
+    /// Scales a raw distance onto `0..=NORMALIZED_DISTANCE_MAX`
+    /// (round-to-nearest). Raw distances are at most `max_raw` by
+    /// construction, so the result never exceeds the scale.
+    fn normalize(&self, raw: u32) -> u32 {
+        if self.max_raw == 0 {
+            return 0;
+        }
+        ((u64::from(raw) * u64::from(NORMALIZED_DISTANCE_MAX) + u64::from(self.max_raw / 2))
+            / u64::from(self.max_raw)) as u32
+    }
+
     pub fn distance(&self, v1: &Vowel, v2: &Vowel) -> u32 {
         if v1 == v2 {
             return 0;
@@ -245,12 +272,13 @@ impl VowelHexGraph {
             0
         };
 
-        if v1.phoneme == v2.phoneme {
+        let raw = if v1.phoneme == v2.phoneme {
             stress_penalty
         } else {
             self.phoneme_distance(v1.phoneme, v2.phoneme) * self.config.vowel_distance_coefficient
                 + stress_penalty
-        }
+        };
+        self.normalize(raw)
     }
 }
 
@@ -286,6 +314,12 @@ mod tests {
         s.parse().unwrap()
     }
 
+    /// The expected normalized distance for a raw (pre-scaling) distance
+    /// under the default config.
+    fn norm(raw: u32) -> u32 {
+        graph().normalize(raw)
+    }
+
     // --- VowelHexGraph::distance ---
 
     #[test]
@@ -297,7 +331,7 @@ mod tests {
     fn vowel_distance_same_vowel_different_stress() {
         assert_eq!(
             graph().distance(&v("AO1"), &v("AO0")),
-            config().vowel_stress_penalty
+            norm(config().vowel_stress_penalty)
         );
     }
 
@@ -306,7 +340,7 @@ mod tests {
         // AO and OW are adjacent on the hex-graph (dist=1)
         assert_eq!(
             graph().distance(&v("AO1"), &v("OW1")),
-            config().vowel_distance_coefficient
+            norm(config().vowel_distance_coefficient)
         );
     }
 
@@ -314,7 +348,7 @@ mod tests {
     fn vowel_distance_adjacent_different_stress() {
         assert_eq!(
             graph().distance(&v("AO1"), &v("OW0")),
-            config().vowel_distance_coefficient + config().vowel_stress_penalty
+            norm(config().vowel_distance_coefficient + config().vowel_stress_penalty)
         );
     }
 
@@ -323,7 +357,7 @@ mod tests {
         // UW and IH are distance 2 on the hex-graph
         assert_eq!(
             graph().distance(&v("UW1"), &v("IH1")),
-            2 * config().vowel_distance_coefficient
+            norm(2 * config().vowel_distance_coefficient)
         );
     }
 
@@ -331,8 +365,26 @@ mod tests {
     fn vowel_distance_weighted_edge() {
         assert_eq!(
             graph().distance(&v("ER1"), &v("AH1")),
-            config().er_ah_distance * config().vowel_distance_coefficient
+            norm(config().er_ah_distance * config().vowel_distance_coefficient)
         );
+    }
+
+    /// The normalized-scale contract: every pair stays within
+    /// `0..=NORMALIZED_DISTANCE_MAX` and the most distant pair (graph
+    /// diameter plus a stress mismatch) lands exactly on the top of the scale.
+    #[test]
+    fn distances_span_the_normalized_scale() {
+        let mut max = 0;
+        for a in VowelPhoneme::ALL {
+            for b in VowelPhoneme::ALL {
+                for (s1, s2) in [("1", "1"), ("1", "0")] {
+                    let d = graph().distance(&v(&format!("{a}{s1}")), &v(&format!("{b}{s2}")));
+                    assert!(d <= NORMALIZED_DISTANCE_MAX, "{a} vs {b}: {d}");
+                    max = max.max(d);
+                }
+            }
+        }
+        assert_eq!(max, NORMALIZED_DISTANCE_MAX);
     }
 
     #[test]
@@ -347,7 +399,7 @@ mod tests {
     fn graph_distance_includes_stress_penalty() {
         assert_eq!(
             graph().distance(&v("AO1"), &v("OW0")),
-            config().vowel_distance_coefficient + config().vowel_stress_penalty
+            norm(config().vowel_distance_coefficient + config().vowel_stress_penalty)
         );
     }
 
@@ -359,10 +411,14 @@ mod tests {
             er_ah_distance: 3,
         });
 
-        assert_eq!(graph.distance(&v("AO1"), &v("AO0")), 5);
-        assert_eq!(graph.distance(&v("AO1"), &v("OW1")), 7);
-        assert_eq!(graph.distance(&v("AO1"), &v("OW0")), 12);
-        assert_eq!(graph.distance(&v("ER1"), &v("AH1")), 21);
+        assert_eq!(graph.distance(&v("AO1"), &v("AO0")), graph.normalize(5));
+        assert_eq!(graph.distance(&v("AO1"), &v("OW1")), graph.normalize(7));
+        assert_eq!(graph.distance(&v("AO1"), &v("OW0")), graph.normalize(12));
+        assert_eq!(graph.distance(&v("ER1"), &v("AH1")), graph.normalize(21));
+        // The config changes the raw geometry, so the normalization
+        // denominator must track it: raw 12 out of a diameter of
+        // 5 (graph) * 7 (coefficient) + 5 (stress) = 40.
+        assert_eq!(graph.distance(&v("AO1"), &v("OW0")), 300);
     }
 
     #[test]

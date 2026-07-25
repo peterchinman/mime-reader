@@ -1,3 +1,9 @@
+/// The shared scale both phoneme-distance engines normalize to: a
+/// [`VowelDistanceScorer`] or [`ConsonantDistanceScorer`] returns `0`
+/// (identical) through `NORMALIZED_DISTANCE_MAX` (the most distant pair that
+/// engine can produce under its config).
+pub const NORMALIZED_DISTANCE_MAX: u32 = 1000;
+
 pub mod analyzer;
 pub mod consonant_distance;
 pub mod dictionary;

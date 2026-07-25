@@ -24,7 +24,10 @@ pub struct RhymeComparisonConfig {
 impl Default for RhymeComparisonConfig {
     fn default() -> Self {
         Self {
-            threshold: 10.0,
+            // Distances are on the engines' normalized 0-1000 scale (see
+            // `crate::NORMALIZED_DISTANCE_MAX`), divided by the normalization
+            // denominator (per mean phoneme by default).
+            threshold: 1000.0,
             normalization: RhymeNormalization::default(),
         }
     }

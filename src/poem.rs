@@ -364,7 +364,7 @@ mod tests {
         rhyme_scheme: Option<&str>,
     ) -> Poem {
         let meter_scheme = meter_scheme.map(|scheme| scheme.parse().unwrap());
-        let rhyme_scheme = rhyme_scheme.map(|scheme| RhymeScheme::new(scheme, 0.5).unwrap());
+        let rhyme_scheme = rhyme_scheme.map(|scheme| RhymeScheme::new(scheme, 50.0).unwrap());
         Poem::new(lines, meter_scheme, rhyme_scheme, dict())
     }
 
