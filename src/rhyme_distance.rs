@@ -16,9 +16,9 @@ pub struct RhymeDistanceConfig {
     /// Multiplier on normalized vowel distances (0-1000).
     ///
     /// Together with `consonant_coefficient` this determines "how much more
-    /// important vowels are than consonants": the default 8:1 comes from
+    /// important vowels are than consonants": the default 7:1 comes from
     /// experimentation (see web/tuning) — a much higher ratio than I would
-    /// have guessed from the armchair.
+    /// have guessed from the armchair. This is the value that seems to maximize our ability to differntiate the different segments of aural rhyme differences.
     pub vowel_coefficient: u32,
     /// Multiplier on normalized consonant distances (0-1000): how much
     /// consonant differences contribute to rhyme distance.
@@ -55,7 +55,7 @@ impl Default for RhymeDistanceConfig {
     fn default() -> Self {
         Self {
             vowel_to_consonant_mismatch: 100_000,
-            vowel_coefficient: 8,
+            vowel_coefficient: 7,
             consonant_coefficient: 1,
             vowel_indel_penalty: 100_000,
             consonant_indel_penalty: 500,

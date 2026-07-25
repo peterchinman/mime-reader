@@ -17,7 +17,7 @@ impl Default for VowelHexGraphConfig {
     fn default() -> Self {
         Self {
             vowel_stress_penalty: 1,
-            vowel_distance_coefficient: 3,
+            vowel_distance_coefficient: 5,
             er_ah_distance: 3,
         }
     }
