@@ -7,9 +7,9 @@ use tsify::Tsify;
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    AnalyticConsonantDistanceConfig, CmuDictionary, MeterScheme, OwnedAlignmentStep,
-    RhymeComparisonConfig, RhymeDistanceConfig, RhymeDistanceScorer, RhymeNormalization,
-    RhymeScheme, TranspositionDirection, VowelHexGraphConfig,
+    AnalyticConsonantDistanceConfig, Analyzer, CmuDictionary, Compare, MeterScheme,
+    OwnedAlignmentStep, RhymeComparisonConfig, RhymeDistanceConfig, RhymeDistanceScorer,
+    RhymeMatch, RhymeNormalization, RhymeScheme, TranspositionDirection, VowelHexGraphConfig,
     meter::{MeterMatchResult, MeterMismatch, SyllableStress},
     poem::{MeterAnalysis, Poem, PoemLineAnalysis, RhymeAnalysis},
     rhyme_scheme::RhymeCheckResult,
@@ -124,6 +124,36 @@ impl WasmAnalyzer {
     #[wasm_bindgen(js_name = setConsonantConfig)]
     pub fn set_consonant_config(&mut self, config: ConsonantConfigDto) {
         Rc::make_mut(&mut self.scorer).set_consonant_config(config.into());
+    }
+
+    /// Scans the dictionary for words whose best pairing with `target` has a
+    /// normalized distance in `min_distance..=max_distance`, sorted nearest
+    /// first.
+    ///
+    /// `normalization` defaults to per-mean-phoneme and `compare` to the
+    /// rhyming part. Unlike poems, which keep the scorer they were opened
+    /// with, each call uses the analyzer's *current* rhyme configs.
+    #[wasm_bindgen(js_name = findRhymes)]
+    pub fn find_rhymes(
+        &self,
+        target: &str,
+        min_distance: f32,
+        max_distance: f32,
+        normalization: Option<RhymeNormalizationDto>,
+        compare: Option<CompareDto>,
+    ) -> Result<Vec<RhymeMatchDto>, JsError> {
+        // A transient core Analyzer borrowing this analyzer's shared state.
+        // The scorer clone is a few small tables — noise next to the scan.
+        let analyzer = Analyzer::new(&*self.dict, (*self.scorer).clone());
+        let matches = analyzer.find_rhymes(
+            target,
+            min_distance..=max_distance,
+            normalization
+                .map(RhymeNormalization::from)
+                .unwrap_or_default(),
+            compare.map(Compare::from).unwrap_or(Compare::RhymingPart),
+        )?;
+        Ok(matches.iter().map(RhymeMatchDto::from).collect())
     }
 }
 
@@ -363,11 +393,11 @@ impl From<RhymeAnalysis<'_>> for RhymeDto {
                     leader_index: *leader_index,
                     passed: *passed,
                     distance: RhymeDistanceDto {
-                        raw_distance: distance.raw_distance,
+                        raw_distance: distance.score.raw_distance,
                         syllable_count: distance.syllable_count,
                         normalization: distance.normalization.into(),
-                        normalization_denominator: distance.normalization_denominator,
-                        normalized_distance: distance.normalized_distance,
+                        normalization_denominator: distance.score.normalization_denominator,
+                        normalized_distance: distance.score.normalized_distance,
                     },
                 },
             },
@@ -452,9 +482,63 @@ impl From<&OwnedAlignmentStep> for AlignmentStepDto {
     }
 }
 
+// ---- find_rhymes -----------------------------------------------------------
+
+/// Which portion of the target word a dictionary scan compares against.
+/// Mirrors [`Compare`].
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(rename_all = "snake_case")]
+pub enum CompareDto {
+    WholeWord,
+    RhymingPart,
+}
+
+impl From<CompareDto> for Compare {
+    fn from(compare: CompareDto) -> Self {
+        match compare {
+            CompareDto::WholeWord => Self::WholeWord,
+            CompareDto::RhymingPart => Self::RhymingPart,
+        }
+    }
+}
+
+/// One scan result. Mirrors [`RhymeMatch`], with the borrowed word and
+/// pronunciation owned for the JS boundary.
+#[derive(Serialize, Debug, Tsify)]
+#[tsify(into_wasm_abi)]
+pub struct RhymeMatchDto {
+    word: String,
+    /// ARPAbet phonemes of the pronunciation that produced the score.
+    pronunciation: Vec<String>,
+    score: RhymePairScoreDto,
+}
+
+#[derive(Serialize, Debug, Tsify)]
+pub struct RhymePairScoreDto {
+    raw_distance: u32,
+    normalization_denominator: f32,
+    normalized_distance: f32,
+}
+
+impl From<&RhymeMatch<'_>> for RhymeMatchDto {
+    fn from(m: &RhymeMatch<'_>) -> Self {
+        RhymeMatchDto {
+            word: m.word.to_string(),
+            pronunciation: m.pronunciation.iter().map(ToString::to_string).collect(),
+            score: RhymePairScoreDto {
+                raw_distance: m.score.raw_distance,
+                normalization_denominator: m.score.normalization_denominator,
+                normalized_distance: m.score.normalized_distance,
+            },
+        }
+    }
+}
+
 // ---- Config (round-trips both directions: get + set) ----------------------
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(rename_all = "snake_case")]
 pub enum RhymeNormalizationDto {
     None,
@@ -905,5 +989,30 @@ mod tests {
             "raising vowel_coefficient should raise raw distance for a genuine vowel \
              mismatch (cat/cot): before={distance_before:?}, after={distance_after:?}"
         );
+    }
+
+    // ---- find_rhymes --------------------------------------------------------
+
+    #[wasm_bindgen_test]
+    fn find_rhymes_returns_owned_sorted_matches() {
+        let ws = analyzer();
+        // Defaults (per-mean-phoneme, rhyming part); 0..=0 admits only
+        // perfect rhymes.
+        let matches = ws.find_rhymes("cat", 0.0, 0.0, None, None).unwrap();
+
+        let hat = matches
+            .iter()
+            .find(|m| m.word == "hat")
+            .expect("HAT is a perfect rhyme for CAT");
+        assert_eq!(hat.score.raw_distance, 0);
+        assert_eq!(hat.score.normalized_distance, 0.0);
+        // The pronunciation crosses the boundary as owned ARPAbet strings.
+        assert_eq!(hat.pronunciation, ["HH", "AE1", "T"]);
+    }
+
+    #[wasm_bindgen_test]
+    fn find_rhymes_unknown_word_surfaces_as_error() {
+        let ws = analyzer();
+        assert!(ws.find_rhymes("xyzzy", 0.0, 1.0, None, None).is_err());
     }
 }

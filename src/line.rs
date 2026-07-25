@@ -90,6 +90,7 @@ impl Line {
 mod tests {
     use super::*;
     use crate::CmuDictionary;
+    use crate::dictionary::Pronunciations;
     use std::sync::OnceLock;
 
     const DICT_PATH: &str = "data/CMUdict/cmudict-0.7b";
@@ -103,7 +104,7 @@ mod tests {
     struct TestDictionary;
 
     impl PronouncingDictionary for TestDictionary {
-        fn lookup(&self, word: &str) -> Option<Vec<Box<[Phoneme]>>> {
+        fn lookup(&self, word: &str) -> Option<Pronunciations> {
             if word != "gato" {
                 return None;
             }
@@ -115,6 +116,9 @@ mod tests {
                     .collect::<Vec<_>>()
                     .into_boxed_slice(),
             ])
+        }
+        fn entries(&self) -> impl Iterator<Item = (&str, &[Box<[Phoneme]>])> {
+            std::iter::empty()
         }
     }
 

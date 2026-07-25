@@ -1,3 +1,4 @@
+pub mod analyzer;
 pub mod consonant_distance;
 pub mod dictionary;
 pub mod error;
@@ -12,6 +13,7 @@ pub mod vowel_distance;
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 
+pub use analyzer::{Analyzer, Compare, RhymeMatch};
 pub use consonant_distance::{
     AnalyticConsonantDistance, AnalyticConsonantDistanceConfig, ConsonantDistanceScorer,
 };
@@ -26,9 +28,10 @@ pub use meter::{
     SyllableStress,
 };
 pub use phoneme::{Consonant, Phoneme, Stress, Vowel, VowelPhoneme};
+pub use poem::Poem;
 pub use rhyme_distance::{
     AlignmentStep, OwnedAlignmentStep, RhymeDistanceConfig, RhymeDistanceOutput,
-    RhymeDistanceScorer, TranspositionDirection,
+    RhymeDistanceScorer, RhymeNormalization, RhymePairScore, TranspositionDirection,
 };
-pub use rhyme_scheme::{RhymeComparisonConfig, RhymeNormalization, RhymeScheme};
+pub use rhyme_scheme::{RhymeComparisonConfig, RhymeScheme};
 pub use vowel_distance::{VowelDistanceScorer, VowelHexGraph, VowelHexGraphConfig};

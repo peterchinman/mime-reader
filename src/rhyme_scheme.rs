@@ -1,40 +1,18 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    Line, OwnedAlignmentStep, RhymeDistanceScorer,
+    Line, OwnedAlignmentStep, RhymeDistanceScorer, RhymeNormalization, RhymePairScore,
     consonant_distance::ConsonantDistanceScorer,
     error::{ParseRhymeError, RhymeCheckError, UnknownWordError},
     line::{WordData, WordEntry},
     phoneme::{Phoneme, RhymingPart, get_last_n_syllables, get_rhyming_part},
+    rhyme_distance::score_rhyme_pair,
     vowel_distance::VowelDistanceScorer,
 };
 
 pub struct RhymeScheme {
     scheme: Vec<SchemeRole>,
     comparison_config: RhymeComparisonConfig,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum RhymeNormalization {
-    None,
-    PerSyllable,
-    #[default]
-    PerMeanPhoneme,
-}
-
-impl RhymeNormalization {
-    fn denominator(
-        self,
-        syllable_count: usize,
-        leader_phoneme_count: usize,
-        target_phoneme_count: usize,
-    ) -> f32 {
-        match self {
-            Self::None => 1.0,
-            Self::PerSyllable => syllable_count as f32,
-            Self::PerMeanPhoneme => (leader_phoneme_count + target_phoneme_count) as f32 / 2.0,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -107,11 +85,10 @@ pub enum ResolvedLineRole<'a> {
 
 #[derive(Debug)]
 pub struct RhymeDistance {
-    pub raw_distance: u32,
+    /// The winning pair's measurement (raw distance plus normalization).
+    pub score: RhymePairScore,
     pub syllable_count: usize,
     pub normalization: RhymeNormalization,
-    pub normalization_denominator: f32,
-    pub normalized_distance: f32,
     /// Step-by-step alignment of the winning comparison: side `a` is the
     /// leader rhyming part, side `b` the target slice it was compared against
     /// (which may span multiple words when the target's last word has fewer
@@ -138,11 +115,9 @@ impl RhymeDistance {
 /// comparison produced the measurement — and deliberately doesn't participate.
 impl PartialEq for RhymeDistance {
     fn eq(&self, other: &Self) -> bool {
-        self.raw_distance == other.raw_distance
+        self.score == other.score
             && self.syllable_count == other.syllable_count
             && self.normalization == other.normalization
-            && self.normalization_denominator == other.normalization_denominator
-            && self.normalized_distance == other.normalized_distance
     }
 }
 
@@ -273,7 +248,7 @@ impl RhymeScheme {
                     scorer,
                     self.comparison_config.normalization,
                 )?;
-                let passed = distance.normalized_distance <= self.comparison_config.threshold;
+                let passed = distance.score.normalized_distance <= self.comparison_config.threshold;
                 Ok(RhymeCheckResult::Follower {
                     leader_index,
                     distance,
@@ -358,6 +333,99 @@ fn last_n_syllables_of_line(
     Ok(results)
 }
 
+/// One scoreable pairing: a possible rhyming part of the leader's last word,
+/// alongside one same-sized ending of the target line.
+struct RhymeCandidate<'a> {
+    syllable_count: usize,
+    leader_part: &'a [Phoneme],
+    target_part: Vec<Phoneme>,
+}
+
+/// Collects every candidate pairing between the leader's possible rhyming
+/// parts and the target line's same-sized endings, across all pronunciation
+/// combinations of both.
+fn rhyme_candidates<'a>(
+    leader: &'a Line,
+    target: &Line,
+) -> Result<Vec<RhymeCandidate<'a>>, RhymeCheckError> {
+    let leader_parts = rhyming_parts_of_last_word(leader)?;
+    let mut candidates = Vec::new();
+
+    for rp_leader in leader_parts
+        .iter()
+        .filter(|rp_leader| rp_leader.syllable_count > 0)
+    {
+        let target_parts = last_n_syllables_of_line(&target.words, rp_leader.syllable_count)?;
+
+        for target_part in target_parts {
+            candidates.push(RhymeCandidate {
+                syllable_count: rp_leader.syllable_count,
+                leader_part: rp_leader.phonemes,
+                target_part,
+            });
+        }
+    }
+
+    Ok(candidates)
+}
+
+/// Scores each candidate and returns the one with the minimal normalized
+/// distance, with its traceback alignment.
+fn best_rhyme_distance<V, C>(
+    candidates: Vec<RhymeCandidate<'_>>,
+    scorer: &RhymeDistanceScorer<V, C>,
+    normalization: RhymeNormalization,
+) -> Result<RhymeDistance, RhymeCheckError>
+where
+    V: VowelDistanceScorer,
+    C: ConsonantDistanceScorer,
+{
+    // The winning candidate plus its measurement. The candidate's slices only
+    // exist to run the traceback below; the returned RhymeDistance carries
+    // them inside `alignment` instead.
+    struct Scored<'a> {
+        candidate: RhymeCandidate<'a>,
+        score: RhymePairScore,
+    }
+
+    let mut min: Option<Scored> = None;
+
+    for candidate in candidates {
+        let score = score_rhyme_pair(
+            scorer,
+            normalization,
+            candidate.syllable_count,
+            candidate.leader_part,
+            &candidate.target_part,
+        );
+
+        let is_new_min = min
+            .as_ref()
+            .is_none_or(|current| score.normalized_distance < current.score.normalized_distance);
+        if is_new_min {
+            min = Some(Scored { candidate, score });
+        }
+    }
+
+    let winner = min.ok_or(RhymeCheckError::NotEnoughSyllablesInTarget)?;
+
+    // Candidates are scored with the cheap `distance()` (no edit recording);
+    // the traceback runs once, for the winning pair only.
+    let alignment = scorer
+        .align(winner.candidate.leader_part, &winner.candidate.target_part)
+        .alignment()
+        .iter()
+        .map(|step| OwnedAlignmentStep::from(*step))
+        .collect();
+
+    Ok(RhymeDistance {
+        score: winner.score,
+        syllable_count: winner.candidate.syllable_count,
+        normalization,
+        alignment,
+    })
+}
+
 /// Compares (all of) the (possible) rhyming part(s) of the last word of Leader Line against the same sized portion of Target Line.
 /// Returns the minimal normalized distance between the two sections.
 fn compare_rhyming_parts_with_normalization<V, C>(
@@ -370,74 +438,7 @@ where
     V: VowelDistanceScorer,
     C: ConsonantDistanceScorer,
 {
-    // The winning candidate: measurement plus the two slices it came from.
-    // The slices only exist to run the traceback below; the returned
-    // RhymeDistance carries them inside `alignment` instead.
-    struct Candidate {
-        raw_distance: u32,
-        syllable_count: usize,
-        normalization_denominator: f32,
-        normalized_distance: f32,
-        leader_part: Vec<Phoneme>,
-        target_part: Vec<Phoneme>,
-    }
-
-    let leader_parts = rhyming_parts_of_last_word(leader)?;
-
-    let mut min: Option<Candidate> = None;
-
-    for rp_leader in leader_parts
-        .iter()
-        .filter(|rp_leader| rp_leader.syllable_count > 0)
-    {
-        let syllable_count = rp_leader.syllable_count;
-
-        let target_parts = last_n_syllables_of_line(&target.words, syllable_count)?;
-
-        for target_phonemes in target_parts {
-            let raw_distance = scorer.distance(rp_leader.phonemes, &target_phonemes);
-            let normalization_denominator = normalization.denominator(
-                syllable_count,
-                rp_leader.phonemes.len(),
-                target_phonemes.len(),
-            );
-            let normalized_distance = raw_distance as f32 / normalization_denominator;
-
-            let is_new_min = min
-                .as_ref()
-                .is_none_or(|current| normalized_distance < current.normalized_distance);
-            if is_new_min {
-                min = Some(Candidate {
-                    raw_distance,
-                    syllable_count,
-                    normalization_denominator,
-                    normalized_distance,
-                    leader_part: rp_leader.phonemes.to_vec(),
-                    target_part: target_phonemes,
-                });
-            }
-        }
-    }
-
-    let winner = min.ok_or(RhymeCheckError::NotEnoughSyllablesInTarget)?;
-
-    // Candidates are scored with the cheap `distance()` (no edit recording);
-    // the traceback runs once, for the winning pair only.
-    let alignment = scorer
-        .align(&winner.leader_part, &winner.target_part)
-        .alignment()
-        .iter()
-        .map(|step| OwnedAlignmentStep::from(*step))
-        .collect();
-
-    Ok(RhymeDistance {
-        raw_distance: winner.raw_distance,
-        syllable_count: winner.syllable_count,
-        normalization,
-        normalization_denominator: winner.normalization_denominator,
-        normalized_distance: winner.normalized_distance,
-        alignment,
-    })
+    best_rhyme_distance(rhyme_candidates(leader, target)?, scorer, normalization)
 }
 
 #[cfg(test)]
@@ -510,22 +511,23 @@ mod tests {
 
     fn zero_distance(syllable_count: usize) -> RhymeDistance {
         RhymeDistance {
-            raw_distance: 0,
+            score: RhymePairScore {
+                raw_distance: 0,
+                normalization_denominator: syllable_count as f32,
+                normalized_distance: 0.0,
+            },
             syllable_count,
             normalization: RhymeNormalization::PerSyllable,
-            normalization_denominator: syllable_count as f32,
-            normalized_distance: 0.0,
             // Equality ignores provenance, so expected values leave it empty.
             alignment: Vec::new(),
         }
     }
 
     fn default_zero_distance(syllable_count: usize, phoneme_count: usize) -> RhymeDistance {
-        RhymeDistance {
-            normalization: RhymeNormalization::default(),
-            normalization_denominator: phoneme_count as f32,
-            ..zero_distance(syllable_count)
-        }
+        let mut distance = zero_distance(syllable_count);
+        distance.normalization = RhymeNormalization::default();
+        distance.score.normalization_denominator = phoneme_count as f32;
+        distance
     }
 
     // --- rhyming_parts_of_last_word ---
@@ -676,13 +678,6 @@ mod tests {
     // --- compare_rhyming_parts ---
 
     #[test]
-    fn normalization_denominators_match_their_units() {
-        assert_eq!(RhymeNormalization::None.denominator(2, 4, 5), 1.0);
-        assert_eq!(RhymeNormalization::PerSyllable.denominator(2, 4, 5), 2.0);
-        assert_eq!(RhymeNormalization::PerMeanPhoneme.denominator(2, 4, 5), 4.5);
-    }
-
-    #[test]
     fn compare_rhyming_parts_identical_words_score_zero() {
         let a = Line::new("cat", dict());
         let b = Line::new("cat", dict());
@@ -741,7 +736,7 @@ mod tests {
         let non_rhyme = Line::new("hello", dict());
         let rhyme_score = compare_rhyming_parts(&cat, &hat, scorer()).unwrap();
         let non_rhyme_score = compare_rhyming_parts(&cat, &non_rhyme, scorer()).unwrap();
-        assert!(rhyme_score.normalized_distance < non_rhyme_score.normalized_distance);
+        assert!(rhyme_score.score.normalized_distance < non_rhyme_score.score.normalized_distance);
     }
 
     #[test]

@@ -4,24 +4,33 @@ use std::path::Path;
 use crate::error::CmuDictionaryError;
 use crate::phoneme::Phoneme;
 
+pub type Pronunciations = Vec<Box<[Phoneme]>>;
+
 pub trait PronouncingDictionary {
-    fn lookup(&self, word: &str) -> Option<Vec<Box<[Phoneme]>>>;
+    fn lookup(&self, word: &str) -> Option<Pronunciations>;
+    fn entries(&self) -> impl Iterator<Item = (&str, &[Box<[Phoneme]>])>;
 }
 
 impl<T: PronouncingDictionary + ?Sized> PronouncingDictionary for &T {
-    fn lookup(&self, word: &str) -> Option<Vec<Box<[Phoneme]>>> {
+    fn lookup(&self, word: &str) -> Option<Pronunciations> {
         (**self).lookup(word)
+    }
+    fn entries(&self) -> impl Iterator<Item = (&str, &[Box<[Phoneme]>])> {
+        (**self).entries()
     }
 }
 
 impl<T: PronouncingDictionary + ?Sized> PronouncingDictionary for Box<T> {
-    fn lookup(&self, word: &str) -> Option<Vec<Box<[Phoneme]>>> {
+    fn lookup(&self, word: &str) -> Option<Pronunciations> {
         (**self).lookup(word)
+    }
+    fn entries(&self) -> impl Iterator<Item = (&str, &[Box<[Phoneme]>])> {
+        (**self).entries()
     }
 }
 
 pub struct CmuDictionary {
-    entries: HashMap<String, Vec<Box<[Phoneme]>>>,
+    entries: HashMap<String, Pronunciations>,
 }
 
 impl CmuDictionary {
@@ -33,7 +42,7 @@ impl CmuDictionary {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, CmuDictionaryError> {
         let content = bytes.iter().map(|&b| b as char).collect::<String>();
 
-        let mut entries: HashMap<String, Vec<Box<[Phoneme]>>> = HashMap::new();
+        let mut entries: HashMap<String, Pronunciations> = HashMap::new();
 
         for line in content.lines() {
             if line.starts_with(";;;") {
@@ -65,14 +74,23 @@ impl CmuDictionary {
         Ok(CmuDictionary { entries })
     }
 
-    pub fn lookup(&self, word: &str) -> Option<Vec<Box<[Phoneme]>>> {
+    pub fn lookup(&self, word: &str) -> Option<Pronunciations> {
         self.entries.get(&word.to_lowercase()).cloned()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &[Box<[Phoneme]>])> {
+        self.entries
+            .iter()
+            .map(|(word, pronunciations)| (word.as_str(), pronunciations.as_slice()))
     }
 }
 
 impl PronouncingDictionary for CmuDictionary {
-    fn lookup(&self, word: &str) -> Option<Vec<Box<[Phoneme]>>> {
+    fn lookup(&self, word: &str) -> Option<Pronunciations> {
         CmuDictionary::lookup(self, word)
+    }
+    fn entries(&self) -> impl Iterator<Item = (&str, &[Box<[Phoneme]>])> {
+        CmuDictionary::iter(self)
     }
 }
 

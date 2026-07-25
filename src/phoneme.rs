@@ -344,7 +344,7 @@ impl std::fmt::Display for Phoneme {
 
 // --- Phoneme Utilities ---
 
-fn get_syllable_count(phonemes: &[Phoneme]) -> usize {
+pub fn get_syllable_count(phonemes: &[Phoneme]) -> usize {
     phonemes
         .iter()
         .filter(|p| matches!(p, Phoneme::Vowel(_)))

@@ -678,6 +678,65 @@ impl Default for RhymeDistanceScorer<VowelHexGraph, AnalyticConsonantDistance> {
     }
 }
 
+/// How a raw rhyme distance is scaled so that scores are comparable across
+/// rhyming parts of different lengths.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RhymeNormalization {
+    None,
+    PerSyllable,
+    #[default]
+    PerMeanPhoneme,
+}
+
+impl RhymeNormalization {
+    pub fn denominator(
+        self,
+        syllable_count: usize,
+        leader_phoneme_count: usize,
+        target_phoneme_count: usize,
+    ) -> f32 {
+        match self {
+            Self::None => 1.0,
+            Self::PerSyllable => syllable_count as f32,
+            Self::PerMeanPhoneme => (leader_phoneme_count + target_phoneme_count) as f32 / 2.0,
+        }
+    }
+}
+
+/// The measurement half of a rhyme comparison: the raw DP distance of one
+/// (leader part, target part) pair, plus its normalization.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RhymePairScore {
+    pub raw_distance: u32,
+    pub normalization_denominator: f32,
+    pub normalized_distance: f32,
+}
+
+/// Scores one pair of phoneme slices. This is the single definition of
+/// "normalized rhyme distance": both the poem checker
+/// (`rhyme_scheme::best_rhyme_distance`) and dictionary-wide scans
+/// (`Analyzer::find_rhymes`) go through it.
+pub(crate) fn score_rhyme_pair<V, C>(
+    scorer: &RhymeDistanceScorer<V, C>,
+    normalization: RhymeNormalization,
+    syllable_count: usize,
+    leader_part: &[Phoneme],
+    target_part: &[Phoneme],
+) -> RhymePairScore
+where
+    V: VowelDistanceScorer,
+    C: ConsonantDistanceScorer,
+{
+    let raw_distance = scorer.distance(leader_part, target_part);
+    let normalization_denominator =
+        normalization.denominator(syllable_count, leader_part.len(), target_part.len());
+    RhymePairScore {
+        raw_distance,
+        normalization_denominator,
+        normalized_distance: raw_distance as f32 / normalization_denominator,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1324,5 +1383,12 @@ mod tests {
         let s1 = parse("M AO1 S T");
         let s2 = parse("B OW1 T");
         assert_eq!(scorer().distance(&s1, &s2), scorer().distance(&s2, &s1));
+    }
+
+    #[test]
+    fn normalization_denominators_match_their_units() {
+        assert_eq!(RhymeNormalization::None.denominator(2, 4, 5), 1.0);
+        assert_eq!(RhymeNormalization::PerSyllable.denominator(2, 4, 5), 2.0);
+        assert_eq!(RhymeNormalization::PerMeanPhoneme.denominator(2, 4, 5), 4.5);
     }
 }
