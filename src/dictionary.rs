@@ -7,12 +7,14 @@ use crate::phoneme::Phoneme;
 pub type Pronunciations = Vec<Box<[Phoneme]>>;
 
 pub trait PronouncingDictionary {
-    fn lookup(&self, word: &str) -> Option<Pronunciations>;
+    /// The pronunciations of `word`, borrowed from the dictionary — callers
+    /// that need ownership clone explicitly.
+    fn lookup(&self, word: &str) -> Option<&[Box<[Phoneme]>]>;
     fn entries(&self) -> impl Iterator<Item = (&str, &[Box<[Phoneme]>])>;
 }
 
 impl<T: PronouncingDictionary + ?Sized> PronouncingDictionary for &T {
-    fn lookup(&self, word: &str) -> Option<Pronunciations> {
+    fn lookup(&self, word: &str) -> Option<&[Box<[Phoneme]>]> {
         (**self).lookup(word)
     }
     fn entries(&self) -> impl Iterator<Item = (&str, &[Box<[Phoneme]>])> {
@@ -21,7 +23,7 @@ impl<T: PronouncingDictionary + ?Sized> PronouncingDictionary for &T {
 }
 
 impl<T: PronouncingDictionary + ?Sized> PronouncingDictionary for Box<T> {
-    fn lookup(&self, word: &str) -> Option<Pronunciations> {
+    fn lookup(&self, word: &str) -> Option<&[Box<[Phoneme]>]> {
         (**self).lookup(word)
     }
     fn entries(&self) -> impl Iterator<Item = (&str, &[Box<[Phoneme]>])> {
@@ -74,8 +76,8 @@ impl CmuDictionary {
         Ok(CmuDictionary { entries })
     }
 
-    pub fn lookup(&self, word: &str) -> Option<Pronunciations> {
-        self.entries.get(&word.to_lowercase()).cloned()
+    pub fn lookup(&self, word: &str) -> Option<&[Box<[Phoneme]>]> {
+        self.entries.get(&word.to_lowercase()).map(Vec::as_slice)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&str, &[Box<[Phoneme]>])> {
@@ -86,7 +88,7 @@ impl CmuDictionary {
 }
 
 impl PronouncingDictionary for CmuDictionary {
-    fn lookup(&self, word: &str) -> Option<Pronunciations> {
+    fn lookup(&self, word: &str) -> Option<&[Box<[Phoneme]>]> {
         CmuDictionary::lookup(self, word)
     }
     fn entries(&self) -> impl Iterator<Item = (&str, &[Box<[Phoneme]>])> {
@@ -139,6 +141,20 @@ mod tests {
     fn unknown_word_returns_none() {
         let dict = dict();
         assert!(dict.lookup("xyzzy").is_none());
+    }
+
+    #[test]
+    fn pronunciations_keep_dictionary_order() {
+        // Callers read [0] as a word's primary pronunciation: cmudict lists
+        // the base entry before its (1)/(2) variants, and from_bytes pushes
+        // pronunciations in line order. LIVE's base entry is "L AY1 V";
+        // "L IH1 V" is the LIVE(1) variant.
+        let dict = dict();
+        let live: Vec<String> = dict.lookup("live").unwrap()[0]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(live, ["L", "AY1", "V"]);
     }
 
     #[test]

@@ -7,9 +7,11 @@ use tsify::Tsify;
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    AnalyticConsonantDistanceConfig, Analyzer, CmuDictionary, Compare, MeterScheme,
-    OwnedAlignmentStep, RhymeComparisonConfig, RhymeDistanceConfig, RhymeDistanceScorer,
-    RhymeMatch, RhymeNormalization, RhymeScheme, TranspositionDirection, VowelHexGraphConfig,
+    AnalyticConsonantDistanceConfig, Analyzer, CmuDictionary, Compare, ConsistentScoresOwned,
+    MeterScheme, OwnedAlignmentStep, RhymeComparisonConfig, RhymeDistanceConfig,
+    RhymeDistanceScorer, RhymeIntersectionMatch, RhymePairScore, RhymeScheme,
+    RhymeScoreNormalization, TranspositionDirection, VowelHexGraphConfig, WordTarget,
+    line::Line,
     meter::{MeterMatchResult, MeterMismatch, SyllableStress},
     poem::{MeterAnalysis, Poem, PoemLineAnalysis, RhymeAnalysis},
     rhyme_scheme::RhymeCheckResult,
@@ -126,34 +128,153 @@ impl WasmAnalyzer {
         Rc::make_mut(&mut self.scorer).set_consonant_config(config.into());
     }
 
-    /// Scans the dictionary for words whose best pairing with `target` has a
-    /// normalized distance in `min_distance..=max_distance`, sorted nearest
-    /// first.
+    /// Scans the dictionary for words inside *every* target's distance range
+    /// — the multi-target generalization of `findRhymes` (e.g. words between
+    /// two hole words). Each match is scored the way `scoreConsistent`
+    /// scores it — one shared word pronunciation for all targets — and is a
+    /// lean summary: the word, that pronunciation, and one bare score per
+    /// target in target order (for per-target pronunciation detail, call
+    /// `scoreConsistent` on the words you keep). Matches are sorted by the
+    /// sum of their per-target normalized distances, nearest first. All
+    /// target words are excluded from the results; an empty target list
+    /// returns no matches.
     ///
     /// `normalization` defaults to per-mean-phoneme and `compare` to the
-    /// rhyming part. Unlike poems, which keep the scorer they were opened
-    /// with, each call uses the analyzer's *current* rhyme configs.
-    #[wasm_bindgen(js_name = findRhymes)]
-    pub fn find_rhymes(
+    /// rhyming part. Like `findRhymes`, each call uses the analyzer's
+    /// *current* rhyme configs.
+    #[wasm_bindgen(js_name = findRhymesIntersection)]
+    pub fn find_rhymes_intersection(
         &self,
-        target: &str,
-        min_distance: f32,
-        max_distance: f32,
+        targets: Vec<RhymeTargetDto>,
         normalization: Option<RhymeNormalizationDto>,
         compare: Option<CompareDto>,
-    ) -> Result<Vec<RhymeMatchDto>, JsError> {
-        // A transient core Analyzer borrowing this analyzer's shared state.
-        // The scorer clone is a few small tables — noise next to the scan.
+    ) -> Result<Vec<RhymeIntersectionMatchDto>, JsError> {
         let analyzer = Analyzer::new(&*self.dict, (*self.scorer).clone());
-        let matches = analyzer.find_rhymes(
-            target,
-            min_distance..=max_distance,
-            normalization
-                .map(RhymeNormalization::from)
-                .unwrap_or_default(),
+        let targets: Vec<WordTarget<'_>> = targets
+            .iter()
+            .map(|t| WordTarget {
+                word: &t.word,
+                distance_range: t.min_distance..=t.max_distance,
+            })
+            .collect();
+        let normalization = normalization
+            .map(RhymeScoreNormalization::from)
+            .unwrap_or_default();
+        let matches = analyzer.find_rhymes_intersection_by_words(
+            &targets,
+            normalization,
             compare.map(Compare::from).unwrap_or(Compare::RhymingPart),
         )?;
-        Ok(matches.iter().map(RhymeMatchDto::from).collect())
+        Ok(matches
+            .iter()
+            .map(|m| RhymeIntersectionMatchDto::from_match(m, normalization))
+            .collect())
+    }
+
+    /// Scores `word` against every word in `targets` using a *single*
+    /// pronunciation of `word` — the one minimizing the summed normalized
+    /// distance — so the per-target scores are mutually consistent, unlike
+    /// repeated `scoreRhyme` calls, which may each pick a different
+    /// pronunciation of `word`. Returns `undefined` when no pronunciation of
+    /// `word` is comparable to every target. `normalization` defaults to
+    /// per-mean-phoneme and `compare` to the rhyming part.
+    #[wasm_bindgen(js_name = scoreConsistent)]
+    pub fn score_consistent(
+        &self,
+        word: &str,
+        targets: Vec<String>,
+        normalization: Option<RhymeNormalizationDto>,
+        compare: Option<CompareDto>,
+    ) -> Result<Option<ConsistentScoresDto>, JsError> {
+        let analyzer = Analyzer::new(&*self.dict, (*self.scorer).clone());
+        let target_refs: Vec<&str> = targets.iter().map(String::as_str).collect();
+        let normalization = normalization
+            .map(RhymeScoreNormalization::from)
+            .unwrap_or_default();
+        let result = analyzer.calculate_consistent_score_between_words(
+            word,
+            &target_refs,
+            normalization,
+            compare.map(Compare::from).unwrap_or(Compare::RhymingPart),
+        )?;
+        Ok(result
+            .as_ref()
+            .map(|scores| ConsistentScoresDto::from_scores(scores, normalization)))
+    }
+
+    /// Every headword in the dictionary, in unspecified order. One
+    /// allocation-heavy call — callers should cache the result.
+    #[wasm_bindgen]
+    pub fn words(&self) -> Vec<String> {
+        self.dict.iter().map(|(word, _)| word.to_string()).collect()
+    }
+
+    /// Every pronunciation of `word`, in dictionary order: cmudict lists a
+    /// word's base entry before its (1)/(2) variants — the primary
+    /// pronunciation first — and the parser preserves that order, so `[0]`
+    /// is the word's most common pronunciation. Each pronunciation is its
+    /// ARPAbet phonemes, stress digits included (e.g. `["L", "AY1", "V"]`).
+    /// `undefined` when the word isn't in the dictionary.
+    #[wasm_bindgen]
+    pub fn lookup(&self, word: &str) -> Option<PronunciationsDto> {
+        self.dict.lookup(word).map(|pronunciations| {
+            PronunciationsDto(
+                pronunciations
+                    .iter()
+                    .map(|phonemes| phonemes.iter().map(ToString::to_string).collect())
+                    .collect(),
+            )
+        })
+    }
+
+    /// The distinct syllable counts of `text` — a word or a
+    /// whitespace-separated phrase — across its pronunciations, or
+    /// `undefined` when any word is unknown.
+    #[wasm_bindgen(js_name = syllableCounts)]
+    pub fn syllable_counts(&self, text: &str) -> Option<Vec<u32>> {
+        Line::new(text, &*self.dict)
+            .syllable_counts()
+            .map(|counts| counts.into_iter().map(|count| count as u32).collect())
+    }
+
+    /// Scores the best pairing of two words, with `a` in the target role and
+    /// `b` in the dictionary-word role, so `scoreRhyme(a, b)` agrees with
+    /// the score `b` would get in a `findRhymes(a, ..)` scan. Sugar for
+    /// `scoreConsistent(b, [a])` reshaped into a pair.
+    ///
+    /// `normalization` defaults to per-mean-phoneme and `compare` to the
+    /// rhyming part. Each call uses the analyzer's *current* rhyme configs.
+    #[wasm_bindgen(js_name = scoreRhyme)]
+    pub fn score_rhyme(
+        &self,
+        a: &str,
+        b: &str,
+        normalization: Option<RhymeNormalizationDto>,
+        compare: Option<CompareDto>,
+    ) -> Result<Option<RhymePairDto>, JsError> {
+        let analyzer = Analyzer::new(&*self.dict, (*self.scorer).clone());
+        let normalization = normalization
+            .map(RhymeScoreNormalization::from)
+            .unwrap_or_default();
+        let consistent = analyzer.calculate_consistent_score_between_words(
+            b,
+            &[a],
+            normalization,
+            compare.map(Compare::from).unwrap_or(Compare::RhymingPart),
+        )?;
+        Ok(consistent.map(|c| RhymePairDto {
+            a_pronunciation: c.best_scored_targets[0]
+                .0
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            b_pronunciation: c
+                .best_subject_pronunciation
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            score: RhymePairScoreDto::from_score(&c.best_scored_targets[0].1, normalization),
+        }))
     }
 }
 
@@ -246,6 +367,12 @@ impl WasmPoem {
 // ===========================================================================
 // DTOs — owned, serializable mirrors of the borrowed core result types.
 // ===========================================================================
+
+/// A word's pronunciations in dictionary order — each one its ARPAbet
+/// phonemes. A newtype, so it crosses to JS as a plain `string[][]`.
+#[derive(Serialize, Debug, Tsify)]
+#[tsify(into_wasm_abi)]
+pub struct PronunciationsDto(pub Vec<Vec<String>>);
 
 /// Combined per-line analysis. Mirrors [`PoemLineAnalysis`].
 #[derive(Serialize, Debug, Tsify)]
@@ -396,8 +523,12 @@ impl From<RhymeAnalysis<'_>> for RhymeDto {
                         raw_distance: distance.score.raw_distance,
                         syllable_count: distance.syllable_count,
                         normalization: distance.normalization.into(),
-                        normalization_denominator: distance.score.normalization_denominator,
-                        normalized_distance: distance.score.normalized_distance,
+                        normalization_denominator: distance.normalization.denominator(
+                            distance.score.target_syllable_count,
+                            distance.score.leader_len,
+                            distance.score.target_len,
+                        ),
+                        normalized_distance: distance.score.normalized(distance.normalization),
                     },
                 },
             },
@@ -503,17 +634,6 @@ impl From<CompareDto> for Compare {
     }
 }
 
-/// One scan result. Mirrors [`RhymeMatch`], with the borrowed word and
-/// pronunciation owned for the JS boundary.
-#[derive(Serialize, Debug, Tsify)]
-#[tsify(into_wasm_abi)]
-pub struct RhymeMatchDto {
-    word: String,
-    /// ARPAbet phonemes of the pronunciation that produced the score.
-    pronunciation: Vec<String>,
-    score: RhymePairScoreDto,
-}
-
 #[derive(Serialize, Debug, Tsify)]
 pub struct RhymePairScoreDto {
     raw_distance: u32,
@@ -521,18 +641,116 @@ pub struct RhymePairScoreDto {
     normalized_distance: f32,
 }
 
-impl From<&RhymeMatch<'_>> for RhymeMatchDto {
-    fn from(m: &RhymeMatch<'_>) -> Self {
-        RhymeMatchDto {
-            word: m.word.to_string(),
-            pronunciation: m.pronunciation.iter().map(ToString::to_string).collect(),
-            score: RhymePairScoreDto {
-                raw_distance: m.score.raw_distance,
-                normalization_denominator: m.score.normalization_denominator,
-                normalized_distance: m.score.normalized_distance,
-            },
+impl RhymePairScoreDto {
+    fn from_score(score: &RhymePairScore, normalization: RhymeScoreNormalization) -> Self {
+        Self {
+            raw_distance: score.raw_distance,
+            normalization_denominator: normalization.denominator(
+                score.target_syllable_count,
+                score.leader_len,
+                score.target_len,
+            ),
+            normalized_distance: score.normalized(normalization),
         }
     }
+}
+
+/// One target of a `findRhymesIntersection` scan. Mirrors [`RhymeIntersectionTarget`].
+#[derive(Deserialize, Debug, Clone, Tsify)]
+#[tsify(from_wasm_abi)]
+pub struct RhymeTargetDto {
+    word: String,
+    min_distance: f32,
+    max_distance: f32,
+}
+
+/// A dictionary word inside every target's distance range — a lean scan
+/// summary. For per-target pronunciation detail, ask `scoreConsistent`
+/// about the words you keep. Mirrors [`RhymeIntersectionMatch`].
+#[derive(Serialize, Debug, Tsify)]
+#[tsify(into_wasm_abi)]
+pub struct RhymeIntersectionMatchDto {
+    word: String,
+    /// ARPAbet phonemes of the word's pronunciation all scores share.
+    pronunciation: Vec<String>,
+    /// `scores[i]` pairs `pronunciation` with `targets[i]`.
+    scores: Vec<RhymePairScoreDto>,
+}
+
+impl RhymeIntersectionMatchDto {
+    fn from_match(
+        m: &RhymeIntersectionMatch<'_, '_>,
+        normalization: RhymeScoreNormalization,
+    ) -> Self {
+        RhymeIntersectionMatchDto {
+            word: m.word.to_string(),
+            pronunciation: m
+                .scores
+                .best_subject_pronunciation
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            scores: m
+                .scores
+                .best_scored_targets
+                .iter()
+                .map(|(_, score)| RhymePairScoreDto::from_score(score, normalization))
+                .collect(),
+        }
+    }
+}
+
+/// The target pronunciation a score paired against, and the score itself.
+/// Mirrors one tuple in `ConsistentScores::best_scored_targets`.
+#[derive(Serialize, Debug, Tsify)]
+pub struct ScoredPronunciationDto {
+    /// ARPAbet phonemes of the target's winning comparison slice.
+    pronunciation: Vec<String>,
+    score: RhymePairScoreDto,
+}
+
+/// One pronunciation of a word scored against several targets — every score
+/// shares `pronunciation`. Mirrors [`ConsistentScores`].
+#[derive(Serialize, Debug, Tsify)]
+#[tsify(into_wasm_abi)]
+pub struct ConsistentScoresDto {
+    /// ARPAbet phonemes of the subject-word pronunciation all scores share.
+    pronunciation: Vec<String>,
+    /// `scores[i]` pairs `pronunciation` with `targets[i]`; each entry's
+    /// pronunciation is the *target's* winning one.
+    scores: Vec<ScoredPronunciationDto>,
+}
+
+impl ConsistentScoresDto {
+    fn from_scores(c: &ConsistentScoresOwned, normalization: RhymeScoreNormalization) -> Self {
+        ConsistentScoresDto {
+            pronunciation: c
+                .best_subject_pronunciation
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            scores: c
+                .best_scored_targets
+                .iter()
+                .map(|(pronunciation, score)| ScoredPronunciationDto {
+                    pronunciation: pronunciation.iter().map(ToString::to_string).collect(),
+                    score: RhymePairScoreDto::from_score(score, normalization),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// The best pairing of two words — `scoreConsistent` with one target,
+/// reshaped for the single-pair caller.
+#[derive(Serialize, Debug, Tsify)]
+#[tsify(into_wasm_abi)]
+pub struct RhymePairDto {
+    /// ARPAbet phonemes of the winning `a` comparison slice.
+    a_pronunciation: Vec<String>,
+    /// The full `b` pronunciation containing the comparison slice that won.
+    b_pronunciation: Vec<String>,
+    score: RhymePairScoreDto,
 }
 
 // ---- Config (round-trips both directions: get + set) ----------------------
@@ -546,17 +764,17 @@ pub enum RhymeNormalizationDto {
     PerMeanPhoneme,
 }
 
-impl From<RhymeNormalization> for RhymeNormalizationDto {
-    fn from(normalization: RhymeNormalization) -> Self {
+impl From<RhymeScoreNormalization> for RhymeNormalizationDto {
+    fn from(normalization: RhymeScoreNormalization) -> Self {
         match normalization {
-            RhymeNormalization::None => Self::None,
-            RhymeNormalization::PerSyllable => Self::PerSyllable,
-            RhymeNormalization::PerMeanPhoneme => Self::PerMeanPhoneme,
+            RhymeScoreNormalization::None => Self::None,
+            RhymeScoreNormalization::PerSyllable => Self::PerSyllable,
+            RhymeScoreNormalization::PerMeanPhoneme => Self::PerMeanPhoneme,
         }
     }
 }
 
-impl From<RhymeNormalizationDto> for RhymeNormalization {
+impl From<RhymeNormalizationDto> for RhymeScoreNormalization {
     fn from(normalization: RhymeNormalizationDto) -> Self {
         match normalization {
             RhymeNormalizationDto::None => Self::None,
@@ -991,28 +1209,74 @@ mod tests {
         );
     }
 
-    // ---- find_rhymes --------------------------------------------------------
+    // ---- find_rhymes_intersection -------------------------------------------
 
     #[wasm_bindgen_test]
-    fn find_rhymes_returns_owned_sorted_matches() {
+    fn find_rhymes_intersection_returns_per_target_scores() {
         let ws = analyzer();
-        // Defaults (per-mean-phoneme, rhyming part); 0..=0 admits only
-        // perfect rhymes.
-        let matches = ws.find_rhymes("cat", 0.0, 0.0, None, None).unwrap();
+        let matches = ws
+            .find_rhymes_intersection(
+                vec![
+                    RhymeTargetDto {
+                        word: "cat".into(),
+                        min_distance: 0.0,
+                        max_distance: 0.0,
+                    },
+                    RhymeTargetDto {
+                        word: "hat".into(),
+                        min_distance: 0.0,
+                        max_distance: 0.0,
+                    },
+                ],
+                None,
+                None,
+            )
+            .unwrap();
 
-        let hat = matches
+        let bat = matches
             .iter()
-            .find(|m| m.word == "hat")
-            .expect("HAT is a perfect rhyme for CAT");
-        assert_eq!(hat.score.raw_distance, 0);
-        assert_eq!(hat.score.normalized_distance, 0.0);
-        // The pronunciation crosses the boundary as owned ARPAbet strings.
-        assert_eq!(hat.pronunciation, ["HH", "AE1", "T"]);
+            .find(|m| m.word == "bat")
+            .expect("BAT rhymes perfectly with CAT and HAT");
+        // One shared pronunciation of the match, one bare score per target.
+        assert_eq!(bat.pronunciation, ["B", "AE1", "T"]);
+        assert_eq!(bat.scores.len(), 2);
+        assert!(bat.scores.iter().all(|s| s.raw_distance == 0));
     }
 
     #[wasm_bindgen_test]
-    fn find_rhymes_unknown_word_surfaces_as_error() {
+    fn find_rhymes_intersection_unknown_target_errors() {
         let ws = analyzer();
-        assert!(ws.find_rhymes("xyzzy", 0.0, 1.0, None, None).is_err());
+        let result = ws.find_rhymes_intersection(
+            vec![RhymeTargetDto {
+                word: "xyzzy".into(),
+                min_distance: 0.0,
+                max_distance: 1000.0,
+            }],
+            None,
+            None,
+        );
+        assert!(result.is_err());
+    }
+
+    // ---- score_rhyme --------------------------------------------------------
+
+    #[wasm_bindgen_test]
+    fn score_rhyme_scores_a_pair_with_owned_pronunciations() {
+        let ws = analyzer();
+        let pair = ws
+            .score_rhyme("cot", "caught", None)
+            .unwrap()
+            .expect("one-syllable words are always comparable");
+
+        assert_eq!(pair.score.raw_distance, 0);
+        assert_eq!(pair.score.normalized_distance, 0.0);
+        assert_eq!(pair.a_pronunciation, ["K", "AA1", "T"]);
+        assert_eq!(pair.b_pronunciation, ["K", "AA1", "T"]);
+    }
+
+    #[wasm_bindgen_test]
+    fn score_rhyme_unknown_word_surfaces_as_error() {
+        let ws = analyzer();
+        assert!(ws.score_rhyme("cat", "xyzzy", None).is_err());
     }
 }

@@ -1,7 +1,7 @@
 use crate::consonant_distance::{
     AnalyticConsonantDistance, AnalyticConsonantDistanceConfig, ConsonantDistanceScorer,
 };
-use crate::phoneme::Phoneme;
+use crate::phoneme::{Phoneme, get_syllable_count};
 use crate::vowel_distance::{VowelDistanceScorer, VowelHexGraph, VowelHexGraphConfig};
 
 /// Costs for the rhyme-distance DP.
@@ -42,6 +42,7 @@ pub struct RhymeDistanceConfig {
     /// TODO: are there other vowel -> consonant sequences that should count as repeated?
     ///
     /// TODO: This should take into account cases like RAISING (R EY1 Z IH0 NG) vs RAISE SING (R EY1 Z S IH1 NG), i.e. we should take consonant distance of repeated consonants into account
+    ///
     ///
     /// An arbitrary starting point would probably be (consonant_indel_penalty + distance())/2
     pub consonant_repeated_penalty: u32,
@@ -687,14 +688,14 @@ impl Default for RhymeDistanceScorer<VowelHexGraph, AnalyticConsonantDistance> {
 /// How a raw rhyme distance is scaled so that scores are comparable across
 /// rhyming parts of different lengths.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum RhymeNormalization {
+pub enum RhymeScoreNormalization {
     None,
     PerSyllable,
     #[default]
     PerMeanPhoneme,
 }
 
-impl RhymeNormalization {
+impl RhymeScoreNormalization {
     pub fn denominator(
         self,
         syllable_count: usize,
@@ -714,8 +715,16 @@ impl RhymeNormalization {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RhymePairScore {
     pub raw_distance: u32,
-    pub normalization_denominator: f32,
-    pub normalized_distance: f32,
+    pub target_syllable_count: usize,
+    pub leader_len: usize,
+    pub target_len: usize,
+}
+
+impl RhymePairScore {
+    pub fn normalized(&self, n: RhymeScoreNormalization) -> f32 {
+        self.raw_distance as f32
+            / n.denominator(self.target_syllable_count, self.leader_len, self.target_len)
+    }
 }
 
 /// Scores one pair of phoneme slices. This is the single definition of
@@ -724,8 +733,6 @@ pub struct RhymePairScore {
 /// (`Analyzer::find_rhymes`) go through it.
 pub(crate) fn score_rhyme_pair<V, C>(
     scorer: &RhymeDistanceScorer<V, C>,
-    normalization: RhymeNormalization,
-    syllable_count: usize,
     leader_part: &[Phoneme],
     target_part: &[Phoneme],
 ) -> RhymePairScore
@@ -733,13 +740,13 @@ where
     V: VowelDistanceScorer,
     C: ConsonantDistanceScorer,
 {
+    let target_syllable_count = get_syllable_count(target_part);
     let raw_distance = scorer.distance(leader_part, target_part);
-    let normalization_denominator =
-        normalization.denominator(syllable_count, leader_part.len(), target_part.len());
     RhymePairScore {
         raw_distance,
-        normalization_denominator,
-        normalized_distance: raw_distance as f32 / normalization_denominator,
+        target_syllable_count,
+        leader_len: leader_part.len(),
+        target_len: target_part.len(),
     }
 }
 
@@ -1409,8 +1416,14 @@ mod tests {
 
     #[test]
     fn normalization_denominators_match_their_units() {
-        assert_eq!(RhymeNormalization::None.denominator(2, 4, 5), 1.0);
-        assert_eq!(RhymeNormalization::PerSyllable.denominator(2, 4, 5), 2.0);
-        assert_eq!(RhymeNormalization::PerMeanPhoneme.denominator(2, 4, 5), 4.5);
+        assert_eq!(RhymeScoreNormalization::None.denominator(2, 4, 5), 1.0);
+        assert_eq!(
+            RhymeScoreNormalization::PerSyllable.denominator(2, 4, 5),
+            2.0
+        );
+        assert_eq!(
+            RhymeScoreNormalization::PerMeanPhoneme.denominator(2, 4, 5),
+            4.5
+        );
     }
 }

@@ -38,7 +38,7 @@ impl WordEntry {
             None => WordData::Unknown,
             Some(raw) => {
                 let pronunciations = raw
-                    .into_iter()
+                    .iter()
                     .map(|phonemes| {
                         let stress_pattern = phonemes
                             .iter()
@@ -48,7 +48,9 @@ impl WordEntry {
                             })
                             .collect();
                         Pronunciation {
-                            phonemes,
+                            // A line owns its words' data; the dictionary
+                            // only lends pronunciations out.
+                            phonemes: phonemes.clone(),
                             stress_pattern,
                         }
                     })
@@ -84,6 +86,33 @@ impl Line {
             })
             .collect()
     }
+
+    /// The distinct total syllable counts across the line's pronunciation
+    /// combinations, first-seen order — a one-word line reproduces the
+    /// word's per-pronunciation counts. `None` if any word is unknown or
+    /// the line is empty.
+    pub fn syllable_counts(&self) -> Option<Vec<usize>> {
+        if self.words.is_empty() {
+            return None;
+        }
+        let mut totals: Vec<usize> = vec![0];
+        for entry in &self.words {
+            let WordData::Known(pronunciations) = &entry.data else {
+                return None;
+            };
+            let mut next: Vec<usize> = Vec::new();
+            for total in &totals {
+                for pronunciation in pronunciations {
+                    let sum = total + pronunciation.stress_pattern.len();
+                    if !next.contains(&sum) {
+                        next.push(sum);
+                    }
+                }
+            }
+            totals = next;
+        }
+        Some(totals)
+    }
 }
 
 #[cfg(test)]
@@ -101,21 +130,29 @@ mod tests {
         DICT.get_or_init(|| CmuDictionary::load(DICT_PATH).expect("failed to load dictionary"))
     }
 
-    struct TestDictionary;
+    // Owns its one entry: the trait lends pronunciations out, so a
+    // dictionary can't fabricate them per lookup.
+    struct TestDictionary {
+        gato: Pronunciations,
+    }
+
+    impl TestDictionary {
+        fn new() -> Self {
+            TestDictionary {
+                gato: vec![
+                    ["G", "AA1", "T", "OW0"]
+                        .into_iter()
+                        .map(|phoneme| phoneme.parse().unwrap())
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                ],
+            }
+        }
+    }
 
     impl PronouncingDictionary for TestDictionary {
-        fn lookup(&self, word: &str) -> Option<Pronunciations> {
-            if word != "gato" {
-                return None;
-            }
-
-            Some(vec![
-                ["G", "AA1", "T", "OW0"]
-                    .into_iter()
-                    .map(|phoneme| phoneme.parse().unwrap())
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice(),
-            ])
+        fn lookup(&self, word: &str) -> Option<&[Box<[Phoneme]>]> {
+            (word == "gato").then_some(self.gato.as_slice())
         }
         fn entries(&self) -> impl Iterator<Item = (&str, &[Box<[Phoneme]>])> {
             std::iter::empty()
@@ -140,7 +177,7 @@ mod tests {
 
     #[test]
     fn accepts_custom_pronouncing_dictionary() {
-        let line = Line::new("gato missing", &TestDictionary);
+        let line = Line::new("gato missing", &TestDictionary::new());
 
         assert!(matches!(line.words[0].data, WordData::Known { .. }));
         assert!(matches!(line.words[1].data, WordData::Unknown));
@@ -175,5 +212,23 @@ mod tests {
         let line = Line::new("Hello World", dict());
         assert_eq!(line.words[0].word, "Hello");
         assert_eq!(line.words[1].word, "World");
+    }
+
+    #[test]
+    fn syllable_counts_sum_across_words() {
+        // ice (1) + cream (1) = 2.
+        assert_eq!(
+            Line::new("ice cream", dict()).syllable_counts(),
+            Some(vec![2])
+        );
+        // Words with multiple pronunciations sum per combination: fire (2 or
+        // 1) + truck (1) gives distinct totals in first-seen order.
+        assert_eq!(
+            Line::new("fire truck", dict()).syllable_counts(),
+            Some(vec![3, 2])
+        );
+        // Unknown words and empty lines have no counts.
+        assert_eq!(Line::new("qzxqzx", dict()).syllable_counts(), None);
+        assert_eq!(Line::new("", dict()).syllable_counts(), None);
     }
 }

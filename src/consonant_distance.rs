@@ -55,6 +55,8 @@ pub trait ConsonantDistanceScorer {
 }
 
 /// Implements a consonant distance score derived from my own analysis of consonant structure.
+///
+/// TODO: how to take into account how similar /D R/ and /JH/ are? e.g. GENT and (imagine the word) DRENT. Does the R somehow make the Plosive D into an Affricate?
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnalyticConsonantDistance {
     config: AnalyticConsonantDistanceConfig,

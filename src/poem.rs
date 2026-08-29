@@ -198,6 +198,7 @@ impl Poem {
         }
     }
 
+    // TODO: one issue with current rhyme analysis is that, in a rhyme scheme like AAA, if the first line has two differnt pronunciations, we might not use the same pronunciation when evaluating lines 2 and 3. We should use something like Analyzer::score_consistent for evaluating leader + all followers
     pub fn rhyme_analysis<V, C>(
         &mut self,
         index: usize,

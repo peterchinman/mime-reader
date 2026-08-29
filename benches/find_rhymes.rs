@@ -1,16 +1,22 @@
-//! Full-dictionary `Analyzer::find_rhymes` scans across representative
+//! Full-dictionary single-target intersection scans across representative
 //! targets. This is the tripwire for scan-cost regressions and the yardstick
 //! for proposed scan optimizations (syllable prefilters, DP scratch reuse,
 //! early-abandon, ...). Run with `cargo bench --bench find_rhymes`.
 
-use std::hint::black_box;
-use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
+use std::{hint::black_box, time::Duration};
 
+#[cfg(not(target_arch = "wasm32"))]
 use criterion::{Criterion, criterion_group, criterion_main};
-use mime_reader::{Analyzer, CmuDictionary, Compare, RhymeDistanceScorer, RhymeNormalization};
+#[cfg(not(target_arch = "wasm32"))]
+use mime_reader::{
+    Analyzer, CmuDictionary, Compare, RhymeDistanceScorer, RhymeScoreNormalization, WordTarget,
+};
 
+#[cfg(not(target_arch = "wasm32"))]
 const DICT_PATH: &str = "data/CMUdict/cmudict-0.7b";
 
+#[cfg(not(target_arch = "wasm32"))]
 fn bench_find_rhymes(c: &mut Criterion) {
     // Built once, outside all timing: the scan cost is what's under test,
     // not the 3.8 MB dictionary parse.
@@ -37,10 +43,12 @@ fn bench_find_rhymes(c: &mut Criterion) {
         group.bench_function(name, |bench| {
             bench.iter(|| {
                 analyzer
-                    .find_rhymes(
-                        black_box(target),
-                        0.0..=100.0,
-                        RhymeNormalization::PerMeanPhoneme,
+                    .find_rhymes_intersection_by_words(
+                        &[WordTarget {
+                            word: black_box(target),
+                            distance_range: 0.0..=100.0,
+                        }],
+                        RhymeScoreNormalization::PerMeanPhoneme,
                         Compare::RhymingPart,
                     )
                     .unwrap()
@@ -53,10 +61,12 @@ fn bench_find_rhymes(c: &mut Criterion) {
     group.bench_function("whole_word_cat", |bench| {
         bench.iter(|| {
             analyzer
-                .find_rhymes(
-                    black_box("cat"),
-                    0.0..=100.0,
-                    RhymeNormalization::PerMeanPhoneme,
+                .find_rhymes_intersection_by_words(
+                    &[WordTarget {
+                        word: black_box("cat"),
+                        distance_range: 0.0..=100.0,
+                    }],
+                    RhymeScoreNormalization::PerMeanPhoneme,
                     Compare::WholeWord,
                 )
                 .unwrap()
@@ -68,10 +78,12 @@ fn bench_find_rhymes(c: &mut Criterion) {
     group.bench_function("ranked_full_dict_cat", |bench| {
         bench.iter(|| {
             analyzer
-                .find_rhymes(
-                    black_box("cat"),
-                    0.0..=f32::INFINITY,
-                    RhymeNormalization::PerMeanPhoneme,
+                .find_rhymes_intersection_by_words(
+                    &[WordTarget {
+                        word: black_box("cat"),
+                        distance_range: 0.0..=f32::INFINITY,
+                    }],
+                    RhymeScoreNormalization::PerMeanPhoneme,
                     Compare::RhymingPart,
                 )
                 .unwrap()
@@ -81,5 +93,10 @@ fn bench_find_rhymes(c: &mut Criterion) {
     group.finish();
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 criterion_group!(benches, bench_find_rhymes);
+#[cfg(not(target_arch = "wasm32"))]
 criterion_main!(benches);
+
+#[cfg(target_arch = "wasm32")]
+fn main() {}

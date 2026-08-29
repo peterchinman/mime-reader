@@ -387,11 +387,11 @@ pub struct RhymingPart<'a> {
 }
 
 // TODO: Should the rhyming part be from the last PRIMARY stress, or the last stressed syllable, either PRIMARY or SECONDARY?? Consider: CALLIOPE... is the rhyming part IOPE or E?
-pub fn get_rhyming_part<'a>(word: &'a [Phoneme]) -> RhymingPart<'a> {
-    let final_stressed_index = word
+pub fn get_rhyming_part<'a>(pronunciation: &'a [Phoneme]) -> RhymingPart<'a> {
+    let final_stressed_index = pronunciation
         .iter()
         .rposition(|p| matches!(p, Phoneme::Vowel(v) if v.stress == Stress::Primary));
-    let rhyming_part = &word[final_stressed_index.unwrap_or(0)..];
+    let rhyming_part = &pronunciation[final_stressed_index.unwrap_or(0)..];
     RhymingPart {
         phonemes: rhyming_part,
         syllable_count: get_syllable_count(rhyming_part),

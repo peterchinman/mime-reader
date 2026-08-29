@@ -2,18 +2,22 @@
 //! against `align` (score + traceback + owned step list) on representative
 //! rhyming-part sizes. Run with `cargo bench`.
 
-use std::hint::black_box;
-use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
+use std::{hint::black_box, time::Duration};
 
+#[cfg(not(target_arch = "wasm32"))]
 use criterion::{Criterion, criterion_group, criterion_main};
+#[cfg(not(target_arch = "wasm32"))]
 use mime_reader::{Phoneme, RhymeDistanceScorer};
 
+#[cfg(not(target_arch = "wasm32"))]
 fn ph(s: &str) -> Vec<Phoneme> {
     s.split_whitespace()
         .map(|p| p.parse().expect("valid ARPAbet"))
         .collect()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn bench_distance_vs_align(c: &mut Criterion) {
     let scorer = RhymeDistanceScorer::new();
 
@@ -52,5 +56,10 @@ fn bench_distance_vs_align(c: &mut Criterion) {
     group.finish();
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 criterion_group!(benches, bench_distance_vs_align);
+#[cfg(not(target_arch = "wasm32"))]
 criterion_main!(benches);
+
+#[cfg(target_arch = "wasm32")]
+fn main() {}

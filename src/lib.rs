@@ -19,7 +19,10 @@ pub mod vowel_distance;
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 
-pub use analyzer::{Analyzer, Compare, RhymeMatch};
+pub use analyzer::{
+    Analyzer, Compare, ConsistentScores, ConsistentScoresOwned, PronunciationsTarget,
+    RhymeIntersectionMatch, WordTarget,
+};
 pub use consonant_distance::{
     AnalyticConsonantDistance, AnalyticConsonantDistanceConfig, ConsonantDistanceScorer,
 };
@@ -37,7 +40,7 @@ pub use phoneme::{Consonant, Phoneme, Stress, Vowel, VowelPhoneme};
 pub use poem::Poem;
 pub use rhyme_distance::{
     AlignmentStep, OwnedAlignmentStep, RhymeDistanceConfig, RhymeDistanceOutput,
-    RhymeDistanceScorer, RhymeNormalization, RhymePairScore, TranspositionDirection,
+    RhymeDistanceScorer, RhymePairScore, RhymeScoreNormalization, TranspositionDirection,
 };
 pub use rhyme_scheme::{RhymeComparisonConfig, RhymeScheme};
 pub use vowel_distance::{VowelDistanceScorer, VowelHexGraph, VowelHexGraphConfig};
