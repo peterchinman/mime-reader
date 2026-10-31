@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     Stress,
@@ -9,7 +9,7 @@ use crate::{
     line::{Line, WordEntry},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SyllableStress {
     Stressed,
     Unstressed,
@@ -123,14 +123,37 @@ impl MeterSpecification {
         MeterSpecification { possible_meters }
     }
 
-    /// Checks whether a Meter Spec matches a specific line. This is a very permissive check—we make no guesses about the Meter of the Line, instead we check every pronunciation of every word in the Line, and return true if any combinatoric possibility matches.
+    /// Checks a line against the meter. This is a very permissive check—we make no guesses about the Meter of the Line, instead we try every pronunciation of every word and every optional section of the meter, and judge the line by the reading that deviates least.
     pub fn validate_line(&self, line: &Line) -> Result<MeterMatchResult, MeterCheckError> {
-        let meters: Vec<&[SyllableStress]> = self
-            .possible_meters
-            .iter()
-            .map(|m| m.meter.as_slice())
-            .collect();
-        validate_recursive(0, &line.words, &meters)
+        Ok(MeterMatchResult::from_deviations(
+            self.deviations_for_line(line)?,
+            0,
+        ))
+    }
+
+    /// Returns the deviations of the line's least-deviating reading: its choice of
+    /// pronunciations and optional-meter path. The analysis continues after a
+    /// mismatch, so every wrong stress, extra syllable, and missing syllable is
+    /// recorded. An empty result means the line fits.
+    pub fn deviations_for_line(&self, line: &Line) -> Result<Vec<MeterDeviation>, MeterCheckError> {
+        let mut meters: Vec<&Meter> = self.possible_meters.iter().collect();
+        meters.sort_by(|a, b| a.meter.cmp(&b.meter));
+
+        let mut best: Option<Vec<MeterDeviation>> = None;
+        for meter in meters {
+            let candidate = deviations_for_meter(&line.words, &meter.meter)?;
+            if candidate.is_empty() {
+                return Ok(candidate);
+            }
+            if best
+                .as_ref()
+                .is_none_or(|current| candidate.len() < current.len())
+            {
+                best = Some(candidate);
+            }
+        }
+
+        Ok(best.unwrap_or_default())
     }
 }
 
@@ -141,128 +164,220 @@ fn is_secondary_next_to_primary(stresses: &[Stress], i: usize) -> bool {
             || i > 0 && stresses.get(i - 1) == Some(&Stress::Primary))
 }
 
-fn word_stresses_matches_meter(word_stresses: &[Stress], meter: &[SyllableStress]) -> bool {
-    // Assumption: single-syllable words are inherently ambiguous and match any meter position
-    if word_stresses.len() == 1 {
+/// Whether a word's syllable may stand in a meter position expecting `expected`.
+fn syllable_stress_matches_meter(
+    word_stresses: &[Stress],
+    syllable_index: usize,
+    expected: SyllableStress,
+) -> bool {
+    // Assumption: single-syllable words are inherently ambiguous and match any meter position.
+    // An Either position matches any stress.
+    if word_stresses.len() == 1 || expected == SyllableStress::Either {
         return true;
     }
-    word_stresses.iter().enumerate().all(|(i, s)| match s {
-        // Either position matches any stress
-        _ if meter[i] == SyllableStress::Either => true,
+
+    match word_stresses[syllable_index] {
         // Assumption: primary stress must match a stressed position
-        Stress::Primary => meter[i] == SyllableStress::Stressed,
+        Stress::Primary => expected == SyllableStress::Stressed,
         // Assumption: secondary stress adjacent to primary is ambiguous — matches any meter position
-        Stress::Secondary if is_secondary_next_to_primary(word_stresses, i) => true,
+        Stress::Secondary if is_secondary_next_to_primary(word_stresses, syllable_index) => true,
         // Assumption: non-ambiguous secondary stress must match a stressed position
-        Stress::Secondary => meter[i] == SyllableStress::Stressed,
+        Stress::Secondary => expected == SyllableStress::Stressed,
         // Assumption: unstressed syllables must match unstressed positions
-        Stress::Unstressed => meter[i] == SyllableStress::Unstressed,
-    })
+        Stress::Unstressed => expected == SyllableStress::Unstressed,
+    }
 }
 
+/// How a line fits its meter, judged by the line's least-deviating reading.
 #[derive(Debug, PartialEq)]
 pub enum MeterMatchResult {
     Match,
-    NoMatch { reasons: HashSet<MeterMismatch> },
+    /// Every deviation fit within the exception allowance.
+    MatchWithExceptions {
+        exceptions: Vec<MeterDeviation>,
+    },
+    /// `failures` are the deviations beyond the allowance. `exceptions` are
+    /// the ones it covered, which come earlier in the line.
+    NoMatch {
+        failures: Vec<MeterDeviation>,
+        exceptions: Vec<MeterDeviation>,
+    },
 }
 
+/// One syllable-level departure of a line from its meter.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum MeterMismatch {
-    MeterTooShort {
-        word_index_failed_at: usize,
+pub enum MeterDeviation {
+    /// A syllable whose stress doesn't fit its position in the meter.
+    StressMismatch {
+        word_index: usize,
+        syllable_index: usize,
+        expected: SyllableStress,
+        actual: Stress,
     },
-    MeterTooLong {
-        remaining_syllables_in_meter: usize,
+    /// A syllable past the end of the meter.
+    ExtraSyllable {
+        word_index: usize,
+        syllable_index: usize,
+        actual: Stress,
     },
-    WordsStressMismatch {
-        expected_stress_pattern_of_word: Vec<SyllableStress>,
-        word_index_failed_at: usize,
+    /// A position in the meter left over after the line's last syllable.
+    MissingSyllable {
+        meter_syllable_index: usize,
+        expected: SyllableStress,
     },
 }
 
-/// Recursively matches the pronunciations of the next word in a sequuence of words against a collection of valid meters. Returns true if it finds any branch that matches, false if all branches fail.
-fn validate_recursive(
-    word_index_accumulator: usize,
-    words: &[WordEntry],
-    meters: &[&[SyllableStress]],
-) -> Result<MeterMatchResult, MeterCheckError> {
-    // Base-case: if we've chewed thru all the words, and if any of the valid meters is also empty, we've found a match.
-    if words.is_empty() {
-        return if meters.iter().any(|m| m.is_empty()) {
-            Ok(MeterMatchResult::Match)
+/// The number of syllable-level meter exceptions allowed in each fixed group of lines.
+/// The default allows none, so every deviation is a failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MeterExceptionConfig {
+    allowed_exceptions: usize,
+    lines_per_group: usize,
+}
+
+impl Default for MeterExceptionConfig {
+    fn default() -> Self {
+        Self {
+            allowed_exceptions: 0,
+            lines_per_group: 1,
+        }
+    }
+}
+
+impl MeterExceptionConfig {
+    pub fn new(allowed_exceptions: usize, lines_per_group: usize) -> Option<Self> {
+        (lines_per_group > 0).then_some(Self {
+            allowed_exceptions,
+            lines_per_group,
+        })
+    }
+
+    pub fn allowed_exceptions(self) -> usize {
+        self.allowed_exceptions
+    }
+
+    pub fn lines_per_group(self) -> usize {
+        self.lines_per_group
+    }
+}
+
+impl MeterMatchResult {
+    /// Lets the allowance cover a line's first `allowed_exceptions` deviations;
+    /// the rest are failures.
+    pub(crate) fn from_deviations(
+        mut deviations: Vec<MeterDeviation>,
+        allowed_exceptions: usize,
+    ) -> Self {
+        let failures = deviations.split_off(allowed_exceptions.min(deviations.len()));
+        let exceptions = deviations;
+
+        if !failures.is_empty() {
+            Self::NoMatch {
+                failures,
+                exceptions,
+            }
+        } else if exceptions.is_empty() {
+            Self::Match
         } else {
-            Ok(MeterMatchResult::NoMatch {
-                reasons: meters
-                    .iter()
-                    .map(|m| MeterMismatch::MeterTooLong {
-                        remaining_syllables_in_meter: m.len(),
-                    })
-                    .collect(),
+            Self::MatchWithExceptions { exceptions }
+        }
+    }
+}
+
+fn deviations_for_meter(
+    words: &[WordEntry],
+    meter: &[SyllableStress],
+) -> Result<Vec<MeterDeviation>, MeterCheckError> {
+    least_deviations_from(0, 0, words, meter, &mut HashMap::new())
+}
+
+/// The fewest deviations with which `words[word_index..]` can be read against
+/// `meter[meter_syllable_index..]`. How the rest of a line reads depends only
+/// on those two positions, so results are memoized on them; otherwise the
+/// search is exponential in the number of words with several stress patterns.
+fn least_deviations_from(
+    word_index: usize,
+    meter_syllable_index: usize,
+    words: &[WordEntry],
+    meter: &[SyllableStress],
+    memo: &mut HashMap<(usize, usize), Vec<MeterDeviation>>,
+) -> Result<Vec<MeterDeviation>, MeterCheckError> {
+    if let Some(deviations) = memo.get(&(word_index, meter_syllable_index)) {
+        return Ok(deviations.clone());
+    }
+
+    let Some(word) = words.get(word_index) else {
+        return Ok(meter[meter_syllable_index..]
+            .iter()
+            .enumerate()
+            .map(|(offset, expected)| MeterDeviation::MissingSyllable {
+                meter_syllable_index: meter_syllable_index + offset,
+                expected: *expected,
             })
-        };
-    }
+            .collect());
+    };
 
-    if meters.is_empty() || meters.iter().all(|m| m.is_empty()) {
-        return Ok(MeterMatchResult::NoMatch {
-            reasons: HashSet::from([MeterMismatch::MeterTooShort {
-                word_index_failed_at: word_index_accumulator,
-            }]),
-        });
-    }
-
-    // Branch out on every pronunciation of the next word.
-    //
-    // TODO: is there some way of failing a branch early, rather than checking every combinatoric possiblity?
-    // One possibility would be storing on WordEntry the shortest and longest syllable length of its pronunciations, so that we can pre-emptively check whether our Line is too long or too short.
-
-    let next_word = &words[0];
-    let Some(next_word_possible_stresses) = next_word.data.stress_patterns() else {
+    let crate::line::WordData::Known { pronunciations, .. } = &word.data else {
         return Err(MeterCheckError::UnknownWord(UnknownWordError {
-            word: next_word.word.clone(),
+            word: word.word.clone(),
         }));
     };
 
-    let mut failure_reasons = HashSet::new();
+    let mut best: Option<Vec<MeterDeviation>> = None;
+    let mut seen_stress_patterns: HashSet<&[Stress]> = HashSet::new();
+    for pronunciation in pronunciations {
+        let stresses = pronunciation.stress_pattern.as_slice();
+        if !seen_stress_patterns.insert(stresses) {
+            continue;
+        }
 
-    for next_word_stresses in next_word_possible_stresses {
-        let mut meter_match_suffixes: Vec<&[SyllableStress]> = Vec::new();
-        for m in meters {
-            // Enough syllables in the meter to match the next word?
-            if next_word_stresses.len() > m.len() {
-                failure_reasons.insert(MeterMismatch::MeterTooShort {
-                    word_index_failed_at: word_index_accumulator,
-                });
-                continue;
-            }
-            // Does the meter match the next word's stresses?
-            if word_stresses_matches_meter(next_word_stresses, &m[..next_word_stresses.len()]) {
-                meter_match_suffixes.push(&m[next_word_stresses.len()..]);
-            } else {
-                failure_reasons.insert(MeterMismatch::WordsStressMismatch {
-                    expected_stress_pattern_of_word: m[..next_word_stresses.len()].to_vec(),
-                    word_index_failed_at: word_index_accumulator,
-                });
+        let mut candidate = Vec::new();
+        for (syllable_index, actual) in stresses.iter().copied().enumerate() {
+            let absolute_index = meter_syllable_index + syllable_index;
+            match meter.get(absolute_index).copied() {
+                Some(expected)
+                    if !syllable_stress_matches_meter(stresses, syllable_index, expected) =>
+                {
+                    candidate.push(MeterDeviation::StressMismatch {
+                        word_index,
+                        syllable_index,
+                        expected,
+                        actual,
+                    });
+                }
+                Some(_) => {}
+                None => candidate.push(MeterDeviation::ExtraSyllable {
+                    word_index,
+                    syllable_index,
+                    actual,
+                }),
             }
         }
 
-        // If there are meter match suffixes, recursively validate the rest of the line.
-        if !meter_match_suffixes.is_empty() {
-            match validate_recursive(
-                word_index_accumulator + 1,
-                &words[1..],
-                &meter_match_suffixes,
-            )? {
-                MeterMatchResult::Match => return Ok(MeterMatchResult::Match),
-                MeterMatchResult::NoMatch {
-                    reasons: branch_reasons,
-                } => failure_reasons.extend(branch_reasons),
-            }
+        let next_meter_index = (meter_syllable_index + stresses.len()).min(meter.len());
+        candidate.extend(least_deviations_from(
+            word_index + 1,
+            next_meter_index,
+            words,
+            meter,
+            memo,
+        )?);
+
+        let fits = candidate.is_empty();
+        if best
+            .as_ref()
+            .is_none_or(|current| candidate.len() < current.len())
+        {
+            best = Some(candidate);
+        }
+        if fits {
+            break;
         }
     }
 
-    Ok(MeterMatchResult::NoMatch {
-        reasons: failure_reasons,
-    })
+    let best = best.unwrap_or_default();
+    memo.insert((word_index, meter_syllable_index), best.clone());
+    Ok(best)
 }
 
 #[derive(Debug)]
@@ -335,6 +450,15 @@ impl MeterScheme {
     ) -> Result<MeterMatchResult, MeterCheckError> {
         self.line_specification(line_index).validate_line(line)
     }
+
+    pub fn deviations_for_line(
+        &self,
+        line: &Line,
+        line_index: usize,
+    ) -> Result<Vec<MeterDeviation>, MeterCheckError> {
+        self.line_specification(line_index)
+            .deviations_for_line(line)
+    }
 }
 
 #[cfg(test)]
@@ -368,11 +492,11 @@ mod tests {
 
     fn assert_meter_no_match(
         result: Result<MeterMatchResult, MeterCheckError>,
-    ) -> HashSet<MeterMismatch> {
-        let Ok(MeterMatchResult::NoMatch { reasons }) = result else {
+    ) -> Vec<MeterDeviation> {
+        let Ok(MeterMatchResult::NoMatch { failures, .. }) = result else {
             panic!("expected NoMatch, got {result:?}");
         };
-        reasons
+        failures
     }
 
     #[test]
@@ -565,71 +689,140 @@ mod tests {
         assert_meter_no_match(spec.validate_line(&line));
     }
 
-    // --- MeterMatchResult mismatch reasons ---
+    // --- MeterMatchResult failures ---
 
     #[test]
-    fn validate_recursive_reports_meter_too_long_when_words_are_exhausted() {
-        let meter_a = [U, S];
-        let meter_b = [S];
-        let meters: Vec<&[SyllableStress]> = vec![&meter_a, &meter_b];
-        let words: Vec<WordEntry> = vec![];
+    fn validate_line_reports_every_failed_syllable() {
+        // HELLO is x/, so each HELLO's first syllable misses a stress.
+        let line = Line::new("hello hello", dict());
+        let spec: MeterSpecification = "////".parse().unwrap();
 
-        let reasons = assert_meter_no_match(validate_recursive(0, &words, &meters));
-
-        assert!(reasons.contains(&MeterMismatch::MeterTooLong {
-            remaining_syllables_in_meter: 2,
-        }));
-        assert!(reasons.contains(&MeterMismatch::MeterTooLong {
-            remaining_syllables_in_meter: 1,
-        }));
+        assert_eq!(
+            assert_meter_no_match(spec.validate_line(&line)),
+            [0, 1].map(|word_index| MeterDeviation::StressMismatch {
+                word_index,
+                syllable_index: 0,
+                expected: S,
+                actual: Stress::Unstressed,
+            })
+        );
     }
 
     #[test]
-    fn validate_recursive_reports_meter_too_short_when_word_exceeds_meter() {
-        let line = Line::new("hello", dict());
-        let meter = [U];
-        let meters: Vec<&[SyllableStress]> = vec![&meter];
-
-        let reasons = assert_meter_no_match(validate_recursive(0, &line.words, &meters));
-
-        assert!(reasons.contains(&MeterMismatch::MeterTooShort {
-            word_index_failed_at: 0,
-        }));
-    }
-
-    #[test]
-    fn validate_recursive_reports_word_stress_mismatch() {
-        let line = Line::new("hello", dict());
-        let meter = [S, S];
-        let meters: Vec<&[SyllableStress]> = vec![&meter];
-
-        let reasons = assert_meter_no_match(validate_recursive(0, &line.words, &meters));
-
-        assert!(reasons.contains(&MeterMismatch::WordsStressMismatch {
-            expected_stress_pattern_of_word: vec![S, S],
-            word_index_failed_at: 0,
-        }));
-    }
-
-    #[test]
-    fn validate_recursive_accumulates_reasons_from_multiple_failed_branches() {
+    fn validate_line_reports_a_word_past_the_end_of_the_meter() {
+        // HELLO uses up the meter, leaving nothing for WORLD.
         let line = Line::new("hello world", dict());
-        let meter_that_matches_first_word_then_runs_out = [U, S];
-        let meter_that_fails_first_word_stress = [S, S];
-        let meters: Vec<&[SyllableStress]> = vec![
-            &meter_that_matches_first_word_then_runs_out,
-            &meter_that_fails_first_word_stress,
-        ];
+        let spec: MeterSpecification = "x/".parse().unwrap();
 
-        let reasons = assert_meter_no_match(validate_recursive(0, &line.words, &meters));
+        assert_eq!(
+            assert_meter_no_match(spec.validate_line(&line)),
+            [MeterDeviation::ExtraSyllable {
+                word_index: 1,
+                syllable_index: 0,
+                actual: Stress::Primary,
+            }]
+        );
+    }
 
-        assert!(reasons.contains(&MeterMismatch::MeterTooShort {
-            word_index_failed_at: 1,
-        }));
-        assert!(reasons.contains(&MeterMismatch::WordsStressMismatch {
-            expected_stress_pattern_of_word: vec![S, S],
-            word_index_failed_at: 0,
-        }));
+    #[test]
+    fn validate_line_reports_meter_left_over_after_the_last_word() {
+        // Of the meter's two readings, the shorter one leaves less unfilled.
+        let line = Line::new("", dict());
+        let spec: MeterSpecification = "(x)/".parse().unwrap();
+
+        assert_eq!(
+            assert_meter_no_match(spec.validate_line(&line)),
+            [MeterDeviation::MissingSyllable {
+                meter_syllable_index: 0,
+                expected: S,
+            }]
+        );
+    }
+
+    #[test]
+    fn alternate_pronunciation_can_match_meter() {
+        // EVERY(1) is the two-syllable /x pronunciation; the base entry is /xx.
+        let line = Line::new("every", dict());
+        let spec: MeterSpecification = "/x".parse().unwrap();
+
+        assert_meter_matches(spec.validate_line(&line));
+    }
+
+    #[test]
+    fn less_promising_pronunciation_failure_is_not_reported() {
+        let line = Line::new("and carries every wandering dream to light", dict());
+        let spec: MeterSpecification = "x/x/x/x/x/".parse().unwrap();
+
+        let failures = assert_meter_no_match(spec.validate_line(&line));
+        let failed_words: Vec<usize> = failures
+            .iter()
+            .map(|failure| match failure {
+                MeterDeviation::StressMismatch { word_index, .. }
+                | MeterDeviation::ExtraSyllable { word_index, .. } => *word_index,
+                MeterDeviation::MissingSyllable { .. } => usize::MAX,
+            })
+            .collect();
+
+        // EVERY's three-syllable /xx doesn't fit, but its two-syllable /x does,
+        // so the best reading's problems lie elsewhere.
+        assert!(failed_words.contains(&3), "{failures:?}");
+        assert!(!failed_words.contains(&2), "{failures:?}");
+    }
+
+    #[test]
+    fn deviation_analysis_continues_after_a_stress_mismatch() {
+        // HELLO is x/ and KARAOKE is /x/x. Only HELLO's first syllable
+        // deviates from this meter; analysis must continue through KARAOKE.
+        let line = Line::new("hello karaoke", dict());
+        let spec: MeterSpecification = "// /x/x".parse().unwrap();
+
+        assert_eq!(
+            spec.deviations_for_line(&line).unwrap(),
+            vec![MeterDeviation::StressMismatch {
+                word_index: 0,
+                syllable_index: 0,
+                expected: S,
+                actual: Stress::Unstressed,
+            }]
+        );
+    }
+
+    #[test]
+    fn deviation_analysis_counts_each_extra_and_missing_syllable() {
+        let line = Line::new("hello", dict());
+        let short_spec: MeterSpecification = "x".parse().unwrap();
+        let long_spec: MeterSpecification = "x///".parse().unwrap();
+
+        // Only HELLO's first syllable fits the meter.
+        assert_eq!(
+            short_spec.deviations_for_line(&line).unwrap(),
+            vec![MeterDeviation::ExtraSyllable {
+                word_index: 0,
+                syllable_index: 1,
+                actual: Stress::Primary,
+            }]
+        );
+        assert_eq!(
+            long_spec.deviations_for_line(&line).unwrap(),
+            vec![
+                MeterDeviation::MissingSyllable {
+                    meter_syllable_index: 2,
+                    expected: S,
+                },
+                MeterDeviation::MissingSyllable {
+                    meter_syllable_index: 3,
+                    expected: S,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn deviation_analysis_chooses_the_pronunciation_with_fewest_exceptions() {
+        let line = Line::new("every", dict());
+        let spec: MeterSpecification = "/x".parse().unwrap();
+
+        assert!(spec.deviations_for_line(&line).unwrap().is_empty());
     }
 
     // --- SyllableCountSpecification ---
