@@ -144,13 +144,14 @@ fn derive_pronunciations<D: PronouncingDictionary + ?Sized>(
 }
 
 /// Respells running text the way CMUdict writes it. CMUdict uses straight
-/// apostrophes, while prose editors commonly insert typographic ones, and it
-/// has no entry for a bare `&`.
+/// apostrophes, while prose editors commonly insert typographic ones, even an
+/// opening quote for a leading elision (‘tis), and it has no entry for a
+/// bare `&`.
 fn dictionary_spelling(word: &str) -> String {
     if word == "&" {
         "and".to_string()
     } else {
-        word.replace('’', "'")
+        word.replace(['’', '‘'], "'")
     }
 }
 

@@ -400,15 +400,7 @@ mod tests {
     fn line_texts(poem: &Poem) -> Vec<String> {
         poem.lines
             .iter()
-            .map(|poem_line| {
-                poem_line
-                    .line
-                    .words
-                    .iter()
-                    .map(|word| word.word.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
+            .map(|poem_line| poem_line.line.text.clone())
             .collect()
     }
 

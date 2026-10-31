@@ -1,6 +1,8 @@
 use std::{collections::HashSet, ops::Range};
 
-use crate::{PronouncingDictionary, PronunciationOrigin, Stress, phoneme::Phoneme};
+use crate::{
+    PronouncingDictionary, PronunciationOrigin, Stress, WordPronunciations, phoneme::Phoneme,
+};
 
 pub struct Pronunciation {
     pub phonemes: Box<[Phoneme]>,
@@ -46,42 +48,36 @@ pub struct WordEntry {
     pub data: WordData,
 }
 
-impl WordEntry {
-    /// Looks up `word`, which must be a slice of `text`, the line it is read
-    /// from.
-    fn new<D: PronouncingDictionary + ?Sized>(text: &str, word: &str, dict: &D) -> Self {
-        let data = match dict.pronunciations_for(word) {
-            None => WordData::Unknown,
-            Some(word_pronunciations) => {
-                let pronunciations = word_pronunciations
-                    .pronunciations
-                    .into_owned()
-                    .into_iter()
-                    .map(|phonemes| {
-                        let stress_pattern = phonemes
-                            .iter()
-                            .filter_map(|phoneme| match phoneme {
-                                Phoneme::Vowel(vowel) => Some(vowel.stress),
-                                Phoneme::Consonant(_) => None,
-                            })
-                            .collect();
-                        Pronunciation {
-                            phonemes,
-                            stress_pattern,
-                        }
+impl From<WordPronunciations<'_>> for WordData {
+    fn from(word_pronunciations: WordPronunciations<'_>) -> Self {
+        let pronunciations = word_pronunciations
+            .pronunciations
+            .into_owned()
+            .into_iter()
+            .map(|phonemes| {
+                let stress_pattern = phonemes
+                    .iter()
+                    .filter_map(|phoneme| match phoneme {
+                        Phoneme::Vowel(vowel) => Some(vowel.stress),
+                        Phoneme::Consonant(_) => None,
                     })
                     .collect();
-                WordData::Known {
-                    pronunciations,
-                    origin: word_pronunciations.origin,
+                Pronunciation {
+                    phonemes,
+                    stress_pattern,
                 }
-            }
-        };
-        Self::with_data(text, word, data)
+            })
+            .collect();
+        WordData::Known {
+            pronunciations,
+            origin: word_pronunciations.origin,
+        }
     }
+}
 
+impl WordEntry {
     /// `word` must be a slice of `text`, the line it is read from.
-    fn with_data(text: &str, word: &str, data: WordData) -> Self {
+    fn new(text: &str, word: &str, data: WordData) -> Self {
         let start = word.as_ptr().addr() - text.as_ptr().addr();
         Self {
             word: word.to_string(),
@@ -93,26 +89,33 @@ impl WordEntry {
 
 /// Reads one whitespace-separated token of `text` into words, ignoring the
 /// punctuation around a word unless the dictionary spells the word with it.
-/// Tries the token as written (*Jr.*, *'tis*, *well-known*), then without
-/// surrounding punctuation (*light.* -> *light*), then also without
-/// surrounding apostrophes, which may be quotation marks (*'hello'* ->
-/// *hello*). If none of those is known, a token joined by hyphens or dashes
+/// Tries the token as written (*Jr.*, *'tis*, *well-known*), then as the word
+/// with only the apostrophes touching it (*'tis,* -> *'tis*), then as the bare
+/// word, since those apostrophes may be quotation marks (*'Hello,'* ->
+/// *Hello*). If none of those is known, a token joined by hyphens or dashes
 /// is read as its parts (*sun-kissed* -> *sun*, *kissed*). An unknown word
-/// keeps its apostrophes (*xyzzin'*). A token with no letters, digits or `&`,
-/// such as a dash, adds no words.
+/// keeps an apostrophe on one side (*xyzzin'*) but not on both (*'xyzzy'*).
+/// A token with no letters, digits or `&`, such as a dash, adds no words.
 fn read_token<D: PronouncingDictionary + ?Sized>(
     text: &str,
     token: &str,
     dict: &D,
     words: &mut Vec<WordEntry>,
 ) {
-    let unpunctuated = token.trim_matches(|character: char| {
-        !character.is_alphanumeric() && !is_apostrophe(character) && character != '&'
-    });
-    let unquoted = unpunctuated.trim_matches(is_apostrophe);
-    if unquoted.is_empty() {
+    // `start..end` is the bare word: the token less everything around it
+    // that isn't a letter, digit or `&`, apostrophes included.
+    let is_punctuation = |character: char| !character.is_alphanumeric() && character != '&';
+    let start = token.len() - token.trim_start_matches(is_punctuation).len();
+    let end = token.trim_end_matches(is_punctuation).len();
+    if start >= end {
         return;
     }
+    // Apostrophes touching the bare word may belong to it ('tis, dancin').
+    let apostrophes_before = start - token[..start].trim_end_matches(is_apostrophe).len();
+    let apostrophes_after =
+        token.len() - end - token[end..].trim_start_matches(is_apostrophe).len();
+    let unquoted = &token[start..end];
+    let unpunctuated = &token[start - apostrophes_before..end + apostrophes_after];
 
     // Each spelling contains the next, so any repeats are adjacent.
     let mut spellings = vec![token, unpunctuated, unquoted];
@@ -120,23 +123,31 @@ fn read_token<D: PronouncingDictionary + ?Sized>(
 
     let known = spellings
         .into_iter()
-        .map(|spelling| WordEntry::new(text, spelling, dict))
-        .find(|entry| matches!(entry.data, WordData::Known { .. }));
-    if let Some(entry) = known {
-        words.push(entry);
-    } else if unpunctuated.contains(is_dash) {
-        for part in unpunctuated.split(is_dash) {
+        .find_map(|spelling| Some((spelling, dict.pronunciations_for(spelling)?)));
+    if let Some((spelling, word_pronunciations)) = known {
+        words.push(WordEntry::new(text, spelling, word_pronunciations.into()));
+        return;
+    }
+
+    let unknown = if apostrophes_before > 0 && apostrophes_after > 0 {
+        unquoted
+    } else {
+        unpunctuated
+    };
+    if unknown.contains(is_dash) {
+        for part in unknown.split(is_dash) {
             read_token(text, part, dict, words);
         }
     } else {
-        words.push(WordEntry::with_data(text, unpunctuated, WordData::Unknown));
+        words.push(WordEntry::new(text, unknown, WordData::Unknown));
     }
 }
 
 /// Straight and typographic apostrophes, which can belong to a word ('tis,
-/// kettles') where other punctuation cannot.
+/// kettles') where other punctuation cannot. Editors often turn the
+/// apostrophe of a leading elision into an opening quote (‘tis).
 fn is_apostrophe(character: char) -> bool {
-    matches!(character, '\'' | '’')
+    matches!(character, '\'' | '’' | '‘')
 }
 
 /// Hyphens, which join compounds, and the dashes that separate words.
@@ -364,7 +375,7 @@ mod tests {
 
     #[test]
     fn tokens_without_letters_or_digits_are_not_words() {
-        let line = Line::new("cat — dog … -- ' ", dict());
+        let line = Line::new("cat — dog … -- ' '?' '...'", dict());
         assert_eq!(words(&line), ["cat", "dog"]);
         assert_eq!(line.syllable_counts(), Some(vec![2]));
         assert!(Line::new("— …", dict()).words.is_empty());
@@ -427,6 +438,33 @@ mod tests {
         let line = Line::new("'hello' ‘world’ xyzzin',", dict());
         assert_eq!(words(&line), ["hello", "world", "xyzzin'"]);
         assert_eq!(line.unknown_words(), HashSet::from(["xyzzin'"]));
+    }
+
+    #[test]
+    fn quotation_marks_outside_punctuation_are_dropped() {
+        let line = Line::new("'Hello,' ‘Hello!’ 'storm-tossed,'", dict());
+        assert_eq!(words(&line), ["Hello", "Hello", "storm", "tossed"]);
+        assert!(line.unknown_words().is_empty());
+    }
+
+    #[test]
+    fn an_opening_quote_can_mark_an_elision() {
+        // 'EM is AH0 M, where EM is EH1 M.
+        let line = Line::new("‘em", dict());
+        assert_eq!(words(&line), ["‘em"]);
+        let WordData::Known { pronunciations, .. } = &line.words[0].data else {
+            panic!("‘em should be known");
+        };
+        assert_eq!(
+            *pronunciations[0].phonemes,
+            *dict().lookup("'em").unwrap()[0]
+        );
+    }
+
+    #[test]
+    fn unknown_words_drop_apostrophes_on_both_sides() {
+        let line = Line::new("'xyzzy' ‘xyzzy’ 'xyzzy xyzzy'", dict());
+        assert_eq!(words(&line), ["xyzzy", "xyzzy", "'xyzzy", "xyzzy'"]);
     }
 
     #[test]
