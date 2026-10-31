@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, ops::Range};
 
 use crate::{PronouncingDictionary, PronunciationOrigin, Stress, phoneme::Phoneme};
 
@@ -40,11 +40,16 @@ impl WordData {
 
 pub struct WordEntry {
     pub word: String,
+    /// Where `word` sits in its line's [`Line::text`], as a byte range.
+    /// Punctuation ignored when reading the word lies outside it.
+    pub span: Range<usize>,
     pub data: WordData,
 }
 
 impl WordEntry {
-    fn new<D: PronouncingDictionary + ?Sized>(word: &str, dict: &D) -> Self {
+    /// Looks up `word`, which must be a slice of `text`, the line it is read
+    /// from.
+    fn new<D: PronouncingDictionary + ?Sized>(text: &str, word: &str, dict: &D) -> Self {
         let data = match dict.pronunciations_for(word) {
             None => WordData::Unknown,
             Some(word_pronunciations) => {
@@ -72,40 +77,59 @@ impl WordEntry {
                 }
             }
         };
+        Self::with_data(text, word, data)
+    }
+
+    /// `word` must be a slice of `text`, the line it is read from.
+    fn with_data(text: &str, word: &str, data: WordData) -> Self {
+        let start = word.as_ptr().addr() - text.as_ptr().addr();
         Self {
             word: word.to_string(),
+            span: start..start + word.len(),
             data,
         }
     }
+}
 
-    /// Resolves one whitespace-separated token of running text, ignoring the
-    /// punctuation around a word unless the dictionary spells the word with
-    /// it. Tries the token as written (*Jr.*, *'tis*), then without
-    /// surrounding punctuation (*light.* -> *light*), then also without
-    /// surrounding apostrophes, which may be quotation marks (*'hello'* ->
-    /// *hello*). An unknown word keeps its apostrophes (*xyzzin'*). Returns
-    /// `None` for a token with no letters or digits, such as a dash.
-    fn from_token<D: PronouncingDictionary + ?Sized>(token: &str, dict: &D) -> Option<Self> {
-        let unpunctuated = token.trim_matches(|character: char| {
-            !character.is_alphanumeric() && !is_apostrophe(character)
-        });
-        let unquoted = unpunctuated.trim_matches(is_apostrophe);
+/// Reads one whitespace-separated token of `text` into words, ignoring the
+/// punctuation around a word unless the dictionary spells the word with it.
+/// Tries the token as written (*Jr.*, *'tis*, *well-known*), then without
+/// surrounding punctuation (*light.* -> *light*), then also without
+/// surrounding apostrophes, which may be quotation marks (*'hello'* ->
+/// *hello*). If none of those is known, a token joined by hyphens or dashes
+/// is read as its parts (*sun-kissed* -> *sun*, *kissed*). An unknown word
+/// keeps its apostrophes (*xyzzin'*). A token with no letters, digits or `&`,
+/// such as a dash, adds no words.
+fn read_token<D: PronouncingDictionary + ?Sized>(
+    text: &str,
+    token: &str,
+    dict: &D,
+    words: &mut Vec<WordEntry>,
+) {
+    let unpunctuated = token.trim_matches(|character: char| {
+        !character.is_alphanumeric() && !is_apostrophe(character) && character != '&'
+    });
+    let unquoted = unpunctuated.trim_matches(is_apostrophe);
+    if unquoted.is_empty() {
+        return;
+    }
 
-        // Each spelling contains the next, so any repeats are adjacent.
-        let mut spellings = vec![token, unpunctuated, unquoted];
-        spellings.dedup();
+    // Each spelling contains the next, so any repeats are adjacent.
+    let mut spellings = vec![token, unpunctuated, unquoted];
+    spellings.dedup();
 
-        spellings
-            .into_iter()
-            .filter(|spelling| !spelling.is_empty())
-            .map(|spelling| Self::new(spelling, dict))
-            .find(|entry| matches!(entry.data, WordData::Known { .. }))
-            .or_else(|| {
-                token.chars().any(char::is_alphanumeric).then(|| Self {
-                    word: unpunctuated.to_string(),
-                    data: WordData::Unknown,
-                })
-            })
+    let known = spellings
+        .into_iter()
+        .map(|spelling| WordEntry::new(text, spelling, dict))
+        .find(|entry| matches!(entry.data, WordData::Known { .. }));
+    if let Some(entry) = known {
+        words.push(entry);
+    } else if unpunctuated.contains(is_dash) {
+        for part in unpunctuated.split(is_dash) {
+            read_token(text, part, dict, words);
+        }
+    } else {
+        words.push(WordEntry::with_data(text, unpunctuated, WordData::Unknown));
     }
 }
 
@@ -115,21 +139,33 @@ fn is_apostrophe(character: char) -> bool {
     matches!(character, '\'' | '’')
 }
 
+/// Hyphens, which join compounds, and the dashes that separate words.
+fn is_dash(character: char) -> bool {
+    matches!(character, '-' | '‐' | '‑' | '–' | '—')
+}
+
 pub struct Line {
+    /// The text the line was read from. Each word's span indexes it.
+    pub text: String,
     pub words: Vec<WordEntry>,
 }
 
 impl Line {
     /// Splits `s` into words at whitespace. Punctuation around a word is
-    /// ignored unless the dictionary spells the word with it, and a token
-    /// with no letters or digits, such as a dash, is not a word. Word indices
-    /// therefore count words, not whitespace-separated tokens.
+    /// ignored unless the dictionary spells the word with it, a hyphenated
+    /// compound the dictionary doesn't list is read as its parts, and a token
+    /// with no letters, digits or `&`, such as a dash, is not a word. Word
+    /// indices therefore count words, not whitespace-separated tokens; each
+    /// word's span locates it in [`Self::text`].
     pub fn new<D: PronouncingDictionary + ?Sized>(s: &str, dict: &D) -> Self {
-        let words = s
-            .split_whitespace()
-            .filter_map(|token| WordEntry::from_token(token, dict))
-            .collect::<Vec<_>>();
-        Self { words }
+        let mut words = Vec::new();
+        for token in s.split_whitespace() {
+            read_token(s, token, dict, &mut words);
+        }
+        Self {
+            text: s.to_string(),
+            words,
+        }
     }
     pub fn unknown_words(&self) -> HashSet<&str> {
         self.words
@@ -328,10 +364,55 @@ mod tests {
 
     #[test]
     fn tokens_without_letters_or_digits_are_not_words() {
-        let line = Line::new("cat — dog … & ' ", dict());
+        let line = Line::new("cat — dog … -- ' ", dict());
         assert_eq!(words(&line), ["cat", "dog"]);
         assert_eq!(line.syllable_counts(), Some(vec![2]));
         assert!(Line::new("— …", dict()).words.is_empty());
+    }
+
+    #[test]
+    fn ampersand_reads_as_and() {
+        let line = Line::new("cats & dogs, (&)", dict());
+        assert_eq!(words(&line), ["cats", "&", "dogs", "&"]);
+        assert_eq!(line.syllable_counts(), Some(vec![4]));
+        assert_eq!(
+            line.words[1].data.origin(),
+            Some(&PronunciationOrigin::Dictionary { normalized: true })
+        );
+    }
+
+    #[test]
+    fn unlisted_hyphenated_compounds_are_read_as_their_parts() {
+        // CMUdict lists okey-dokey, so it stays one word.
+        let line = Line::new("okey-dokey, sun-kissed ‘storm-tossed’", dict());
+        assert_eq!(
+            words(&line),
+            ["okey-dokey", "sun", "kissed", "storm", "tossed"]
+        );
+        assert!(line.unknown_words().is_empty());
+
+        // An unknown part is reported on its own.
+        let line = Line::new("sun-xyzzy", dict());
+        assert_eq!(words(&line), ["sun", "xyzzy"]);
+        assert_eq!(line.unknown_words(), HashSet::from(["xyzzy"]));
+    }
+
+    #[test]
+    fn dashes_inside_a_token_separate_words() {
+        for text in ["light—and dark", "light–and dark", "light--and dark"] {
+            assert_eq!(words(&Line::new(text, dict())), ["light", "and", "dark"]);
+        }
+    }
+
+    #[test]
+    fn spans_locate_words_without_their_punctuation() {
+        let line = Line::new("“Hello,” sun-kissed & light—", dict());
+        let spans: Vec<_> = line.words.iter().map(|word| word.span.clone()).collect();
+        // “ is three bytes, so "Hello" starts at byte 3.
+        assert_eq!(spans, [3..8, 13..16, 17..23, 24..25, 26..31]);
+        for word in &line.words {
+            assert_eq!(&line.text[word.span.clone()], word.word);
+        }
     }
 
     #[test]

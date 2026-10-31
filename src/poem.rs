@@ -138,6 +138,17 @@ impl Poem {
         Ok(())
     }
 
+    /// The line at the given index, whose words' spans locate them in its text.
+    pub fn line(&self, index: usize) -> Result<&Line, PoemEditError> {
+        self.lines
+            .get(index)
+            .map(|poem_line| &poem_line.line)
+            .ok_or(PoemEditError::LineIndexOutOfBounds {
+                index,
+                line_count: self.lines.len(),
+            })
+    }
+
     pub fn meter_analysis(&mut self, index: usize) -> Result<MeterAnalysis<'_>, PoemEditError> {
         self.ensure_meter_analysis(index)?;
         Ok(self.cached_meter_analysis_after_ensure(index))

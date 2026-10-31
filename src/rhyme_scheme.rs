@@ -498,6 +498,8 @@ mod tests {
     fn known_word(word: &str, pronunciations: &[&[&str]]) -> WordEntry {
         WordEntry {
             word: word.to_string(),
+            // Built from phonemes rather than read from a line's text.
+            span: 0..0,
             data: WordData::Known {
                 pronunciations: pronunciations
                     .iter()
@@ -774,12 +776,14 @@ mod tests {
     #[test]
     fn compare_rhyming_parts_finds_longer_match_across_follower_pronunciation_combinations() {
         let leader = Line {
+            text: String::new(),
             words: vec![known_word(
                 "leader",
                 &[&["AE1", "T"][..], &["IY1", "Z", "AH0"][..]],
             )],
         };
         let follower = Line {
+            text: String::new(),
             words: vec![
                 known_word("follower_prefix", &[&["AA1", "R"][..], &["IY1", "Z"][..]]),
                 known_word("follower_last", &[&["EH0"][..], &["AH0"][..]]),
@@ -795,6 +799,7 @@ mod tests {
     #[test]
     fn compare_rhyming_parts_finds_shorter_match_across_follower_pronunciation_combinations() {
         let leader = Line {
+            text: String::new(),
             words: vec![known_word(
                 "leader",
                 &[
@@ -804,6 +809,7 @@ mod tests {
             )],
         };
         let follower = Line {
+            text: String::new(),
             words: vec![
                 known_word(
                     "follower_prefix",
