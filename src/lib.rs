@@ -35,8 +35,8 @@ pub use error::{
 };
 pub use line::Line;
 pub use meter::{
-    MeterDeviation, MeterExceptionConfig, MeterMatchResult, MeterScheme, MeterSpecification,
-    SyllableCountSpecification, SyllableStress,
+    MeterDeviation, MeterExceptionConfig, MeterMatchResult, MeterReading, MeterScheme,
+    MeterSpecification, PromotedSyllable, SyllableCountSpecification, SyllableStress,
 };
 pub use phoneme::{Consonant, Phoneme, Stress, Vowel, VowelPhoneme};
 pub use poem::Poem;
