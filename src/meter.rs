@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::{
     Stress,
@@ -6,7 +6,7 @@ use crate::{
         MeterCheckError, ParseMeterError, ParseMeterSchemeError, ParseSyllableCountError,
         UnknownWordError,
     },
-    line::{Line, WordEntry},
+    line::{Line, WordData, WordEntry},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -132,28 +132,35 @@ impl MeterSpecification {
     }
 
     /// Returns the deviations of the line's least-deviating reading: its choice of
-    /// pronunciations and optional-meter path. The analysis continues after a
-    /// mismatch, so every wrong stress, extra syllable, and missing syllable is
-    /// recorded. An empty result means the line fits.
+    /// pronunciations, optional-meter path, and alignment of syllables with the
+    /// meter. The analysis continues after a mismatch, so every wrong stress,
+    /// extra syllable, and missing syllable is recorded. An empty result means the
+    /// line fits.
     pub fn deviations_for_line(&self, line: &Line) -> Result<Vec<MeterDeviation>, MeterCheckError> {
+        let stress_patterns = line
+            .words
+            .iter()
+            .map(distinct_stress_patterns)
+            .collect::<Result<Vec<_>, _>>()?;
         let mut meters: Vec<&Meter> = self.possible_meters.iter().collect();
         meters.sort_by(|a, b| a.meter.cmp(&b.meter));
 
-        let mut best: Option<Vec<MeterDeviation>> = None;
+        // The first meter path with the fewest deviations.
+        let mut best: Option<(usize, Alignment<'_>)> = None;
         for meter in meters {
-            let candidate = deviations_for_meter(&line.words, &meter.meter)?;
-            if candidate.is_empty() {
-                return Ok(candidate);
+            let mut alignment = Alignment::new(&stress_patterns, &meter.meter);
+            let cost = alignment.cost_from_word(0, 0);
+            if best.as_ref().is_none_or(|(best_cost, _)| cost < *best_cost) {
+                best = Some((cost, alignment));
             }
-            if best
-                .as_ref()
-                .is_none_or(|current| candidate.len() < current.len())
-            {
-                best = Some(candidate);
+            if cost == 0 {
+                break;
             }
         }
 
-        Ok(best.unwrap_or_default())
+        Ok(best
+            .map(|(_, alignment)| alignment.deviations())
+            .unwrap_or_default())
     }
 }
 
@@ -214,13 +221,15 @@ pub enum MeterDeviation {
         expected: SyllableStress,
         actual: Stress,
     },
-    /// A syllable past the end of the meter.
+    /// A syllable that fills no position in the meter: an extra syllable
+    /// within the line, or one past the meter's end.
     ExtraSyllable {
         word_index: usize,
         syllable_index: usize,
         actual: Stress,
     },
-    /// A position in the meter left over after the line's last syllable.
+    /// A position in the meter that no syllable fills, between words or after
+    /// the line's last word.
     MissingSyllable {
         meter_syllable_index: usize,
         expected: SyllableStress,
@@ -284,100 +293,268 @@ impl MeterMatchResult {
     }
 }
 
-fn deviations_for_meter(
-    words: &[WordEntry],
-    meter: &[SyllableStress],
-) -> Result<Vec<MeterDeviation>, MeterCheckError> {
-    least_deviations_from(0, 0, words, meter, &mut HashMap::new())
-}
-
-/// The fewest deviations with which `words[word_index..]` can be read against
-/// `meter[meter_syllable_index..]`. How the rest of a line reads depends only
-/// on those two positions, so results are memoized on them; otherwise the
-/// search is exponential in the number of words with several stress patterns.
-fn least_deviations_from(
-    word_index: usize,
-    meter_syllable_index: usize,
-    words: &[WordEntry],
-    meter: &[SyllableStress],
-    memo: &mut HashMap<(usize, usize), Vec<MeterDeviation>>,
-) -> Result<Vec<MeterDeviation>, MeterCheckError> {
-    if let Some(deviations) = memo.get(&(word_index, meter_syllable_index)) {
-        return Ok(deviations.clone());
-    }
-
-    let Some(word) = words.get(word_index) else {
-        return Ok(meter[meter_syllable_index..]
-            .iter()
-            .enumerate()
-            .map(|(offset, expected)| MeterDeviation::MissingSyllable {
-                meter_syllable_index: meter_syllable_index + offset,
-                expected: *expected,
-            })
-            .collect());
-    };
-
-    let crate::line::WordData::Known { pronunciations, .. } = &word.data else {
+/// A word's distinct stress patterns, in dictionary order.
+fn distinct_stress_patterns(word: &WordEntry) -> Result<Vec<&[Stress]>, MeterCheckError> {
+    let WordData::Known { pronunciations, .. } = &word.data else {
         return Err(MeterCheckError::UnknownWord(UnknownWordError {
             word: word.word.clone(),
         }));
     };
 
-    let mut best: Option<Vec<MeterDeviation>> = None;
-    let mut seen_stress_patterns: HashSet<&[Stress]> = HashSet::new();
+    let mut patterns: Vec<&[Stress]> = Vec::new();
     for pronunciation in pronunciations {
-        let stresses = pronunciation.stress_pattern.as_slice();
-        if !seen_stress_patterns.insert(stresses) {
-            continue;
+        let pattern = pronunciation.stress_pattern.as_slice();
+        if !patterns.contains(&pattern) {
+            patterns.push(pattern);
+        }
+    }
+    Ok(patterns)
+}
+
+/// Finds the alignment of a line's syllables with one meter path that has the
+/// fewest deviations. A syllable either fills the next meter position, deviating
+/// if its stress doesn't fit there, or is extra; and a meter position can go
+/// unfilled between words. So a single extra or missing syllable anywhere in a
+/// line is one deviation, rather than shifting every syllable after it. Among
+/// equally good alignments, filling a position is preferred, which places an
+/// overlong line's extra syllables at its end.
+///
+/// How the rest of a line aligns depends only on where the search is in the line
+/// and in the meter, so the fewest deviations from each such position are
+/// memoized; otherwise the search is exponential in the number of words with
+/// several stress patterns. The deviations themselves are traced once, through
+/// the memoized costs, after the search.
+struct Alignment<'a> {
+    /// Each word's distinct stress patterns.
+    stress_patterns: &'a [Vec<&'a [Stress]>],
+    meter: &'a [SyllableStress],
+    /// Memoized costs from the beginning of a word, by word and then meter position.
+    word_costs: Vec<Option<usize>>,
+    /// Each word's stress patterns' first rows in `syllable_costs`: a pattern has
+    /// one row per syllable.
+    syllable_rows: Vec<Vec<usize>>,
+    /// Memoized costs from a syllable, by row and then meter position.
+    syllable_costs: Vec<Option<usize>>,
+}
+
+impl<'a> Alignment<'a> {
+    fn new(stress_patterns: &'a [Vec<&'a [Stress]>], meter: &'a [SyllableStress]) -> Self {
+        let mut row_count = 0;
+        let syllable_rows = stress_patterns
+            .iter()
+            .map(|patterns| {
+                patterns
+                    .iter()
+                    .map(|pattern| {
+                        let first_row = row_count;
+                        row_count += pattern.len();
+                        first_row
+                    })
+                    .collect()
+            })
+            .collect();
+        let positions = meter.len() + 1;
+        Self {
+            stress_patterns,
+            meter,
+            word_costs: vec![None; stress_patterns.len() * positions],
+            syllable_rows,
+            syllable_costs: vec![None; row_count * positions],
+        }
+    }
+
+    fn word_cost_index(&self, word_index: usize, meter_index: usize) -> usize {
+        word_index * (self.meter.len() + 1) + meter_index
+    }
+
+    fn syllable_cost_index(
+        &self,
+        word_index: usize,
+        pattern_index: usize,
+        syllable_index: usize,
+        meter_index: usize,
+    ) -> usize {
+        let row = self.syllable_rows[word_index][pattern_index] + syllable_index;
+        row * (self.meter.len() + 1) + meter_index
+    }
+
+    /// The deviations of the best alignment of the whole line.
+    fn deviations(mut self) -> Vec<MeterDeviation> {
+        let mut deviations = Vec::new();
+        self.trace_from_word(0, 0, &mut deviations);
+        deviations
+    }
+
+    /// The fewest deviations aligning words `word_index..` with meter positions
+    /// `meter_index..`, starting at the beginning of a word.
+    fn cost_from_word(&mut self, word_index: usize, meter_index: usize) -> usize {
+        if word_index == self.stress_patterns.len() {
+            // Out of syllables: the rest of the meter goes unfilled.
+            return self.meter.len() - meter_index;
+        }
+        let memo_index = self.word_cost_index(word_index, meter_index);
+        if let Some(cost) = self.word_costs[memo_index] {
+            return cost;
         }
 
-        let mut candidate = Vec::new();
-        for (syllable_index, actual) in stresses.iter().copied().enumerate() {
-            let absolute_index = meter_syllable_index + syllable_index;
-            match meter.get(absolute_index).copied() {
-                Some(expected)
-                    if !syllable_stress_matches_meter(stresses, syllable_index, expected) =>
-                {
-                    candidate.push(MeterDeviation::StressMismatch {
+        let mut cost = usize::MAX;
+        for pattern_index in 0..self.stress_patterns[word_index].len() {
+            cost = cost.min(self.cost_from_syllable(word_index, pattern_index, 0, meter_index));
+            if cost == 0 {
+                break;
+            }
+        }
+        // Leave this meter position unfilled before the word.
+        if meter_index < self.meter.len() && cost > 0 {
+            cost = cost.min(1 + self.cost_from_word(word_index, meter_index + 1));
+        }
+
+        self.word_costs[memo_index] = Some(cost);
+        cost
+    }
+
+    /// The fewest deviations aligning the rest of the line, from syllable
+    /// `syllable_index` of word `word_index` read with stress pattern
+    /// `pattern_index`, with meter positions `meter_index..`.
+    fn cost_from_syllable(
+        &mut self,
+        word_index: usize,
+        pattern_index: usize,
+        syllable_index: usize,
+        meter_index: usize,
+    ) -> usize {
+        let stresses = self.stress_patterns[word_index][pattern_index];
+        if syllable_index == stresses.len() {
+            return self.cost_from_word(word_index + 1, meter_index);
+        }
+        let memo_index =
+            self.syllable_cost_index(word_index, pattern_index, syllable_index, meter_index);
+        if let Some(cost) = self.syllable_costs[memo_index] {
+            return cost;
+        }
+
+        let mut cost = usize::MAX;
+        // The syllable fills the next meter position.
+        if let Some(&expected) = self.meter.get(meter_index) {
+            let fits = syllable_stress_matches_meter(stresses, syllable_index, expected);
+            cost = usize::from(!fits)
+                + self.cost_from_syllable(
+                    word_index,
+                    pattern_index,
+                    syllable_index + 1,
+                    meter_index + 1,
+                );
+        }
+        // The syllable is extra.
+        if cost > 0 {
+            cost = cost.min(
+                1 + self.cost_from_syllable(
+                    word_index,
+                    pattern_index,
+                    syllable_index + 1,
+                    meter_index,
+                ),
+            );
+        }
+
+        self.syllable_costs[memo_index] = Some(cost);
+        cost
+    }
+
+    /// Appends the deviations of the best alignment from the beginning of word
+    /// `word_index`, taking the first of equally good choices in the order
+    /// [`Self::cost_from_word`] considers them.
+    fn trace_from_word(
+        &mut self,
+        word_index: usize,
+        meter_index: usize,
+        deviations: &mut Vec<MeterDeviation>,
+    ) {
+        if word_index == self.stress_patterns.len() {
+            deviations.extend((meter_index..self.meter.len()).map(|index| {
+                MeterDeviation::MissingSyllable {
+                    meter_syllable_index: index,
+                    expected: self.meter[index],
+                }
+            }));
+            return;
+        }
+
+        let cost = self.cost_from_word(word_index, meter_index);
+        for pattern_index in 0..self.stress_patterns[word_index].len() {
+            if self.cost_from_syllable(word_index, pattern_index, 0, meter_index) == cost {
+                return self.trace_from_syllable(
+                    word_index,
+                    pattern_index,
+                    0,
+                    meter_index,
+                    deviations,
+                );
+            }
+        }
+        deviations.push(MeterDeviation::MissingSyllable {
+            meter_syllable_index: meter_index,
+            expected: self.meter[meter_index],
+        });
+        self.trace_from_word(word_index, meter_index + 1, deviations);
+    }
+
+    /// Appends the deviations of the best alignment from a syllable, taking the
+    /// first of equally good choices in the order [`Self::cost_from_syllable`]
+    /// considers them.
+    fn trace_from_syllable(
+        &mut self,
+        word_index: usize,
+        pattern_index: usize,
+        syllable_index: usize,
+        meter_index: usize,
+        deviations: &mut Vec<MeterDeviation>,
+    ) {
+        let stresses = self.stress_patterns[word_index][pattern_index];
+        let Some(&actual) = stresses.get(syllable_index) else {
+            return self.trace_from_word(word_index + 1, meter_index, deviations);
+        };
+
+        let cost = self.cost_from_syllable(word_index, pattern_index, syllable_index, meter_index);
+        if let Some(&expected) = self.meter.get(meter_index) {
+            let fits = syllable_stress_matches_meter(stresses, syllable_index, expected);
+            let rest = self.cost_from_syllable(
+                word_index,
+                pattern_index,
+                syllable_index + 1,
+                meter_index + 1,
+            );
+            if usize::from(!fits) + rest == cost {
+                if !fits {
+                    deviations.push(MeterDeviation::StressMismatch {
                         word_index,
                         syllable_index,
                         expected,
                         actual,
                     });
                 }
-                Some(_) => {}
-                None => candidate.push(MeterDeviation::ExtraSyllable {
+                return self.trace_from_syllable(
                     word_index,
-                    syllable_index,
-                    actual,
-                }),
+                    pattern_index,
+                    syllable_index + 1,
+                    meter_index + 1,
+                    deviations,
+                );
             }
         }
-
-        let next_meter_index = (meter_syllable_index + stresses.len()).min(meter.len());
-        candidate.extend(least_deviations_from(
-            word_index + 1,
-            next_meter_index,
-            words,
-            meter,
-            memo,
-        )?);
-
-        let fits = candidate.is_empty();
-        if best
-            .as_ref()
-            .is_none_or(|current| candidate.len() < current.len())
-        {
-            best = Some(candidate);
-        }
-        if fits {
-            break;
-        }
+        deviations.push(MeterDeviation::ExtraSyllable {
+            word_index,
+            syllable_index,
+            actual,
+        });
+        self.trace_from_syllable(
+            word_index,
+            pattern_index,
+            syllable_index + 1,
+            meter_index,
+            deviations,
+        );
     }
-
-    let best = best.unwrap_or_default();
-    memo.insert((word_index, meter_syllable_index), best.clone());
-    Ok(best)
 }
 
 #[derive(Debug)]
@@ -823,6 +1000,58 @@ mod tests {
         let spec: MeterSpecification = "/x".parse().unwrap();
 
         assert!(spec.deviations_for_line(&line).unwrap().is_empty());
+    }
+
+    #[test]
+    fn deviation_analysis_counts_an_extra_syllable_within_the_line_once() {
+        // BEAUTIFUL (/xx) has one more syllable than SUMMER (/x) in the
+        // otherwise regular "a lover and a summer evening light"; the rest of
+        // the line keeps its place in the meter.
+        let line = Line::new("a lover and a beautiful evening light", dict());
+        let spec: MeterSpecification = "x/x/x/x/x/".parse().unwrap();
+
+        assert_eq!(
+            spec.deviations_for_line(&line).unwrap(),
+            [MeterDeviation::ExtraSyllable {
+                word_index: 4,
+                syllable_index: 2,
+                actual: Stress::Unstressed,
+            }]
+        );
+    }
+
+    #[test]
+    fn deviation_analysis_counts_a_missing_syllable_between_words_once() {
+        let spec: MeterSpecification = "x/x/x/x/x/".parse().unwrap();
+
+        // The line without its second "a".
+        let dropped = Line::new("a lover and summer evening light", dict());
+        assert_eq!(
+            spec.deviations_for_line(&dropped).unwrap(),
+            [MeterDeviation::MissingSyllable {
+                meter_syllable_index: 4,
+                expected: U,
+            }]
+        );
+
+        // A headless line, without its first "a".
+        let headless = Line::new("lover and a summer evening light", dict());
+        assert_eq!(
+            spec.deviations_for_line(&headless).unwrap(),
+            [MeterDeviation::MissingSyllable {
+                meter_syllable_index: 0,
+                expected: U,
+            }]
+        );
+    }
+
+    #[test]
+    fn deviation_analysis_counts_each_syllable_of_an_inverted_foot() {
+        // NEVER (/x) where the meter expects x/: two syllables deviate.
+        let line = Line::new("never a lover dreams upon the town", dict());
+        let spec: MeterSpecification = "x/x/x/x/x/".parse().unwrap();
+
+        assert_eq!(spec.deviations_for_line(&line).unwrap().len(), 2);
     }
 
     // --- SyllableCountSpecification ---
