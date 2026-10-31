@@ -65,7 +65,8 @@ impl Poem {
     }
 
     /// Creates a poem with an optional syllable-level meter-exception allowance.
-    /// Without one, every meter deviation is a failure.
+    /// Without one, every meter deviation is a failure. A group's allowance
+    /// covers its least-deviating lines first.
     pub fn new_with_meter_exceptions<D: PronouncingDictionary + ?Sized>(
         lines: &[&str],
         meter_scheme: Option<MeterScheme>,
@@ -187,14 +188,25 @@ impl Poem {
             })
             .collect::<Vec<_>>();
 
+        // Spend the allowance on the lines that deviate least, so the line that
+        // strays most is the one that fails, whatever the lines' order. Equal
+        // lines go in line order.
+        let mut by_deviations: Vec<usize> = (0..raw_analyses.len()).collect();
+        by_deviations.sort_by_key(|&offset| raw_analyses[offset].as_ref().map_or(0, Vec::len));
+        let mut allowed = vec![0; raw_analyses.len()];
         let mut remaining_exceptions = self.meter_exception_config.allowed_exceptions();
-        for (line_index, raw_analysis) in group.zip(raw_analyses) {
-            self.analyses[line_index].meter =
-                AnalysisState::Ready(raw_analysis.map(|deviations| {
-                    let allowed = remaining_exceptions.min(deviations.len());
-                    remaining_exceptions -= allowed;
-                    MeterMatchResult::from_deviations(deviations, allowed)
-                }));
+        for offset in by_deviations {
+            if let Ok(deviations) = &raw_analyses[offset] {
+                allowed[offset] = remaining_exceptions.min(deviations.len());
+                remaining_exceptions -= allowed[offset];
+            }
+        }
+
+        for ((line_index, raw_analysis), allowed) in group.zip(raw_analyses).zip(allowed) {
+            self.analyses[line_index].meter = AnalysisState::Ready(
+                raw_analysis
+                    .map(|deviations| MeterMatchResult::from_deviations(deviations, allowed)),
+            );
         }
 
         Ok(())
@@ -728,6 +740,31 @@ mod tests {
         assert_meter_ready_no_match(poem.meter_analysis(2).unwrap(), 0);
         // A new fixed group begins at line four and receives a fresh allowance.
         assert_meter_ready_with_exception_count(poem.meter_analysis(3).unwrap(), 1);
+    }
+
+    #[test]
+    fn meter_exceptions_cover_the_least_deviating_lines_first() {
+        // Against iambic pentameter: NEVER's inverted foot deviates twice, the
+        // feminine ending once, and the regular line not at all.
+        let inverted = "never a lover dreams upon the town";
+        let regular = "a lover and a summer evening light";
+        let feminine = "a lover and a summer evening falling";
+
+        // In either order, the feminine ending is covered first, leaving one
+        // exception for the inverted line, which fails.
+        for lines in [[inverted, regular, feminine], [feminine, regular, inverted]] {
+            let mut poem = poem_with_meter_exceptions(&lines, "x/x/x/x/x/", 2, 3);
+            for (index, &line) in lines.iter().enumerate() {
+                let analysis = poem.meter_analysis(index).unwrap();
+                if line == feminine {
+                    assert_meter_ready_with_exception_count(analysis, 1);
+                } else if line == regular {
+                    assert_meter_ready_match(analysis);
+                } else {
+                    assert_meter_ready_no_match(analysis, 1);
+                }
+            }
+        }
     }
 
     #[test]
