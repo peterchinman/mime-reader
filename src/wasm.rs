@@ -1264,7 +1264,7 @@ mod tests {
     fn score_rhyme_scores_a_pair_with_owned_pronunciations() {
         let ws = analyzer();
         let pair = ws
-            .score_rhyme("cot", "caught", None)
+            .score_rhyme("cot", "caught", None, Some(CompareDto::WholeWord))
             .unwrap()
             .expect("one-syllable words are always comparable");
 
@@ -1277,6 +1277,6 @@ mod tests {
     #[wasm_bindgen_test]
     fn score_rhyme_unknown_word_surfaces_as_error() {
         let ws = analyzer();
-        assert!(ws.score_rhyme("cat", "xyzzy", None).is_err());
+        assert!(ws.score_rhyme("cat", "xyzzy", None, None).is_err());
     }
 }
