@@ -36,7 +36,7 @@ pub enum ParseMeterError {
 
 #[derive(Debug, Error)]
 pub enum ParseMeterSchemeError {
-    #[error("meter scheme has no lines")]
+    #[error("meter scheme is empty")]
     Empty,
     #[error("line {}: {source}", line + 1)]
     Line {
@@ -57,7 +57,7 @@ pub enum ParseSyllableCountError {
 
 #[derive(Debug, Error)]
 pub enum ParseSyllableCountSchemeError {
-    #[error("syllable count scheme has no lines")]
+    #[error("syllable count scheme is empty")]
     Empty,
     #[error("line {}: {source}", line + 1)]
     Line {

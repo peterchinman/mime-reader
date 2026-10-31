@@ -1444,15 +1444,17 @@ mod tests {
     #[wasm_bindgen_test]
     fn open_poem_rejects_an_empty_meter_scheme() {
         for meter_mode in [MeterModeDto::StressPattern, MeterModeDto::SyllableCounts] {
-            let result = analyzer().open_poem(
-                vec!["cat".into()],
-                Some(PoemOptionsDto {
-                    meter_scheme: Some(String::new()),
-                    meter_mode: Some(meter_mode),
-                    ..Default::default()
-                }),
-            );
-            assert!(result.is_err(), "{meter_mode:?}");
+            for blank in ["", "\n \n"] {
+                let result = analyzer().open_poem(
+                    vec!["cat".into()],
+                    Some(PoemOptionsDto {
+                        meter_scheme: Some(blank.into()),
+                        meter_mode: Some(meter_mode),
+                        ..Default::default()
+                    }),
+                );
+                assert!(result.is_err(), "{meter_mode:?} {blank:?}");
+            }
         }
     }
 

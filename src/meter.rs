@@ -602,18 +602,27 @@ impl SyllableCountSpecification {
     }
 }
 
+/// One meter specification per line of the poem, repeating from the first
+/// when the poem is longer. Blank lines in the scheme's text are layout, such
+/// as space between stanzas, and don't count as scheme lines; parse errors
+/// still number lines as they appear in the text.
 #[derive(Debug)]
 pub struct MeterScheme {
     scheme: Vec<MeterSpecification>,
+}
+
+/// The scheme text's lines that aren't blank, numbered by their place in the text.
+fn scheme_lines(s: &str) -> impl Iterator<Item = (usize, &str)> {
+    s.lines()
+        .enumerate()
+        .filter(|(_, text)| !text.trim().is_empty())
 }
 
 impl std::str::FromStr for MeterScheme {
     type Err = ParseMeterSchemeError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let scheme = s
-            .lines()
-            .enumerate()
+        let scheme = scheme_lines(s)
             .map(|(line, text)| {
                 text.parse::<MeterSpecification>()
                     .map_err(|source| ParseMeterSchemeError::Line { line, source })
@@ -630,9 +639,7 @@ impl MeterScheme {
     /// Parses a repeating multiline scheme of exact syllable counts or inclusive
     /// ranges, each at most [`MAX_SYLLABLE_COUNT`].
     pub fn from_syllable_counts(s: &str) -> Result<Self, ParseSyllableCountSchemeError> {
-        let scheme = s
-            .lines()
-            .enumerate()
+        let scheme = scheme_lines(s)
             .map(|(line, text)| {
                 text.parse::<SyllableCountSpecification>()
                     .map(|specification| specification.0)
@@ -1267,13 +1274,49 @@ mod tests {
 
     #[test]
     fn meter_schemes_need_at_least_one_line() {
-        let stress = "".parse::<MeterScheme>().unwrap_err();
-        assert!(matches!(stress, ParseMeterSchemeError::Empty));
-        assert_eq!(stress.to_string(), "meter scheme has no lines");
+        for blank in ["", "\n", " \n\t\n"] {
+            let stress = blank.parse::<MeterScheme>().unwrap_err();
+            assert!(matches!(stress, ParseMeterSchemeError::Empty), "{blank:?}");
+            let counts = MeterScheme::from_syllable_counts(blank).unwrap_err();
+            assert!(
+                matches!(counts, ParseSyllableCountSchemeError::Empty),
+                "{blank:?}"
+            );
+        }
+        assert_eq!(
+            ParseMeterSchemeError::Empty.to_string(),
+            "meter scheme is empty"
+        );
+        assert_eq!(
+            ParseSyllableCountSchemeError::Empty.to_string(),
+            "syllable count scheme is empty"
+        );
+    }
 
-        let counts = MeterScheme::from_syllable_counts("").unwrap_err();
-        assert!(matches!(counts, ParseSyllableCountSchemeError::Empty));
-        assert_eq!(counts.to_string(), "syllable count scheme has no lines");
+    #[test]
+    fn meter_schemes_skip_blank_lines() {
+        // Two quatrain-style lines separated by a blank one: the poem's second
+        // line takes the scheme's second pattern, not the blank line.
+        let stress: MeterScheme = "x/x/\n\n  \n/x/x".parse().unwrap();
+        assert_eq!(stress.scheme.len(), 2);
+        assert_meter_matches(stress.check_line(&Line::new("hello hello", dict()), 0));
+        assert_meter_matches(stress.check_line(&Line::new("happy summer", dict()), 1));
+        assert_meter_matches(stress.check_line(&Line::new("hello hello", dict()), 2));
+
+        let counts = MeterScheme::from_syllable_counts("2\n\n3").unwrap();
+        assert_eq!(counts.scheme.len(), 2);
+        assert_meter_matches(counts.check_line(&Line::new("cat dog bird", dict()), 1));
+    }
+
+    #[test]
+    fn scheme_errors_number_lines_as_written() {
+        let stress = "x/x/\n\nx/j/".parse::<MeterScheme>().unwrap_err();
+        assert_eq!(
+            stress.to_string(),
+            "line 3: invalid stress character 'j' at column 3"
+        );
+        let counts = MeterScheme::from_syllable_counts("5\n\n9-7").unwrap_err();
+        assert_eq!(counts.to_string(), "line 3: min must be <= max");
     }
 
     #[test]
