@@ -61,21 +61,20 @@ impl WasmAnalyzer {
     }
 
     /// Opens a new poem that shares this analyzer's dictionary and scorer.
-    ///
-    /// `meter_scheme` / `rhyme_scheme` are the same string formats the core
-    /// parsers accept (e.g. meter `"x/x/x/x/x/"`, rhyme `"ABAB"`). Pass
-    /// `undefined` to leave a dimension unanalyzed. When a rhyme scheme is
-    /// present, `rhyme_comparison_config` defaults to the core config.
-    /// `meter_exception_config` allows syllable-level deviations in fixed line groups.
+    /// See [`PoemOptionsDto`] for the schemes and configs it can analyze with;
+    /// without options, the poem has no schemes.
     #[wasm_bindgen(js_name = openPoem)]
     pub fn open_poem(
         &self,
         lines: Vec<String>,
-        meter_scheme: Option<String>,
-        rhyme_scheme: Option<String>,
-        rhyme_comparison_config: Option<RhymeComparisonConfigDto>,
-        meter_exception_config: Option<MeterExceptionConfigDto>,
+        options: Option<PoemOptionsDto>,
     ) -> Result<WasmPoem, JsError> {
+        let PoemOptionsDto {
+            meter_scheme,
+            rhyme_scheme,
+            rhyme_comparison_config,
+            meter_exception_config,
+        } = options.unwrap_or_default();
         let meter = match meter_scheme {
             Some(s) => Some(s.parse::<MeterScheme>()?),
             None => None,
@@ -577,6 +576,25 @@ impl From<MeterAnalysis<'_>> for MeterDto {
             },
         }
     }
+}
+
+/// Options for `openPoem`. Every field may be omitted, and an omitted scheme
+/// leaves that dimension unanalyzed.
+#[derive(Deserialize, Debug, Default, Tsify)]
+#[tsify(from_wasm_abi)]
+pub struct PoemOptionsDto {
+    /// A meter scheme in the core parser's format, e.g. `"x/x/x/x/x/"`.
+    #[tsify(optional)]
+    meter_scheme: Option<String>,
+    /// A rhyme scheme in the core parser's format, e.g. `"ABAB"`.
+    #[tsify(optional)]
+    rhyme_scheme: Option<String>,
+    /// How rhyme candidates are compared; defaults to the core config.
+    #[tsify(optional)]
+    rhyme_comparison_config: Option<RhymeComparisonConfigDto>,
+    /// Allows syllable-level meter deviations in fixed groups of lines.
+    #[tsify(optional)]
+    meter_exception_config: Option<MeterExceptionConfigDto>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Tsify)]
@@ -1193,7 +1211,13 @@ mod tests {
             assert_eq!(ws.words(), vec!["kettle"]);
 
             let mut poem = ws
-                .open_poem(vec!["kettle's".into()], Some("/x".into()), None, None, None)
+                .open_poem(
+                    vec!["kettle's".into()],
+                    Some(PoemOptionsDto {
+                        meter_scheme: Some("/x".into()),
+                        ..Default::default()
+                    }),
+                )
                 .unwrap();
             assert_eq!(
                 matches!(poem.meter_analysis(0).unwrap(), MeterDto::Match),
@@ -1315,10 +1339,11 @@ mod tests {
         let mut poem = ws
             .open_poem(
                 vec!["forest".into(), "sorest".into()],
-                Some("/x".into()),
-                Some("AA".into()),
-                None,
-                None,
+                Some(PoemOptionsDto {
+                    meter_scheme: Some("/x".into()),
+                    rhyme_scheme: Some("AA".into()),
+                    ..Default::default()
+                }),
             )
             .unwrap();
         assert!(matches!(poem.meter_analysis(1).unwrap(), MeterDto::Match));
@@ -1334,7 +1359,13 @@ mod tests {
     fn open_poem_rejects_invalid_meter_scheme() {
         let ws = analyzer();
         // 'q' isn't a valid meter character (only x, /, _, ( and ) are).
-        let result = ws.open_poem(vec!["cat".into()], Some("q".into()), None, None, None);
+        let result = ws.open_poem(
+            vec!["cat".into()],
+            Some(PoemOptionsDto {
+                meter_scheme: Some("q".into()),
+                ..Default::default()
+            }),
+        );
         assert!(result.is_err());
     }
 
@@ -1342,7 +1373,13 @@ mod tests {
     fn open_poem_rejects_invalid_rhyme_scheme() {
         let ws = analyzer();
         // '1' isn't a valid rhyme character (only letters and '_' are).
-        let result = ws.open_poem(vec!["cat".into()], None, Some("1".into()), None, None);
+        let result = ws.open_poem(
+            vec!["cat".into()],
+            Some(PoemOptionsDto {
+                rhyme_scheme: Some("1".into()),
+                ..Default::default()
+            }),
+        );
         assert!(result.is_err());
     }
 
@@ -1351,12 +1388,13 @@ mod tests {
         let ws = analyzer();
         let result = ws.open_poem(
             vec!["hello".into()],
-            Some("//".into()),
-            None,
-            None,
-            Some(MeterExceptionConfigDto {
-                allowed_exceptions: 1,
-                lines_per_group: 0,
+            Some(PoemOptionsDto {
+                meter_scheme: Some("//".into()),
+                meter_exception_config: Some(MeterExceptionConfigDto {
+                    allowed_exceptions: 1,
+                    lines_per_group: 0,
+                }),
+                ..Default::default()
             }),
         );
         assert!(result.is_err());
@@ -1372,12 +1410,13 @@ mod tests {
                     "hello".into(),
                     "hello".into(),
                 ],
-                Some("//".into()),
-                None,
-                None,
-                Some(MeterExceptionConfigDto {
-                    allowed_exceptions: 2,
-                    lines_per_group: 3,
+                Some(PoemOptionsDto {
+                    meter_scheme: Some("//".into()),
+                    meter_exception_config: Some(MeterExceptionConfigDto {
+                        allowed_exceptions: 2,
+                        lines_per_group: 3,
+                    }),
+                    ..Default::default()
                 }),
             )
             .unwrap();
@@ -1403,7 +1442,13 @@ mod tests {
     #[wasm_bindgen_test]
     fn meter_no_match_dto_reports_each_failed_syllable() {
         let mut poem = analyzer()
-            .open_poem(vec!["hello".into()], Some("x".into()), None, None, None)
+            .open_poem(
+                vec!["hello".into()],
+                Some(PoemOptionsDto {
+                    meter_scheme: Some("x".into()),
+                    ..Default::default()
+                }),
+            )
             .unwrap();
 
         let MeterDto::NoMatch {
@@ -1440,10 +1485,10 @@ mod tests {
         let mut poem = ws
             .open_poem(
                 vec!["cat".into(), "hat".into()],
-                None,
-                Some("AA".into()),
-                None,
-                None,
+                Some(PoemOptionsDto {
+                    rhyme_scheme: Some("AA".into()),
+                    ..Default::default()
+                }),
             )
             .unwrap();
 
@@ -1497,10 +1542,10 @@ mod tests {
         let mut poem = ws
             .open_poem(
                 vec!["cat".into(), "cot".into()],
-                None,
-                Some("AA".into()),
-                None,
-                None,
+                Some(PoemOptionsDto {
+                    rhyme_scheme: Some("AA".into()),
+                    ..Default::default()
+                }),
             )
             .unwrap();
 
@@ -1559,13 +1604,14 @@ mod tests {
         let mut poem = analyzer()
             .open_poem(
                 vec!["cat".into(), "cot".into()],
-                None,
-                Some("AA".into()),
-                Some(RhymeComparisonConfigDto {
-                    threshold: 1000.0,
-                    normalization,
+                Some(PoemOptionsDto {
+                    rhyme_scheme: Some("AA".into()),
+                    rhyme_comparison_config: Some(RhymeComparisonConfigDto {
+                        threshold: 1000.0,
+                        normalization,
+                    }),
+                    ..Default::default()
                 }),
-                None,
             )
             .unwrap();
 
@@ -1609,10 +1655,10 @@ mod tests {
         let mut poem_before = ws
             .open_poem(
                 vec!["cat".into(), "cot".into()],
-                None,
-                Some("AA".into()),
-                None,
-                None,
+                Some(PoemOptionsDto {
+                    rhyme_scheme: Some("AA".into()),
+                    ..Default::default()
+                }),
             )
             .unwrap();
         let RhymeDto::Follower {
@@ -1630,10 +1676,10 @@ mod tests {
         let mut poem_after = ws
             .open_poem(
                 vec!["cat".into(), "cot".into()],
-                None,
-                Some("AA".into()),
-                None,
-                None,
+                Some(PoemOptionsDto {
+                    rhyme_scheme: Some("AA".into()),
+                    ..Default::default()
+                }),
             )
             .unwrap();
         let RhymeDto::Follower {

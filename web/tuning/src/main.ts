@@ -660,12 +660,10 @@ function evaluatePair(pair: Pair, t: number): Evaluation {
 		threshold: t,
 		normalization: rhymeNormalization,
 	};
-	const poem = analyzer.openPoem(
-		[pair.leader, pair.follower],
-		undefined,
-		"AA",
-		comparisonConfig,
-	);
+	const poem = analyzer.openPoem([pair.leader, pair.follower], {
+		rhyme_scheme: "AA",
+		rhyme_comparison_config: comparisonConfig,
+	});
 	try {
 		const rhyme = poem.rhymeAnalysis(1);
 		const alignment =
