@@ -2,7 +2,7 @@ use crate::{
     Line, MeterScheme, PronouncingDictionary, RhymeDistanceScorer, RhymeScheme,
     consonant_distance::ConsonantDistanceScorer,
     error::{MeterCheckError, PoemEditError, RhymeCheckError},
-    meter::MeterMatchResult,
+    meter::{MeterExceptionConfig, MeterMatchResult},
     rhyme_scheme::{LineRole, ResolvedLineRole, RhymeCheckResult},
     vowel_distance::VowelDistanceScorer,
 };
@@ -46,6 +46,7 @@ pub struct Poem {
     lines: Vec<PoemLine>,
     analyses: Vec<LineAnalysis>,
     meter_scheme: Option<MeterScheme>,
+    meter_exception_config: MeterExceptionConfig,
     rhyme_scheme: Option<RhymeScheme>,
 }
 
@@ -57,6 +58,19 @@ impl Poem {
     pub fn new<D: PronouncingDictionary + ?Sized>(
         lines: &[&str],
         meter_scheme: Option<MeterScheme>,
+        rhyme_scheme: Option<RhymeScheme>,
+        dict: &D,
+    ) -> Self {
+        Self::new_with_meter_exceptions(lines, meter_scheme, None, rhyme_scheme, dict)
+    }
+
+    /// Creates a poem with an optional syllable-level meter-exception allowance.
+    /// Without one, every meter deviation is a failure. A group's allowance
+    /// covers its least-deviating lines first.
+    pub fn new_with_meter_exceptions<D: PronouncingDictionary + ?Sized>(
+        lines: &[&str],
+        meter_scheme: Option<MeterScheme>,
+        meter_exception_config: Option<MeterExceptionConfig>,
         rhyme_scheme: Option<RhymeScheme>,
         dict: &D,
     ) -> Self {
@@ -75,6 +89,7 @@ impl Poem {
                 .map(|_| Self::set_dirty_for(has_meter_scheme, has_rhyme_scheme))
                 .collect(),
             meter_scheme,
+            meter_exception_config: meter_exception_config.unwrap_or_default(),
             rhyme_scheme,
         }
     }
@@ -159,12 +174,53 @@ impl Poem {
             return Ok(());
         };
 
-        if matches!(self.analyses[index].meter, AnalysisState::Dirty) {
-            let result = meter_scheme.check_line(&self.lines[index].line, index);
-            self.analyses[index].meter = AnalysisState::Ready(result);
+        // Lines share an exception allowance with their group, so a dirty line
+        // means re-analyzing the whole group.
+        let group = self.meter_group(index);
+        if self.analyses[group.clone()]
+            .iter()
+            .all(|analysis| !matches!(analysis.meter, AnalysisState::Dirty))
+        {
+            return Ok(());
+        }
+
+        let raw_analyses = group
+            .clone()
+            .map(|line_index| {
+                meter_scheme.deviations_for_line(&self.lines[line_index].line, line_index)
+            })
+            .collect::<Vec<_>>();
+
+        // Spend the allowance on the lines that deviate least, so the line that
+        // strays most is the one that fails, whatever the lines' order. Equal
+        // lines go in line order.
+        let mut by_deviations: Vec<usize> = (0..raw_analyses.len()).collect();
+        by_deviations.sort_by_key(|&offset| raw_analyses[offset].as_ref().map_or(0, Vec::len));
+        let mut allowed = vec![0; raw_analyses.len()];
+        let mut remaining_exceptions = self.meter_exception_config.allowed_exceptions();
+        for offset in by_deviations {
+            if let Ok(deviations) = &raw_analyses[offset] {
+                allowed[offset] = remaining_exceptions.min(deviations.len());
+                remaining_exceptions -= allowed[offset];
+            }
+        }
+
+        for ((line_index, raw_analysis), allowed) in group.zip(raw_analyses).zip(allowed) {
+            self.analyses[line_index].meter = AnalysisState::Ready(
+                raw_analysis
+                    .map(|deviations| MeterMatchResult::from_deviations(deviations, allowed)),
+            );
         }
 
         Ok(())
+    }
+
+    /// The indices of the fixed group of lines that share `index`'s meter
+    /// exception allowance.
+    fn meter_group(&self, index: usize) -> std::ops::Range<usize> {
+        let lines_per_group = self.meter_exception_config.lines_per_group();
+        let group_start = index / lines_per_group * lines_per_group;
+        group_start..(group_start + lines_per_group).min(self.lines.len())
     }
 
     fn cached_meter_analysis_after_ensure(&self, index: usize) -> MeterAnalysis<'_> {
@@ -272,9 +328,11 @@ impl Poem {
     }
 
     fn invalidate_after_update(&mut self, index: usize) {
-        // Only the line itself has dirty meter
         if self.meter_scheme.is_some() {
-            self.analyses[index].meter = AnalysisState::Dirty;
+            let group = self.meter_group(index);
+            for analysis in &mut self.analyses[group] {
+                analysis.meter = AnalysisState::Dirty;
+            }
         }
 
         let Some(rhyme_scheme) = &self.rhyme_scheme else {
@@ -369,6 +427,21 @@ mod tests {
         Poem::new(lines, meter_scheme, rhyme_scheme, dict())
     }
 
+    fn poem_with_meter_exceptions(
+        lines: &[&str],
+        meter_scheme: &str,
+        allowed_exceptions: usize,
+        lines_per_group: usize,
+    ) -> Poem {
+        Poem::new_with_meter_exceptions(
+            lines,
+            Some(meter_scheme.parse().unwrap()),
+            MeterExceptionConfig::new(allowed_exceptions, lines_per_group),
+            None,
+            dict(),
+        )
+    }
+
     fn poem_with_cached_analyses(lines: &[&str]) -> Poem {
         poem_with_cached_analyses_and_rhyme_scheme(lines, "AA")
     }
@@ -419,6 +492,30 @@ mod tests {
         };
 
         assert_eq!(result, &Ok(MeterMatchResult::Match));
+    }
+
+    fn assert_meter_ready_with_exception_count(analysis: MeterAnalysis<'_>, expected: usize) {
+        let MeterAnalysis::Ready(Ok(MeterMatchResult::MatchWithExceptions { exceptions })) =
+            analysis
+        else {
+            panic!("expected ready meter exceptions, got {analysis:?}");
+        };
+        assert_eq!(exceptions.len(), expected);
+    }
+
+    fn assert_meter_ready_no_match<'a>(
+        analysis: MeterAnalysis<'a>,
+        expected_exception_count: usize,
+    ) -> &'a [crate::MeterDeviation] {
+        let MeterAnalysis::Ready(Ok(MeterMatchResult::NoMatch {
+            failures,
+            exceptions,
+        })) = analysis
+        else {
+            panic!("expected ready meter failure, got {analysis:?}");
+        };
+        assert_eq!(exceptions.len(), expected_exception_count);
+        failures
     }
 
     fn assert_rhyme_ready_leader(analysis: RhymeAnalysis<'_>) {
@@ -622,6 +719,81 @@ mod tests {
             matches!(&poem.analyses[0].rhyme, AnalysisState::Dirty),
             "rhyme analysis should remain dirty when only meter is requested"
         );
+    }
+
+    #[test]
+    fn meter_exceptions_are_shared_by_fixed_line_groups() {
+        // HELLO is x/, so each line has one stress deviation from //.
+        let mut poem =
+            poem_with_meter_exceptions(&["hello", "hello", "hello", "hello"], "//", 2, 3);
+
+        assert_meter_ready_with_exception_count(poem.meter_analysis(0).unwrap(), 1);
+        assert_meter_ready_with_exception_count(poem.meter_analysis(1).unwrap(), 1);
+        assert_meter_ready_no_match(poem.meter_analysis(2).unwrap(), 0);
+        // A new fixed group begins at line four and receives a fresh allowance.
+        assert_meter_ready_with_exception_count(poem.meter_analysis(3).unwrap(), 1);
+    }
+
+    #[test]
+    fn meter_exceptions_cover_the_least_deviating_lines_first() {
+        // Against iambic pentameter: NEVER's inverted foot deviates twice, the
+        // feminine ending once, and the regular line not at all.
+        let inverted = "never a lover dreams upon the town";
+        let regular = "a lover and a summer evening light";
+        let feminine = "a lover and a summer evening falling";
+
+        // In either order, the feminine ending is covered first, leaving one
+        // exception for the inverted line, which fails.
+        for lines in [[inverted, regular, feminine], [feminine, regular, inverted]] {
+            let mut poem = poem_with_meter_exceptions(&lines, "x/x/x/x/x/", 2, 3);
+            for (index, &line) in lines.iter().enumerate() {
+                let analysis = poem.meter_analysis(index).unwrap();
+                if line == feminine {
+                    assert_meter_ready_with_exception_count(analysis, 1);
+                } else if line == regular {
+                    assert_meter_ready_match(analysis);
+                } else {
+                    assert_meter_ready_no_match(analysis, 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn extra_and_missing_syllables_consume_meter_exceptions() {
+        let mut extra = poem_with_meter_exceptions(&["hello"], "x", 1, 1);
+        assert_meter_ready_with_exception_count(extra.meter_analysis(0).unwrap(), 1);
+
+        // HELLO leaves two stressed positions of x/// unfilled; the allowance
+        // covers the first.
+        let mut missing = poem_with_meter_exceptions(&["hello"], "x///", 1, 1);
+        let failures = assert_meter_ready_no_match(missing.meter_analysis(0).unwrap(), 1);
+        assert_eq!(
+            failures,
+            [crate::MeterDeviation::MissingSyllable {
+                before_word_index: 1,
+                meter_syllable_index: 3,
+                expected: crate::SyllableStress::Stressed,
+            }]
+        );
+    }
+
+    #[test]
+    fn updating_a_line_invalidates_its_whole_meter_exception_group() {
+        let mut poem = poem_with_meter_exceptions(&["hello", "hello", "hello"], "//", 1, 3);
+        let _ = poem.meter_analysis(0).unwrap();
+        for index in 0..3 {
+            assert!(matches!(
+                poem.analyses[index].meter,
+                AnalysisState::Ready(_)
+            ));
+        }
+
+        poem.update_line(1, "today", dict()).unwrap();
+
+        for index in 0..3 {
+            assert_meter_state_dirty(&poem, index);
+        }
     }
 
     #[test]
