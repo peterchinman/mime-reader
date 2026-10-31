@@ -549,6 +549,7 @@ impl From<MeterAnalysis<'_>> for MeterDto {
 pub enum MeterMismatchDto {
     TooShort {
         word_index: usize,
+        expected: Vec<StressDto>,
     },
     TooLong {
         remaining_syllables: usize,
@@ -564,8 +565,14 @@ impl From<&MeterMismatch> for MeterMismatchDto {
         match m {
             MeterMismatch::MeterTooShort {
                 word_index_failed_at,
+                expected_stress_pattern_of_word,
             } => MeterMismatchDto::TooShort {
                 word_index: *word_index_failed_at,
+                expected: expected_stress_pattern_of_word
+                    .iter()
+                    .copied()
+                    .map(StressDto::from)
+                    .collect(),
             },
             MeterMismatch::MeterTooLong {
                 remaining_syllables_in_meter,
@@ -1271,6 +1278,25 @@ mod tests {
         // '1' isn't a valid rhyme character (only letters and '_' are).
         let result = ws.open_poem(vec!["cat".into()], None, Some("1".into()), None);
         assert!(result.is_err());
+    }
+
+    #[wasm_bindgen_test]
+    fn meter_too_short_dto_includes_the_expected_pattern_for_the_word() {
+        let mut poem = analyzer()
+            .open_poem(vec!["hello".into()], Some("x".into()), None, None)
+            .unwrap();
+
+        let MeterDto::NoMatch { reasons } = poem.meter_analysis(0).unwrap() else {
+            panic!("expected a meter mismatch");
+        };
+        assert!(reasons.iter().any(|reason| matches!(
+            reason,
+            MeterMismatchDto::TooShort { word_index: 0, expected }
+                if matches!(
+                    expected.as_slice(),
+                    [StressDto::Unstressed, StressDto::Unstressed]
+                )
+        )));
     }
 
     // ---- returned DTO shape ------------------------------------------------

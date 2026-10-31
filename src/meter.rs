@@ -142,21 +142,25 @@ fn is_secondary_next_to_primary(stresses: &[Stress], i: usize) -> bool {
 }
 
 fn word_stresses_matches_meter(word_stresses: &[Stress], meter: &[SyllableStress]) -> bool {
+    word_stress_mismatch_index(word_stresses, meter).is_none()
+}
+
+fn word_stress_mismatch_index(word_stresses: &[Stress], meter: &[SyllableStress]) -> Option<usize> {
     // Assumption: single-syllable words are inherently ambiguous and match any meter position
     if word_stresses.len() == 1 {
-        return true;
+        return None;
     }
-    word_stresses.iter().enumerate().all(|(i, s)| match s {
+    word_stresses.iter().enumerate().position(|(i, s)| match s {
         // Either position matches any stress
-        _ if meter[i] == SyllableStress::Either => true,
+        _ if meter[i] == SyllableStress::Either => false,
         // Assumption: primary stress must match a stressed position
-        Stress::Primary => meter[i] == SyllableStress::Stressed,
+        Stress::Primary => meter[i] != SyllableStress::Stressed,
         // Assumption: secondary stress adjacent to primary is ambiguous — matches any meter position
-        Stress::Secondary if is_secondary_next_to_primary(word_stresses, i) => true,
+        Stress::Secondary if is_secondary_next_to_primary(word_stresses, i) => false,
         // Assumption: non-ambiguous secondary stress must match a stressed position
-        Stress::Secondary => meter[i] == SyllableStress::Stressed,
+        Stress::Secondary => meter[i] != SyllableStress::Stressed,
         // Assumption: unstressed syllables must match unstressed positions
-        Stress::Unstressed => meter[i] == SyllableStress::Unstressed,
+        Stress::Unstressed => meter[i] != SyllableStress::Unstressed,
     })
 }
 
@@ -170,6 +174,7 @@ pub enum MeterMatchResult {
 pub enum MeterMismatch {
     MeterTooShort {
         word_index_failed_at: usize,
+        expected_stress_pattern_of_word: Vec<SyllableStress>,
     },
     MeterTooLong {
         remaining_syllables_in_meter: usize,
@@ -180,34 +185,125 @@ pub enum MeterMismatch {
     },
 }
 
-/// Recursively matches the pronunciations of the next word in a sequuence of words against a collection of valid meters. Returns true if it finds any branch that matches, false if all branches fail.
+fn expected_stress_pattern_for_word(
+    meter: &[SyllableStress],
+    start: usize,
+    syllable_count: usize,
+) -> Vec<SyllableStress> {
+    if meter.is_empty() {
+        return Vec::new();
+    }
+
+    (0..syllable_count)
+        .map(|offset| meter[(start + offset) % meter.len()])
+        .collect()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct FailureProgress {
+    word_index: usize,
+    syllable_index: usize,
+}
+
+#[derive(Debug)]
+struct FailureReport {
+    progress: FailureProgress,
+    reasons: HashSet<MeterMismatch>,
+}
+
+impl FailureReport {
+    fn new(progress: FailureProgress, reason: MeterMismatch) -> Self {
+        Self {
+            progress,
+            reasons: HashSet::from([reason]),
+        }
+    }
+}
+
+enum RecursiveMatchResult {
+    Match,
+    NoMatch(FailureReport),
+}
+
+#[derive(Clone, Copy)]
+struct MeterCursor<'a> {
+    full: &'a [SyllableStress],
+    remaining: &'a [SyllableStress],
+}
+
+fn retain_best_failure(best: &mut Option<FailureReport>, candidate: FailureReport) {
+    let Some(current) = best else {
+        *best = Some(candidate);
+        return;
+    };
+
+    match candidate.progress.cmp(&current.progress) {
+        std::cmp::Ordering::Greater => *current = candidate,
+        std::cmp::Ordering::Equal => current.reasons.extend(candidate.reasons),
+        std::cmp::Ordering::Less => {}
+    }
+}
+
+/// Recursively matches the pronunciations of the next word in a sequence of words against a
+/// collection of valid meters. If every branch fails, returns only the reasons from the branch or
+/// branches that progressed furthest through the line.
 fn validate_recursive(
     word_index_accumulator: usize,
     words: &[WordEntry],
     meters: &[&[SyllableStress]],
 ) -> Result<MeterMatchResult, MeterCheckError> {
+    let cursors = meters
+        .iter()
+        .map(|meter| MeterCursor {
+            full: meter,
+            remaining: meter,
+        })
+        .collect::<Vec<_>>();
+    match validate_recursive_at(word_index_accumulator, 0, words, &cursors)? {
+        RecursiveMatchResult::Match => Ok(MeterMatchResult::Match),
+        RecursiveMatchResult::NoMatch(failure) => Ok(MeterMatchResult::NoMatch {
+            reasons: failure.reasons,
+        }),
+    }
+}
+
+fn validate_recursive_at(
+    word_index_accumulator: usize,
+    syllable_index_accumulator: usize,
+    words: &[WordEntry],
+    meters: &[MeterCursor<'_>],
+) -> Result<RecursiveMatchResult, MeterCheckError> {
     // Base-case: if we've chewed thru all the words, and if any of the valid meters is also empty, we've found a match.
     if words.is_empty() {
-        return if meters.iter().any(|m| m.is_empty()) {
-            Ok(MeterMatchResult::Match)
+        return if meters.iter().any(|m| m.remaining.is_empty()) {
+            Ok(RecursiveMatchResult::Match)
         } else {
-            Ok(MeterMatchResult::NoMatch {
+            Ok(RecursiveMatchResult::NoMatch(FailureReport {
+                progress: FailureProgress {
+                    word_index: word_index_accumulator,
+                    syllable_index: syllable_index_accumulator,
+                },
                 reasons: meters
                     .iter()
                     .map(|m| MeterMismatch::MeterTooLong {
-                        remaining_syllables_in_meter: m.len(),
+                        remaining_syllables_in_meter: m.remaining.len(),
                     })
                     .collect(),
-            })
+            }))
         };
     }
 
-    if meters.is_empty() || meters.iter().all(|m| m.is_empty()) {
-        return Ok(MeterMatchResult::NoMatch {
-            reasons: HashSet::from([MeterMismatch::MeterTooShort {
+    if meters.is_empty() {
+        return Ok(RecursiveMatchResult::NoMatch(FailureReport::new(
+            FailureProgress {
+                word_index: word_index_accumulator,
+                syllable_index: syllable_index_accumulator,
+            },
+            MeterMismatch::MeterTooShort {
                 word_index_failed_at: word_index_accumulator,
-            }]),
-        });
+                expected_stress_pattern_of_word: Vec::new(),
+            },
+        )));
     }
 
     // Branch out on every pronunciation of the next word.
@@ -222,47 +318,79 @@ fn validate_recursive(
         }));
     };
 
-    let mut failure_reasons = HashSet::new();
+    let mut best_failure: Option<FailureReport> = None;
 
     for next_word_stresses in next_word_possible_stresses {
-        let mut meter_match_suffixes: Vec<&[SyllableStress]> = Vec::new();
-        for m in meters {
+        let mut meter_match_suffixes: Vec<MeterCursor<'_>> = Vec::new();
+        for cursor in meters {
+            let m = cursor.remaining;
             // Enough syllables in the meter to match the next word?
             if next_word_stresses.len() > m.len() {
-                failure_reasons.insert(MeterMismatch::MeterTooShort {
-                    word_index_failed_at: word_index_accumulator,
-                });
+                retain_best_failure(
+                    &mut best_failure,
+                    FailureReport::new(
+                        FailureProgress {
+                            word_index: word_index_accumulator,
+                            syllable_index: syllable_index_accumulator + m.len(),
+                        },
+                        MeterMismatch::MeterTooShort {
+                            word_index_failed_at: word_index_accumulator,
+                            expected_stress_pattern_of_word: expected_stress_pattern_for_word(
+                                cursor.full,
+                                syllable_index_accumulator,
+                                next_word_stresses.len(),
+                            ),
+                        },
+                    ),
+                );
                 continue;
             }
             // Does the meter match the next word's stresses?
-            if word_stresses_matches_meter(next_word_stresses, &m[..next_word_stresses.len()]) {
-                meter_match_suffixes.push(&m[next_word_stresses.len()..]);
-            } else {
-                failure_reasons.insert(MeterMismatch::WordsStressMismatch {
-                    expected_stress_pattern_of_word: m[..next_word_stresses.len()].to_vec(),
-                    word_index_failed_at: word_index_accumulator,
+            let meter_for_word = &m[..next_word_stresses.len()];
+            if word_stresses_matches_meter(next_word_stresses, meter_for_word) {
+                meter_match_suffixes.push(MeterCursor {
+                    full: cursor.full,
+                    remaining: &m[next_word_stresses.len()..],
                 });
+            } else {
+                let matched_syllables =
+                    word_stress_mismatch_index(next_word_stresses, meter_for_word)
+                        .expect("a mismatching stress pattern must have a first mismatch");
+                retain_best_failure(
+                    &mut best_failure,
+                    FailureReport::new(
+                        FailureProgress {
+                            word_index: word_index_accumulator,
+                            syllable_index: syllable_index_accumulator + matched_syllables,
+                        },
+                        MeterMismatch::WordsStressMismatch {
+                            expected_stress_pattern_of_word: meter_for_word.to_vec(),
+                            word_index_failed_at: word_index_accumulator,
+                        },
+                    ),
+                );
             }
         }
 
         // If there are meter match suffixes, recursively validate the rest of the line.
         if !meter_match_suffixes.is_empty() {
-            match validate_recursive(
+            match validate_recursive_at(
                 word_index_accumulator + 1,
+                syllable_index_accumulator + next_word_stresses.len(),
                 &words[1..],
                 &meter_match_suffixes,
             )? {
-                MeterMatchResult::Match => return Ok(MeterMatchResult::Match),
-                MeterMatchResult::NoMatch {
-                    reasons: branch_reasons,
-                } => failure_reasons.extend(branch_reasons),
+                RecursiveMatchResult::Match => return Ok(RecursiveMatchResult::Match),
+                RecursiveMatchResult::NoMatch(branch_failure) => {
+                    retain_best_failure(&mut best_failure, branch_failure)
+                }
             }
         }
     }
 
-    Ok(MeterMatchResult::NoMatch {
-        reasons: failure_reasons,
-    })
+    Ok(RecursiveMatchResult::NoMatch(
+        best_failure.expect("a non-matching branch must report a failure"),
+    ))
 }
 
 #[derive(Debug)]
@@ -594,6 +722,7 @@ mod tests {
 
         assert!(reasons.contains(&MeterMismatch::MeterTooShort {
             word_index_failed_at: 0,
+            expected_stress_pattern_of_word: vec![U, U],
         }));
     }
 
@@ -612,7 +741,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_recursive_accumulates_reasons_from_multiple_failed_branches() {
+    fn validate_recursive_reports_only_reasons_from_furthest_failed_branches() {
         let line = Line::new("hello world", dict());
         let meter_that_matches_first_word_then_runs_out = [U, S];
         let meter_that_fails_first_word_stress = [S, S];
@@ -625,11 +754,44 @@ mod tests {
 
         assert!(reasons.contains(&MeterMismatch::MeterTooShort {
             word_index_failed_at: 1,
+            expected_stress_pattern_of_word: vec![U],
         }));
-        assert!(reasons.contains(&MeterMismatch::WordsStressMismatch {
+        assert!(!reasons.contains(&MeterMismatch::WordsStressMismatch {
             expected_stress_pattern_of_word: vec![S, S],
             word_index_failed_at: 0,
         }));
+    }
+
+    #[test]
+    fn alternate_pronunciation_can_match_meter() {
+        // EVERY(1) is the two-syllable /x pronunciation; the base entry is /xx.
+        let line = Line::new("every", dict());
+        let spec: MeterSpecification = "/x".parse().unwrap();
+
+        assert_meter_matches(spec.validate_line(&line));
+    }
+
+    #[test]
+    fn less_promising_pronunciation_failure_is_not_reported() {
+        let line = Line::new("and carries every wandering dream to light", dict());
+        let spec: MeterSpecification = "x/x/x/x/x/".parse().unwrap();
+
+        let reasons = assert_meter_no_match(spec.validate_line(&line));
+
+        assert!(reasons.iter().any(|reason| matches!(
+            reason,
+            MeterMismatch::WordsStressMismatch {
+                word_index_failed_at: 3,
+                ..
+            }
+        )));
+        assert!(!reasons.iter().any(|reason| matches!(
+            reason,
+            MeterMismatch::WordsStressMismatch {
+                word_index_failed_at: 2,
+                ..
+            }
+        )));
     }
 
     // --- SyllableCountSpecification ---
