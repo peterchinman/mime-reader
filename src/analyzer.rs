@@ -82,6 +82,13 @@ pub struct RhymeIntersectionMatch<'d, 't> {
     pub scores: ConsistentScores<'d, 't>,
 }
 
+/// An owned word-scan result, including any derived target pronunciations.
+#[derive(Debug)]
+pub struct RhymeIntersectionMatchOwned {
+    pub word: String,
+    pub scores: ConsistentScoresOwned,
+}
+
 impl<V, C, D> Analyzer<V, C, D>
 where
     V: VowelDistanceScorer,
@@ -114,6 +121,7 @@ where
     /// pronunciation, which lets a subject with pronunciation variants sit
     /// "close" to several targets no single pronunciation is close to.
     /// `compare` is applied to both the subject and target pronunciations.
+    /// Word pronunciations follow the dictionary's pronunciation mode.
     ///
     /// Returns `None` when no pronunciation of `subject` is comparable to every
     /// target. An empty `targets` slice returns `None` without looking up
@@ -129,27 +137,38 @@ where
             return Ok(None);
         }
 
-        let subject_pronunciations = self.dict.lookup(subject).ok_or_else(|| UnknownWordError {
-            word: subject.to_string(),
-        })?;
-        let pronunciation_targets: Vec<PronunciationsTarget<'_>> = targets
+        let subject_pronunciations = self
+            .dict
+            .pronunciations_for(subject)
+            .map(|word| word.pronunciations)
+            .ok_or_else(|| UnknownWordError {
+                word: subject.to_string(),
+            })?;
+        let target_pronunciations = targets
             .iter()
             .map(|target| {
-                let pronunciations = self.dict.lookup(target).ok_or_else(|| UnknownWordError {
-                    word: target.to_string(),
-                })?;
-
-                Ok(PronunciationsTarget::new(
+                self.dict
+                    .pronunciations_for(target)
+                    .map(|word| word.pronunciations)
+                    .ok_or_else(|| UnknownWordError {
+                        word: target.to_string(),
+                    })
+            })
+            .collect::<Result<Vec<_>, UnknownWordError>>()?;
+        let pronunciation_targets: Vec<PronunciationsTarget<'_>> = target_pronunciations
+            .iter()
+            .map(|pronunciations| {
+                PronunciationsTarget::new(
                     pronunciations.iter().map(|p| p.as_ref()),
                     0.0..=f32::INFINITY,
-                ))
+                )
             })
-            .collect::<Result<_, UnknownWordError>>()?;
+            .collect();
         let comparison_targets = prepare_comparison_targets(&pronunciation_targets, compare);
 
         Ok(self
             .best_consistent_scores(
-                subject_pronunciations,
+                subject_pronunciations.as_ref(),
                 &comparison_targets,
                 normalization,
                 compare,
@@ -163,14 +182,17 @@ where
     /// nearest first (ties broken alphabetically). All target words are excluded from the
     /// results. An empty `targets` slice returns no matches (rather than
     /// the vacuous whole dictionary).
+    /// Targets follow the dictionary's pronunciation mode; candidates are always
+    /// dictionary entries. Results own their scores so inferred pronunciations
+    /// remain valid after the scan.
     ///
     /// TODO: this is a naive implementation that simply iterates the entire dict. We can imagine faster implementations that would bucket the dictionary by vowel order.
-    pub fn find_rhymes_intersection_by_words<'d>(
-        &'d self,
+    pub fn find_rhymes_intersection_by_words(
+        &self,
         targets: &[WordTarget],
         normalization: RhymeScoreNormalization,
         compare: Compare,
-    ) -> Result<Vec<RhymeIntersectionMatch<'d, 'd>>, UnknownWordError> {
+    ) -> Result<Vec<RhymeIntersectionMatchOwned>, UnknownWordError> {
         if targets.is_empty() {
             return Ok(Vec::new());
         }
@@ -179,28 +201,40 @@ where
         let target_pronunciations = targets
             .iter()
             .map(|target| {
-                let pronunciations =
-                    self.dict
-                        .lookup(target.word)
-                        .ok_or_else(|| UnknownWordError {
-                            word: target.word.to_string(),
-                        })?;
-
-                Ok(PronunciationsTarget::new(
+                self.dict
+                    .pronunciations_for(target.word)
+                    .map(|word| word.pronunciations)
+                    .ok_or_else(|| UnknownWordError {
+                        word: target.word.to_string(),
+                    })
+            })
+            .collect::<Result<Vec<_>, UnknownWordError>>()?;
+        let pronunciation_targets = targets
+            .iter()
+            .zip(&target_pronunciations)
+            .map(|(target, pronunciations)| {
+                PronunciationsTarget::new(
                     pronunciations
                         .iter()
                         .map(|pronunciation| pronunciation.as_ref()),
                     target.distance_range.clone(),
-                ))
+                )
             })
-            .collect::<Result<Vec<_>, UnknownWordError>>()?;
+            .collect::<Vec<_>>();
 
-        Ok(self.find_rhymes_intersection_by_pronunciations(
-            &target_pronunciations,
-            Some(&excluded_words),
-            normalization,
-            compare,
-        ))
+        Ok(self
+            .find_rhymes_intersection_by_pronunciations(
+                &pronunciation_targets,
+                Some(&excluded_words),
+                normalization,
+                compare,
+            )
+            .into_iter()
+            .map(|m| RhymeIntersectionMatchOwned {
+                word: m.word.to_string(),
+                scores: m.scores.to_owned(),
+            })
+            .collect())
     }
 
     /// An empty `targets` slice returns no matches. When every target uses
@@ -603,7 +637,7 @@ mod tests {
         assert!(matches.iter().all(|m| m.word != "cat" && m.word != "dog"));
         assert_eq!(matches.len(), analyzer().dict().iter().count() - 2);
 
-        let total = |m: &RhymeIntersectionMatch<'_, '_>| -> f32 {
+        let total = |m: &RhymeIntersectionMatchOwned| -> f32 {
             m.scores
                 .best_scored_targets
                 .iter()
@@ -742,5 +776,68 @@ mod tests {
             );
             assert!(matches!(result, Err(UnknownWordError { .. })));
         }
+    }
+
+    #[test]
+    fn word_scoring_and_scanning_honor_pronunciation_mode() {
+        use crate::PronunciationMode;
+
+        let dict = CmuDictionary::from_bytes(b"KETTLE  K EH1 T AH0 L\n").unwrap();
+        let strict = Analyzer::new(&dict, RhymeDistanceScorer::new());
+        for (subject, target_word) in [("kettle's", "kettle"), ("kettle", "kettles")] {
+            assert!(
+                strict
+                    .calculate_consistent_score_between_words(
+                        subject,
+                        &[target_word],
+                        RhymeScoreNormalization::None,
+                        Compare::WholeWord,
+                    )
+                    .is_err()
+            );
+        }
+        let targets = [target("kettles", 0.0, f32::INFINITY)];
+        assert!(
+            strict
+                .find_rhymes_intersection_by_words(
+                    &targets,
+                    RhymeScoreNormalization::None,
+                    Compare::WholeWord,
+                )
+                .is_err()
+        );
+
+        let permissive = Analyzer::new(
+            (&dict).with_pronunciation_mode(PronunciationMode::AllowDerived),
+            RhymeDistanceScorer::new(),
+        );
+        let score = permissive
+            .calculate_consistent_score_between_words(
+                "kettle's",
+                &["kettles"],
+                RhymeScoreNormalization::None,
+                Compare::WholeWord,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            score.best_subject_pronunciation,
+            score.best_scored_targets[0].0
+        );
+        assert_eq!(score.best_scored_targets[0].1.raw_distance, 0);
+
+        let matches = permissive
+            .find_rhymes_intersection_by_words(
+                &targets,
+                RhymeScoreNormalization::None,
+                Compare::WholeWord,
+            )
+            .unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].word, "kettle");
+        assert_eq!(
+            matches[0].scores.best_scored_targets[0].0,
+            score.best_subject_pronunciation
+        );
     }
 }

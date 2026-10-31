@@ -7,10 +7,12 @@ use tsify::Tsify;
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    AnalyticConsonantDistanceConfig, Analyzer, CmuDictionary, Compare, ConsistentScoresOwned,
-    MeterScheme, OwnedAlignmentStep, RhymeComparisonConfig, RhymeDistanceConfig,
-    RhymeDistanceScorer, RhymeIntersectionMatch, RhymePairScore, RhymeScheme,
-    RhymeScoreNormalization, TranspositionDirection, VowelHexGraphConfig, WordTarget,
+    AnalyticConsonantDistanceConfig, Analyzer, CmuDictionary, Compare, ConfiguredDictionary,
+    ConsistentScoresOwned, InflectionRule, MeterScheme, OwnedAlignmentStep, PronouncingDictionary,
+    PronunciationMode, PronunciationOrigin, RhymeComparisonConfig, RhymeDistanceConfig,
+    RhymeDistanceScorer, RhymeIntersectionMatchOwned, RhymePairScore, RhymeScheme,
+    RhymeScoreNormalization, TranspositionDirection, VowelHexGraphConfig, WordPronunciations,
+    WordTarget,
     line::Line,
     meter::{MeterMatchResult, MeterMismatch, SyllableStress},
     poem::{MeterAnalysis, Poem, PoemLineAnalysis, RhymeAnalysis},
@@ -33,16 +35,25 @@ pub fn default_rhyme_comparison_config() -> RhymeComparisonConfigDto {
 
 #[wasm_bindgen(js_name = "Analyzer")]
 pub struct WasmAnalyzer {
-    dict: Rc<CmuDictionary>,
+    dict: Rc<ConfiguredDictionary<CmuDictionary>>,
     scorer: Rc<Scorer>,
 }
 
 #[wasm_bindgen]
 impl WasmAnalyzer {
-    /// Builds an analyzer from the raw CMUdict bytes
+    /// Builds an analyzer from raw CMUdict bytes. `pronunciation_mode` defaults
+    /// to `"dictionary_only"`; pass `"allow_derived"` to infer missing words.
+    /// The policy applies to `pronunciationsFor`, scoring, and every poem opened here.
     #[wasm_bindgen(constructor)]
-    pub fn new(dict_bytes: &[u8]) -> Result<WasmAnalyzer, JsError> {
-        let dict = CmuDictionary::from_bytes(dict_bytes)?;
+    pub fn new(
+        dict_bytes: &[u8],
+        pronunciation_mode: Option<PronunciationModeDto>,
+    ) -> Result<WasmAnalyzer, JsError> {
+        let dict = CmuDictionary::from_bytes(dict_bytes)?.with_pronunciation_mode(
+            pronunciation_mode
+                .map(PronunciationMode::from)
+                .unwrap_or_default(),
+        );
         Ok(WasmAnalyzer {
             dict: Rc::new(dict),
             scorer: Rc::new(Scorer::new()),
@@ -150,7 +161,7 @@ impl WasmAnalyzer {
         compare: Option<CompareDto>,
     ) -> Result<Vec<RhymeIntersectionMatchDto>, JsError> {
         let analyzer = Analyzer::new(&*self.dict, (*self.scorer).clone());
-        let targets: Vec<WordTarget<'_>> = targets
+        let word_targets: Vec<WordTarget<'_>> = targets
             .iter()
             .map(|t| WordTarget {
                 word: &t.word,
@@ -161,7 +172,7 @@ impl WasmAnalyzer {
             .map(RhymeScoreNormalization::from)
             .unwrap_or_default();
         let matches = analyzer.find_rhymes_intersection_by_words(
-            &targets,
+            &word_targets,
             normalization,
             compare.map(Compare::from).unwrap_or(Compare::RhymingPart),
         )?;
@@ -206,7 +217,10 @@ impl WasmAnalyzer {
     /// allocation-heavy call — callers should cache the result.
     #[wasm_bindgen]
     pub fn words(&self) -> Vec<String> {
-        self.dict.iter().map(|(word, _)| word.to_string()).collect()
+        self.dict
+            .entries()
+            .map(|(word, _)| word.to_string())
+            .collect()
     }
 
     /// Every pronunciation of `word`, in dictionary order: cmudict lists a
@@ -214,7 +228,8 @@ impl WasmAnalyzer {
     /// pronunciation first — and the parser preserves that order, so `[0]`
     /// is the word's most common pronunciation. Each pronunciation is its
     /// ARPAbet phonemes, stress digits included (e.g. `["L", "AY1", "V"]`).
-    /// `undefined` when the word isn't in the dictionary.
+    /// Only exact dictionary entries are returned, regardless of pronunciation mode.
+    /// Use [`Self::pronunciations_for`] for optional inference and pronunciation origin.
     #[wasm_bindgen]
     pub fn lookup(&self, word: &str) -> Option<PronunciationsDto> {
         self.dict.lookup(word).map(|pronunciations| {
@@ -225,6 +240,13 @@ impl WasmAnalyzer {
                     .collect(),
             )
         })
+    }
+
+    /// Returns pronunciations and their origin using this analyzer's pronunciation mode.
+    /// In `"allow_derived"` mode, missing words may use productive pronunciation rules.
+    #[wasm_bindgen(js_name = pronunciationsFor)]
+    pub fn pronunciations_for(&self, word: &str) -> Option<WordPronunciationsDto> {
+        self.dict.pronunciations_for(word).map(Into::into)
     }
 
     /// The distinct syllable counts of `text` — a word or a
@@ -285,7 +307,7 @@ impl WasmAnalyzer {
 
 #[wasm_bindgen(js_name = "Poem")]
 pub struct WasmPoem {
-    dict: Rc<CmuDictionary>,
+    dict: Rc<ConfiguredDictionary<CmuDictionary>>,
     // The config this poem was opened with. A later `WasmAnalyzer::set_rhyme_config`
     // swaps the analyzer's scorer but not this Rc, so the poem keeps its config
     // until re-opened.
@@ -368,11 +390,110 @@ impl WasmPoem {
 // DTOs — owned, serializable mirrors of the borrowed core result types.
 // ===========================================================================
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(rename_all = "snake_case")]
+pub enum PronunciationModeDto {
+    DictionaryOnly,
+    AllowDerived,
+}
+
+impl From<PronunciationModeDto> for PronunciationMode {
+    fn from(mode: PronunciationModeDto) -> Self {
+        match mode {
+            PronunciationModeDto::DictionaryOnly => Self::DictionaryOnly,
+            PronunciationModeDto::AllowDerived => Self::AllowDerived,
+        }
+    }
+}
+
 /// A word's pronunciations in dictionary order — each one its ARPAbet
 /// phonemes. A newtype, so it crosses to JS as a plain `string[][]`.
 #[derive(Serialize, Debug, Tsify)]
 #[tsify(into_wasm_abi)]
 pub struct PronunciationsDto(pub Vec<Vec<String>>);
+
+/// Pronunciations plus their dictionary or derivation provenance.
+#[derive(Serialize, Debug, PartialEq, Eq, Tsify)]
+#[tsify(into_wasm_abi)]
+pub struct WordPronunciationsDto {
+    pronunciations: Vec<Vec<String>>,
+    origin: PronunciationOriginDto,
+}
+
+impl From<WordPronunciations<'_>> for WordPronunciationsDto {
+    fn from(word_pronunciations: WordPronunciations<'_>) -> Self {
+        WordPronunciationsDto {
+            pronunciations: word_pronunciations
+                .pronunciations
+                .iter()
+                .map(|phonemes| phonemes.iter().map(ToString::to_string).collect())
+                .collect(),
+            origin: word_pronunciations.origin.into(),
+        }
+    }
+}
+
+/// The source of a pronunciation. A derived result includes the
+/// dictionary base and its ordered, outward-applied rule chain.
+#[derive(Serialize, Debug, PartialEq, Eq, Tsify)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PronunciationOriginDto {
+    Dictionary {
+        normalized: bool,
+    },
+    Derived {
+        dictionary_base: String,
+        rules: Vec<InflectionRuleDto>,
+    },
+}
+
+impl From<PronunciationOrigin> for PronunciationOriginDto {
+    fn from(origin: PronunciationOrigin) -> Self {
+        match origin {
+            PronunciationOrigin::Dictionary { normalized } => {
+                PronunciationOriginDto::Dictionary { normalized }
+            }
+            PronunciationOrigin::Derived {
+                dictionary_base,
+                rules,
+            } => PronunciationOriginDto::Derived {
+                dictionary_base,
+                rules: rules.into_iter().map(Into::into).collect(),
+            },
+        }
+    }
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq, Tsify)]
+#[serde(rename_all = "snake_case")]
+pub enum InflectionRuleDto {
+    ApostropheS,
+    SApostrophe,
+    S,
+    Ves,
+    Ly,
+    Ing,
+    Ed,
+    Er,
+    Est,
+}
+
+impl From<InflectionRule> for InflectionRuleDto {
+    fn from(rule: InflectionRule) -> Self {
+        match rule {
+            InflectionRule::ApostropheS => InflectionRuleDto::ApostropheS,
+            InflectionRule::SApostrophe => InflectionRuleDto::SApostrophe,
+            InflectionRule::S => InflectionRuleDto::S,
+            InflectionRule::Ves => InflectionRuleDto::Ves,
+            InflectionRule::Ly => InflectionRuleDto::Ly,
+            InflectionRule::Ing => InflectionRuleDto::Ing,
+            InflectionRule::Ed => InflectionRuleDto::Ed,
+            InflectionRule::Er => InflectionRuleDto::Er,
+            InflectionRule::Est => InflectionRuleDto::Est,
+        }
+    }
+}
 
 /// Combined per-line analysis. Mirrors [`PoemLineAnalysis`].
 #[derive(Serialize, Debug, Tsify)]
@@ -666,7 +787,7 @@ pub struct RhymeTargetDto {
 
 /// A dictionary word inside every target's distance range — a lean scan
 /// summary. For per-target pronunciation detail, ask `scoreConsistent`
-/// about the words you keep. Mirrors [`RhymeIntersectionMatch`].
+/// about the words you keep. Mirrors [`RhymeIntersectionMatchOwned`].
 #[derive(Serialize, Debug, Tsify)]
 #[tsify(into_wasm_abi)]
 pub struct RhymeIntersectionMatchDto {
@@ -678,10 +799,7 @@ pub struct RhymeIntersectionMatchDto {
 }
 
 impl RhymeIntersectionMatchDto {
-    fn from_match(
-        m: &RhymeIntersectionMatch<'_, '_>,
-        normalization: RhymeScoreNormalization,
-    ) -> Self {
+    fn from_match(m: &RhymeIntersectionMatchOwned, normalization: RhymeScoreNormalization) -> Self {
         RhymeIntersectionMatchDto {
             word: m.word.to_string(),
             pronunciation: m
@@ -951,23 +1069,190 @@ mod tests {
     }
 
     fn analyzer() -> WasmAnalyzer {
-        WasmAnalyzer::new(dict_bytes()).expect("embedded dictionary should parse")
+        WasmAnalyzer::new(dict_bytes(), None).expect("embedded dictionary should parse")
     }
 
     // ---- construction -----------------------------------------------------
 
     #[wasm_bindgen_test]
     fn analyzer_from_valid_dict_bytes_succeeds() {
-        assert!(WasmAnalyzer::new(dict_bytes()).is_ok());
+        assert!(WasmAnalyzer::new(dict_bytes(), None).is_ok());
     }
 
     #[wasm_bindgen_test]
     fn analyzer_from_malformed_dict_bytes_errors() {
         let bad = b"NOT_A_VALID_LINE_WITHOUT_A_SEPARATOR\n";
         assert!(
-            WasmAnalyzer::new(bad).is_err(),
+            WasmAnalyzer::new(bad, None).is_err(),
             "malformed dictionary bytes should surface as an Err, not panic"
         );
+    }
+
+    #[wasm_bindgen_test]
+    fn pronunciation_mode_applies_to_queries_and_poem_edits() {
+        for mode in [
+            None,
+            Some(PronunciationModeDto::DictionaryOnly),
+            Some(PronunciationModeDto::AllowDerived),
+        ] {
+            let allow_derived = mode == Some(PronunciationModeDto::AllowDerived);
+            let ws = WasmAnalyzer::new(b"KETTLE  K EH1 T AH0 L\n", mode).unwrap();
+            assert!(ws.lookup("kettle").is_some());
+            assert!(ws.lookup("kettle's").is_none());
+            assert_eq!(ws.pronunciations_for("kettle's").is_some(), allow_derived);
+            assert_eq!(ws.syllable_counts("kettle's").is_some(), allow_derived);
+            assert_eq!(
+                ws.score_rhyme("kettle's", "kettles", None, None).is_ok(),
+                allow_derived
+            );
+            assert_eq!(
+                ws.find_rhymes_intersection(
+                    vec![RhymeTargetDto {
+                        word: "kettles".into(),
+                        min_distance: 0.0,
+                        max_distance: 1000.0
+                    }],
+                    None,
+                    None,
+                )
+                .is_ok(),
+                allow_derived
+            );
+            assert_eq!(ws.words(), vec!["kettle"]);
+
+            let mut poem = ws
+                .open_poem(vec!["kettle's".into()], Some("/x".into()), None, None)
+                .unwrap();
+            assert_eq!(
+                matches!(poem.meter_analysis(0).unwrap(), MeterDto::Match),
+                allow_derived
+            );
+            poem.update_line(0, "kettles").unwrap();
+            assert_eq!(
+                matches!(poem.meter_analysis(0).unwrap(), MeterDto::Match),
+                allow_derived
+            );
+            poem.insert_line(1, "kettle's").unwrap();
+            assert_eq!(
+                matches!(poem.meter_analysis(1).unwrap(), MeterDto::Match),
+                allow_derived
+            );
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn pronunciations_and_syllable_counts_include_missing_possessives() {
+        let ws = WasmAnalyzer::new(dict_bytes(), Some(PronunciationModeDto::AllowDerived)).unwrap();
+
+        assert_eq!(
+            ws.pronunciations_for("kettle's").unwrap().pronunciations[0],
+            ["K", "EH1", "T", "AH0", "L", "Z"]
+        );
+        assert_eq!(
+            ws.pronunciations_for("kettle’s").unwrap().pronunciations,
+            ws.pronunciations_for("kettle's").unwrap().pronunciations
+        );
+        assert_eq!(ws.syllable_counts("kettle's"), Some(vec![2]));
+    }
+
+    #[wasm_bindgen_test]
+    fn pronunciations_report_dictionary_and_derived_origins() {
+        let ws = WasmAnalyzer::new(dict_bytes(), Some(PronunciationModeDto::AllowDerived)).unwrap();
+
+        assert_eq!(
+            ws.pronunciations_for("hello").unwrap().origin,
+            PronunciationOriginDto::Dictionary { normalized: false }
+        );
+        assert_eq!(
+            ws.pronunciations_for("cat’s").unwrap().origin,
+            PronunciationOriginDto::Dictionary { normalized: true }
+        );
+        assert_eq!(
+            ws.pronunciations_for("kettle’s").unwrap().origin,
+            PronunciationOriginDto::Derived {
+                dictionary_base: "kettle".to_string(),
+                rules: vec![InflectionRuleDto::ApostropheS],
+            }
+        );
+
+        let sparse = WasmAnalyzer::new(
+            b"PLAIN  P L EY1 N\n",
+            Some(PronunciationModeDto::AllowDerived),
+        )
+        .unwrap();
+        let recursively_derived = sparse.pronunciations_for("plainer's").unwrap();
+        assert_eq!(
+            recursively_derived.origin,
+            PronunciationOriginDto::Derived {
+                dictionary_base: "plain".to_string(),
+                rules: vec![InflectionRuleDto::Er, InflectionRuleDto::ApostropheS,],
+            }
+        );
+        assert_eq!(
+            recursively_derived.pronunciations[0],
+            ["P", "L", "EY1", "N", "ER0", "Z"]
+        );
+
+        let ves = WasmAnalyzer::new(
+            b"KNIFE  N AY1 F\n",
+            Some(PronunciationModeDto::AllowDerived),
+        )
+        .unwrap();
+        assert_eq!(
+            ves.pronunciations_for("knives").unwrap().origin,
+            PronunciationOriginDto::Derived {
+                dictionary_base: "knife".to_string(),
+                rules: vec![InflectionRuleDto::Ves],
+            }
+        );
+
+        let plural_possessive = WasmAnalyzer::new(
+            b"KETTLE  K EH1 T AH0 L\n",
+            Some(PronunciationModeDto::AllowDerived),
+        )
+        .unwrap();
+        assert_eq!(
+            plural_possessive
+                .pronunciations_for("kettles'")
+                .unwrap()
+                .origin,
+            PronunciationOriginDto::Derived {
+                dictionary_base: "kettle".to_string(),
+                rules: vec![InflectionRuleDto::S, InflectionRuleDto::SApostrophe],
+            }
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn pronunciations_meter_and_rhyme_support_er_and_est_inflections() {
+        let ws = WasmAnalyzer::new(dict_bytes(), Some(PronunciationModeDto::AllowDerived)).unwrap();
+
+        assert_eq!(
+            ws.pronunciations_for("sorer").unwrap().pronunciations[0],
+            ["S", "AO1", "R", "ER0"]
+        );
+        assert!(
+            ws.pronunciations_for("plainest")
+                .unwrap()
+                .pronunciations
+                .iter()
+                .any(|pronunciation| { pronunciation == &["P", "L", "EY1", "N", "IH0", "S", "T"] })
+        );
+        assert_eq!(ws.syllable_counts("plainest sorer"), Some(vec![4]));
+
+        let mut poem = ws
+            .open_poem(
+                vec!["forest".into(), "sorest".into()],
+                Some("/x".into()),
+                Some("AA".into()),
+                None,
+            )
+            .unwrap();
+        assert!(matches!(poem.meter_analysis(1).unwrap(), MeterDto::Match));
+        assert!(matches!(
+            poem.rhyme_analysis(1).unwrap(),
+            RhymeDto::Follower { passed: true, .. }
+        ));
     }
 
     // ---- scheme-parse errors propagate as Err, not panics -----------------
@@ -1264,7 +1549,7 @@ mod tests {
     fn score_rhyme_scores_a_pair_with_owned_pronunciations() {
         let ws = analyzer();
         let pair = ws
-            .score_rhyme("cot", "caught", None)
+            .score_rhyme("cot", "caught", None, Some(CompareDto::WholeWord))
             .unwrap()
             .expect("one-syllable words are always comparable");
 
@@ -1277,6 +1562,6 @@ mod tests {
     #[wasm_bindgen_test]
     fn score_rhyme_unknown_word_surfaces_as_error() {
         let ws = analyzer();
-        assert!(ws.score_rhyme("cat", "xyzzy", None).is_err());
+        assert!(ws.score_rhyme("cat", "xyzzy", None, None).is_err());
     }
 }

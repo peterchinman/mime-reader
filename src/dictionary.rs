@@ -1,15 +1,48 @@
+//! Pronouncing dictionary storage, parsing, and the shared dictionary interface.
+
 use std::collections::HashMap;
 use std::path::Path;
 
 use crate::error::CmuDictionaryError;
 use crate::phoneme::Phoneme;
+use crate::pronunciation::{self, ConfiguredDictionary, PronunciationMode, WordPronunciations};
 
 pub type Pronunciations = Vec<Box<[Phoneme]>>;
 
 pub trait PronouncingDictionary {
-    /// The pronunciations of `word`, borrowed from the dictionary — callers
-    /// that need ownership clone explicitly.
+    /// The pronunciations of an exact dictionary headword, borrowed from the
+    /// dictionary. Use [`PronouncingDictionary::pronunciations_for`] when
+    /// obtaining pronunciations for running text.
     fn lookup(&self, word: &str) -> Option<&[Box<[Phoneme]>]>;
+
+    fn pronunciation_mode(&self) -> PronunciationMode {
+        PronunciationMode::default()
+    }
+
+    /// Selects a pronunciation policy; raw lookup and entry enumeration remain exact.
+    ///
+    /// ```
+    /// use mime_reader::{CmuDictionary, PronouncingDictionary, PronunciationMode};
+    /// let dict = CmuDictionary::from_bytes(b"KETTLE  K EH1 T AH0 L\n")?;
+    /// assert!(dict.pronunciations_for("kettle's").is_none());
+    /// let permissive = (&dict).with_pronunciation_mode(PronunciationMode::AllowDerived);
+    /// assert!(permissive.pronunciations_for("kettle's").is_some());
+    /// # Ok::<(), mime_reader::CmuDictionaryError>(())
+    /// ```
+    fn with_pronunciation_mode(self, mode: PronunciationMode) -> ConfiguredDictionary<Self>
+    where
+        Self: Sized,
+    {
+        ConfiguredDictionary::new(self, mode)
+    }
+
+    /// Returns a word's pronunciations and their dictionary or rule-based origin.
+    /// Derivation is disabled by default; use [`Self::with_pronunciation_mode`]
+    /// to opt in. Dictionary pronunciations are borrowed; inferred ones are owned.
+    fn pronunciations_for(&self, word: &str) -> Option<WordPronunciations<'_>> {
+        pronunciation::pronunciations_for(self, word)
+    }
+
     fn entries(&self) -> impl Iterator<Item = (&str, &[Box<[Phoneme]>])>;
 }
 
@@ -20,6 +53,9 @@ impl<T: PronouncingDictionary + ?Sized> PronouncingDictionary for &T {
     fn entries(&self) -> impl Iterator<Item = (&str, &[Box<[Phoneme]>])> {
         (**self).entries()
     }
+    fn pronunciation_mode(&self) -> PronunciationMode {
+        (**self).pronunciation_mode()
+    }
 }
 
 impl<T: PronouncingDictionary + ?Sized> PronouncingDictionary for Box<T> {
@@ -28,6 +64,9 @@ impl<T: PronouncingDictionary + ?Sized> PronouncingDictionary for Box<T> {
     }
     fn entries(&self) -> impl Iterator<Item = (&str, &[Box<[Phoneme]>])> {
         (**self).entries()
+    }
+    fn pronunciation_mode(&self) -> PronunciationMode {
+        (**self).pronunciation_mode()
     }
 }
 
@@ -66,6 +105,10 @@ impl CmuDictionary {
                 .map(|s| s.parse::<Phoneme>())
                 .collect::<Result<_, _>>()
                 .map_err(CmuDictionaryError::InvalidPhoneme)?;
+            // A pronunciation without phonemes has no syllables to scan or rhyme.
+            if phonemes.is_empty() {
+                return Err(CmuDictionaryError::MalformedLine(line.to_string()));
+            }
 
             entries
                 .entry(word.to_lowercase())
@@ -128,6 +171,16 @@ mod tests {
             dict.lookup("hello").unwrap().len(),
             dict.lookup("HELLO").unwrap().len()
         );
+    }
+
+    #[test]
+    fn entry_without_phonemes_is_malformed() {
+        for bytes in [&b"FOO  \n"[..], b"CAT  K AE1 T\nFOO   \n"] {
+            assert!(matches!(
+                CmuDictionary::from_bytes(bytes),
+                Err(CmuDictionaryError::MalformedLine(line)) if line.starts_with("FOO")
+            ));
+        }
     }
 
     #[test]
