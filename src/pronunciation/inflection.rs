@@ -31,9 +31,11 @@ pub enum InflectionRule {
     Est,
 }
 
-/// The sound change applied to a base pronunciation. Several variants collapse
-/// onto one [`InflectionRule`] where a single written suffix is reachable by
-/// more than one spelling change.
+/// A productive suffix: how to recover the written bases a word may have been
+/// formed from ([`Self::base_candidates`]) and the sound change applied to a
+/// base pronunciation ([`Self::apply`]). Several variants collapse onto one
+/// [`InflectionRule`] where a single written suffix is reachable by more than
+/// one spelling change.
 #[derive(Clone, Copy)]
 enum InflectionalSuffix {
     ApostropheS,
@@ -56,6 +58,14 @@ pub(crate) struct PronunciationDerivation {
 }
 
 impl PronunciationDerivation {
+    /// `None` when `word` doesn't carry `suffix`.
+    fn new(suffix: InflectionalSuffix, word: &str) -> Option<Self> {
+        Some(Self {
+            base_candidates: suffix.base_candidates(word)?,
+            suffix,
+        })
+    }
+
     pub(crate) fn base_candidates(&self) -> impl Iterator<Item = &str> {
         self.base_candidates.iter().map(String::as_str)
     }
@@ -73,6 +83,38 @@ impl PronunciationDerivation {
 }
 
 impl InflectionalSuffix {
+    /// Every suffix, in precedence order: `derive_pronunciations` takes the
+    /// first one whose base is in the dictionary.
+    const PRECEDENCE: [Self; 10] = [
+        Self::ApostropheS,
+        Self::Er,
+        Self::Est,
+        Self::S,
+        Self::Ves,
+        Self::IlyFromY,
+        Self::Ly,
+        Self::LyFromLe,
+        Self::Ing,
+        Self::Ed,
+    ];
+
+    /// The written bases `word` may have been formed from, or `None` when it
+    /// doesn't carry this suffix.
+    fn base_candidates(self, word: &str) -> Option<Vec<String>> {
+        match self {
+            Self::ApostropheS => apostrophe_s_bases(word),
+            Self::S => s_bases(word),
+            Self::Ves => ves_bases(word),
+            Self::Ly => ly_bases(word),
+            Self::IlyFromY => ily_from_y_bases(word),
+            Self::LyFromLe => ly_from_le_bases(word),
+            Self::Ing => ing_bases(word),
+            Self::Ed => ed_bases(word),
+            Self::Er => er_est_bases(word, "er", "r"),
+            Self::Est => er_est_bases(word, "est", "st"),
+        }
+    }
+
     fn rule(self) -> InflectionRule {
         match self {
             Self::ApostropheS => InflectionRule::ApostropheS,
@@ -127,33 +169,24 @@ impl InflectionalSuffix {
     }
 }
 
-/// Productive inflection rules, in precedence order: `derive_pronunciations`
-/// takes the first one whose base is in the dictionary. Exact dictionary
-/// entries are resolved before any of these rules are consulted.
+/// The productive rules `word` may have been formed by, in
+/// [`InflectionalSuffix::PRECEDENCE`] order. Exact dictionary entries are
+/// resolved before any of these rules are consulted.
 pub(crate) fn pronunciation_derivations(
     word: &str,
 ) -> impl Iterator<Item = PronunciationDerivation> {
-    let mut derivations = Vec::new();
-    derivations.extend(apostrophe_s_derivation(word));
-    derivations.extend(er_est_derivation(word));
-    derivations.extend(s_derivation(word));
-    derivations.extend(ves_derivation(word));
-    derivations.extend(ly_derivations(word));
-    derivations.extend(ing_derivation(word));
-    derivations.extend(ed_derivation(word));
-    derivations.into_iter()
+    InflectionalSuffix::PRECEDENCE
+        .into_iter()
+        .filter_map(move |suffix| PronunciationDerivation::new(suffix, word))
 }
 
-fn apostrophe_s_derivation(word: &str) -> Option<PronunciationDerivation> {
+fn apostrophe_s_bases(word: &str) -> Option<Vec<String>> {
     let base = ["'s", "’s"]
         .into_iter()
         .find_map(|suffix| strip_suffix_ignore_ascii_case(word, suffix))
         .filter(|base| !base.is_empty())?;
 
-    Some(PronunciationDerivation {
-        base_candidates: vec![base.to_string()],
-        suffix: InflectionalSuffix::ApostropheS,
-    })
+    Some(vec![base.to_string()])
 }
 
 fn strip_suffix_ignore_ascii_case<'a>(word: &'a str, suffix: &str) -> Option<&'a str> {
@@ -163,7 +196,7 @@ fn strip_suffix_ignore_ascii_case<'a>(word: &'a str, suffix: &str) -> Option<&'a
         .then(|| &word[..base_len])
 }
 
-fn s_derivation(word: &str) -> Option<PronunciationDerivation> {
+fn s_bases(word: &str) -> Option<Vec<String>> {
     let s_base = strip_suffix_ignore_ascii_case(word, "s").filter(|base| !base.is_empty())?;
     let es_base = strip_suffix_ignore_ascii_case(word, "es").filter(|base| !base.is_empty());
     let mut base_candidates = Vec::with_capacity(4);
@@ -185,13 +218,10 @@ fn s_derivation(word: &str) -> Option<PronunciationDerivation> {
         }
     }
 
-    Some(PronunciationDerivation {
-        base_candidates,
-        suffix: InflectionalSuffix::S,
-    })
+    Some(base_candidates)
 }
 
-fn ves_derivation(word: &str) -> Option<PronunciationDerivation> {
+fn ves_bases(word: &str) -> Option<Vec<String>> {
     let stem = strip_suffix_ignore_ascii_case(word, "ves").filter(|stem| !stem.is_empty())?;
     let mut base_candidates = Vec::with_capacity(2);
 
@@ -201,10 +231,7 @@ fn ves_derivation(word: &str) -> Option<PronunciationDerivation> {
     push_candidate(&mut base_candidates, with_spelling_suffix(stem, "f", "F"));
     push_candidate(&mut base_candidates, with_spelling_suffix(stem, "fe", "FE"));
 
-    Some(PronunciationDerivation {
-        base_candidates,
-        suffix: InflectionalSuffix::Ves,
-    })
+    Some(base_candidates)
 }
 
 fn with_spelling_suffix(stem: &str, lowercase: &str, uppercase: &str) -> String {
@@ -224,52 +251,44 @@ fn with_spelling_suffix(stem: &str, lowercase: &str, uppercase: &str) -> String 
     restored
 }
 
-fn ly_derivations(word: &str) -> Vec<PronunciationDerivation> {
-    let Some(stem) = strip_suffix_ignore_ascii_case(word, "ly").filter(|stem| !stem.is_empty())
-    else {
-        return Vec::new();
-    };
-    let mut derivations = Vec::with_capacity(3);
+fn ly_stem(word: &str) -> Option<&str> {
+    strip_suffix_ignore_ascii_case(word, "ly").filter(|stem| !stem.is_empty())
+}
 
-    // happy -> happily, angry -> angrily, and day -> daily. This spelling
-    // change can also alter a final unstressed IY0, so it has its own sound
-    // transformation rather than sharing the direct -ly rule.
-    if let Some(y_base) = restore_final_y(stem) {
-        derivations.push(PronunciationDerivation {
-            base_candidates: vec![y_base],
-            suffix: InflectionalSuffix::IlyFromY,
-        });
-    }
+/// happy -> happily, angry -> angrily, and day -> daily. This spelling change
+/// can also alter a final unstressed IY0, so it has its own sound
+/// transformation rather than sharing the direct -ly rule.
+fn ily_from_y_bases(word: &str) -> Option<Vec<String>> {
+    restore_final_y(ly_stem(word)?).map(|y_base| vec![y_base])
+}
 
-    let mut ly_bases = Vec::with_capacity(4);
+fn ly_bases(word: &str) -> Option<Vec<String>> {
+    let stem = ly_stem(word)?;
+    let mut base_candidates = Vec::with_capacity(4);
+
     // basic -> basically and logic -> logically insert written -al-, but the
     // pronunciation is still the ordinary L IY0 ending.
     if let Some(ic_base) = strip_suffix_ignore_ascii_case(stem, "al")
         && strip_suffix_ignore_ascii_case(ic_base, "ic").is_some()
     {
-        push_candidate(&mut ly_bases, ic_base.to_string());
+        push_candidate(&mut base_candidates, ic_base.to_string());
     }
-    push_candidate(&mut ly_bases, stem.to_string());
-    push_candidate(&mut ly_bases, restore_final_e(stem));
+    push_candidate(&mut base_candidates, stem.to_string());
+    push_candidate(&mut base_candidates, restore_final_e(stem));
     if let Some(doubled_l_base) = double_final_l(stem) {
-        push_candidate(&mut ly_bases, doubled_l_base);
+        push_candidate(&mut base_candidates, doubled_l_base);
     }
-    derivations.push(PronunciationDerivation {
-        base_candidates: ly_bases,
-        suffix: InflectionalSuffix::Ly,
-    });
 
-    // simple -> simply and terrible -> terribly remove the written e and the
-    // weak vowel before the base's final L.
-    derivations.push(PronunciationDerivation {
-        base_candidates: vec![restore_final_le(stem)],
-        suffix: InflectionalSuffix::LyFromLe,
-    });
-
-    derivations
+    Some(base_candidates)
 }
 
-fn ing_derivation(word: &str) -> Option<PronunciationDerivation> {
+/// simple -> simply and terrible -> terribly remove the written e and the weak
+/// vowel before the base's final L.
+fn ly_from_le_bases(word: &str) -> Option<Vec<String>> {
+    Some(vec![restore_final_le(ly_stem(word)?)])
+}
+
+fn ing_bases(word: &str) -> Option<Vec<String>> {
     let stem = strip_suffix_ignore_ascii_case(word, "ing").filter(|stem| !stem.is_empty())?;
     let mut base_candidates = Vec::with_capacity(5);
 
@@ -285,13 +304,10 @@ fn ing_derivation(word: &str) -> Option<PronunciationDerivation> {
     }
     push_candidate(&mut base_candidates, restore_final_e(stem));
 
-    Some(PronunciationDerivation {
-        base_candidates,
-        suffix: InflectionalSuffix::Ing,
-    })
+    Some(base_candidates)
 }
 
-fn ed_derivation(word: &str) -> Option<PronunciationDerivation> {
+fn ed_bases(word: &str) -> Option<Vec<String>> {
     let d_base = strip_suffix_ignore_ascii_case(word, "d").filter(|base| !base.is_empty())?;
     let ed_base = strip_suffix_ignore_ascii_case(word, "ed").filter(|base| !base.is_empty());
     let mut base_candidates = Vec::with_capacity(5);
@@ -313,24 +329,14 @@ fn ed_derivation(word: &str) -> Option<PronunciationDerivation> {
         }
     }
 
-    Some(PronunciationDerivation {
-        base_candidates,
-        suffix: InflectionalSuffix::Ed,
-    })
+    Some(base_candidates)
 }
 
-fn er_est_derivation(word: &str) -> Option<PronunciationDerivation> {
-    let lowercase = word.to_ascii_lowercase();
-    let (written_suffix, silent_e_suffix, suffix) = if lowercase.ends_with("est") {
-        ("est", "st", InflectionalSuffix::Est)
-    } else if lowercase.ends_with("er") {
-        ("er", "r", InflectionalSuffix::Er)
-    } else {
-        return None;
-    };
-
-    let stem = &word[..word.len() - written_suffix.len()];
-    let silent_e_base = &word[..word.len() - silent_e_suffix.len()];
+/// Shared by -er and -est. `silent_e_suffix` is what remains of the written
+/// suffix after a base's final e (sore -> sorer, sorest).
+fn er_est_bases(word: &str, written_suffix: &str, silent_e_suffix: &str) -> Option<Vec<String>> {
+    let stem = strip_suffix_ignore_ascii_case(word, written_suffix)?;
+    let silent_e_base = strip_suffix_ignore_ascii_case(word, silent_e_suffix)?;
     let mut base_candidates = Vec::with_capacity(4);
 
     if let Some(y_base) = restore_final_y(stem) {
@@ -342,10 +348,7 @@ fn er_est_derivation(word: &str) -> Option<PronunciationDerivation> {
     push_candidate(&mut base_candidates, stem.to_string());
     push_candidate(&mut base_candidates, silent_e_base.to_string());
 
-    (!base_candidates.is_empty()).then_some(PronunciationDerivation {
-        base_candidates,
-        suffix,
-    })
+    (!base_candidates.is_empty()).then_some(base_candidates)
 }
 
 fn restore_final_y(stem: &str) -> Option<String> {
@@ -619,35 +622,28 @@ mod tests {
         pronunciation.iter().map(ToString::to_string).collect()
     }
 
-    fn er_est_bases(word: &str) -> Vec<String> {
-        er_est_derivation(word).unwrap().base_candidates
+    fn bases(suffix: InflectionalSuffix, word: &str) -> Vec<String> {
+        suffix.base_candidates(word).unwrap()
     }
 
-    fn s_bases(word: &str) -> Vec<String> {
-        s_derivation(word).unwrap().base_candidates
-    }
-
-    fn ves_bases(word: &str) -> Vec<String> {
-        ves_derivation(word).unwrap().base_candidates
-    }
-
-    fn ing_bases(word: &str) -> Vec<String> {
-        ing_derivation(word).unwrap().base_candidates
-    }
-
-    fn ed_bases(word: &str) -> Vec<String> {
-        ed_derivation(word).unwrap().base_candidates
+    fn derive(suffix: InflectionalSuffix, word: &str) -> PronunciationDerivation {
+        PronunciationDerivation::new(suffix, word).unwrap()
     }
 
     fn ly_derivation(word: &str, expected_base: &str) -> PronunciationDerivation {
-        ly_derivations(word)
-            .into_iter()
-            .find(|derivation| {
-                derivation
-                    .base_candidates()
-                    .any(|candidate| candidate == expected_base)
-            })
-            .unwrap()
+        [
+            InflectionalSuffix::IlyFromY,
+            InflectionalSuffix::Ly,
+            InflectionalSuffix::LyFromLe,
+        ]
+        .into_iter()
+        .filter_map(|suffix| PronunciationDerivation::new(suffix, word))
+        .find(|derivation| {
+            derivation
+                .base_candidates()
+                .any(|candidate| candidate == expected_base)
+        })
+        .unwrap()
     }
 
     fn includes_base(candidates: &[String], expected: &str) -> bool {
@@ -662,26 +658,42 @@ mod tests {
             ("NASA’s", "NASA"),
             ("NASA’S", "NASA"),
         ] {
-            let derivation = apostrophe_s_derivation(word).unwrap();
-            assert_eq!(derivation.base_candidates, [expected_base]);
+            assert_eq!(
+                bases(InflectionalSuffix::ApostropheS, word),
+                [expected_base]
+            );
         }
     }
 
     #[test]
     fn recognizes_er_est_and_silent_e_bases() {
-        assert_eq!(er_est_bases("plainest"), ["plain", "plaine"]);
-        assert_eq!(er_est_bases("plainer"), ["plain", "plaine"]);
-        assert_eq!(er_est_bases("sorest"), ["sor", "sore"]);
-        assert_eq!(er_est_bases("sorer"), ["sor", "sore"]);
+        assert_eq!(
+            bases(InflectionalSuffix::Est, "plainest"),
+            ["plain", "plaine"]
+        );
+        assert_eq!(
+            bases(InflectionalSuffix::Er, "plainer"),
+            ["plain", "plaine"]
+        );
+        assert_eq!(bases(InflectionalSuffix::Est, "sorest"), ["sor", "sore"]);
+        assert_eq!(bases(InflectionalSuffix::Er, "sorer"), ["sor", "sore"]);
     }
 
     #[test]
     fn recognizes_s_spelling_changes() {
-        assert_eq!(s_bases("darkens"), ["darken"]);
-        assert!(s_bases("passes").iter().any(|base| base == "pass"));
-        assert_eq!(s_bases("babies")[0], "baby");
-        assert!(s_bases("quizzes").iter().any(|base| base == "quiz"));
-        assert_eq!(s_bases("photos"), ["photo"]);
+        assert_eq!(bases(InflectionalSuffix::S, "darkens"), ["darken"]);
+        assert!(
+            bases(InflectionalSuffix::S, "passes")
+                .iter()
+                .any(|base| base == "pass")
+        );
+        assert_eq!(bases(InflectionalSuffix::S, "babies")[0], "baby");
+        assert!(
+            bases(InflectionalSuffix::S, "quizzes")
+                .iter()
+                .any(|base| base == "quiz")
+        );
+        assert_eq!(bases(InflectionalSuffix::S, "photos"), ["photo"]);
     }
 
     #[test]
@@ -694,14 +706,14 @@ mod tests {
             ("scarves", "scarf"),
             ("dwarves", "dwarf"),
         ] {
-            let candidates = ves_bases(inflected);
+            let candidates = bases(InflectionalSuffix::Ves, inflected);
             assert!(
                 includes_base(&candidates, expected_base),
                 "{inflected} should include {expected_base}; got {candidates:?}"
             );
         }
 
-        let derivation = ves_derivation("knives").unwrap();
+        let derivation = derive(InflectionalSuffix::Ves, "knives");
         let pronunciations = derivation.apply(&[phonemes(&["N", "AY1", "F"])]);
         assert_eq!(as_arpabet(&pronunciations[0]), ["N", "AY1", "V", "Z"]);
 
@@ -767,11 +779,20 @@ mod tests {
 
     #[test]
     fn recognizes_ing_spelling_changes() {
-        assert_eq!(ing_bases("darkening")[0], "darken");
-        assert!(includes_base(&ing_bases("making"), "make"));
-        assert!(includes_base(&ing_bases("running"), "run"));
-        assert_eq!(ing_bases("dying")[0], "die");
-        assert!(includes_base(&ing_bases("panicking"), "panic"));
+        assert_eq!(bases(InflectionalSuffix::Ing, "darkening")[0], "darken");
+        assert!(includes_base(
+            &bases(InflectionalSuffix::Ing, "making"),
+            "make"
+        ));
+        assert!(includes_base(
+            &bases(InflectionalSuffix::Ing, "running"),
+            "run"
+        ));
+        assert_eq!(bases(InflectionalSuffix::Ing, "dying")[0], "die");
+        assert!(includes_base(
+            &bases(InflectionalSuffix::Ing, "panicking"),
+            "panic"
+        ));
     }
 
     #[test]
@@ -810,7 +831,7 @@ mod tests {
         ];
 
         for (inflected, expected_base) in cases {
-            let candidates = ed_bases(inflected);
+            let candidates = bases(InflectionalSuffix::Ed, inflected);
             assert!(
                 includes_base(&candidates, expected_base),
                 "{inflected} should include {expected_base}; got {candidates:?}"
@@ -820,15 +841,15 @@ mod tests {
 
     #[test]
     fn recognizes_y_changes_and_doubled_consonants() {
-        assert_eq!(er_est_bases("happier")[0], "happy");
-        assert_eq!(er_est_bases("happiest")[0], "happy");
-        assert_eq!(er_est_bases("bigger")[0], "big");
-        assert_eq!(er_est_bases("biggest")[0], "big");
+        assert_eq!(bases(InflectionalSuffix::Er, "happier")[0], "happy");
+        assert_eq!(bases(InflectionalSuffix::Est, "happiest")[0], "happy");
+        assert_eq!(bases(InflectionalSuffix::Er, "bigger")[0], "big");
+        assert_eq!(bases(InflectionalSuffix::Est, "biggest")[0], "big");
     }
 
     #[test]
     fn er_suffix_adds_unstressed_er() {
-        let derivation = er_est_derivation("plainer").unwrap();
+        let derivation = derive(InflectionalSuffix::Er, "plainer");
         let pronunciations = derivation.apply(&[phonemes(&["P", "L", "EY1", "N"])]);
 
         assert_eq!(
@@ -839,7 +860,7 @@ mod tests {
 
     #[test]
     fn est_suffix_includes_both_cmudict_weak_vowels() {
-        let derivation = er_est_derivation("plainest").unwrap();
+        let derivation = derive(InflectionalSuffix::Est, "plainest");
         let pronunciations = derivation.apply(&[phonemes(&["P", "L", "EY1", "N"])]);
 
         assert_eq!(
