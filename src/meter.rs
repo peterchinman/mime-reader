@@ -6,6 +6,7 @@ use crate::{
         MeterCheckError, ParseMeterError, ParseMeterSchemeError, ParseSyllableCountError,
         ParseSyllableCountSchemeError, UnknownWordError,
     },
+    function_words::is_function_word,
     line::{Line, WordData, WordEntry},
 };
 
@@ -378,33 +379,12 @@ impl MeterMatchResult {
     }
 }
 
-/// One-syllable function words, which can go unstressed in a line even where
-/// the dictionary only stresses them (AS, BY, FROM, MY). A one-syllable word
-/// fits any meter position, so this only lets a neighbor be promoted, as in
-/// "as BEAU-ti-FUL as day".
-#[rustfmt::skip]
-const FUNCTION_WORDS: &[&str] = &[
-    // Articles and determiners
-    "a", "an", "the", "this", "that", "these", "those",
-    // Prepositions
-    "as", "at", "by", "for", "from", "in", "of", "on", "than", "through", "till", "to", "with",
-    // Conjunctions
-    "and", "but", "if", "nor", "or", "so", "though", "when", "where",
-    // Pronouns and possessives
-    "i", "me", "my", "we", "us", "our", "you", "your", "ye", "thou", "thee", "thy",
-    "he", "him", "his", "she", "her", "it", "its", "they", "them", "their",
-    // Relative pronouns
-    "who", "whom", "whose", "which",
-    // Auxiliaries
-    "am", "is", "are", "was", "were", "be", "been",
-    "has", "have", "had", "hast", "hath", "do", "does", "did", "doth",
-    "can", "could", "may", "might", "must", "shall", "should", "will", "would",
-];
-
 const UNSTRESSED_MONOSYLLABLE: &[Stress] = &[Stress::Unstressed];
 
 /// A word's distinct stress patterns, in dictionary order, then an unstressed
-/// one for a function word with a one-syllable pronunciation.
+/// one for a function word with a one-syllable pronunciation. A one-syllable
+/// word fits any meter position, so the unstressed pattern only lets a
+/// neighbor be promoted, as in "as BEAU-ti-FUL as day".
 fn distinct_stress_patterns(word: &WordEntry) -> Result<Vec<&[Stress]>, MeterCheckError> {
     let WordData::Known { pronunciations, .. } = &word.data else {
         return Err(MeterCheckError::UnknownWord(UnknownWordError {
@@ -419,10 +399,7 @@ fn distinct_stress_patterns(word: &WordEntry) -> Result<Vec<&[Stress]>, MeterChe
             patterns.push(pattern);
         }
     }
-    let is_function_word = FUNCTION_WORDS
-        .iter()
-        .any(|function_word| function_word.eq_ignore_ascii_case(&word.word));
-    if is_function_word
+    if is_function_word(&word.word)
         && patterns.iter().any(|pattern| pattern.len() == 1)
         && !patterns.contains(&UNSTRESSED_MONOSYLLABLE)
     {

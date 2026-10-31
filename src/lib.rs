@@ -8,6 +8,7 @@ pub mod analyzer;
 pub mod consonant_distance;
 pub mod dictionary;
 pub mod error;
+mod function_words;
 pub mod line;
 pub mod meter;
 pub mod phoneme;
