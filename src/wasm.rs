@@ -549,6 +549,8 @@ impl From<MeterAnalysis<'_>> for MeterDto {
 pub enum MeterMismatchDto {
     TooShort {
         word_index: usize,
+        /// The meter's stresses for the word's syllables that fit; any
+        /// syllables beyond `expected.length` run past the end of the meter.
         expected: Vec<StressDto>,
     },
     TooLong {
@@ -1289,13 +1291,11 @@ mod tests {
         let MeterDto::NoMatch { reasons } = poem.meter_analysis(0).unwrap() else {
             panic!("expected a meter mismatch");
         };
+        // Only HELLO's first syllable fits the one-syllable meter.
         assert!(reasons.iter().any(|reason| matches!(
             reason,
             MeterMismatchDto::TooShort { word_index: 0, expected }
-                if matches!(
-                    expected.as_slice(),
-                    [StressDto::Unstressed, StressDto::Unstressed]
-                )
+                if matches!(expected.as_slice(), [StressDto::Unstressed])
         )));
     }
 

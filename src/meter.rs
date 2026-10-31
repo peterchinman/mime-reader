@@ -130,7 +130,7 @@ impl MeterSpecification {
             .iter()
             .map(|m| m.meter.as_slice())
             .collect();
-        validate_recursive(0, &line.words, &meters)
+        validate_recursive(&line.words, &meters)
     }
 }
 
@@ -141,10 +141,8 @@ fn is_secondary_next_to_primary(stresses: &[Stress], i: usize) -> bool {
             || i > 0 && stresses.get(i - 1) == Some(&Stress::Primary))
 }
 
-fn word_stresses_matches_meter(word_stresses: &[Stress], meter: &[SyllableStress]) -> bool {
-    word_stress_mismatch_index(word_stresses, meter).is_none()
-}
-
+/// The index of the word's first syllable whose stress doesn't fit `meter`,
+/// or `None` when the whole word fits.
 fn word_stress_mismatch_index(word_stresses: &[Stress], meter: &[SyllableStress]) -> Option<usize> {
     // Assumption: single-syllable words are inherently ambiguous and match any meter position
     if word_stresses.len() == 1 {
@@ -174,6 +172,8 @@ pub enum MeterMatchResult {
 pub enum MeterMismatch {
     MeterTooShort {
         word_index_failed_at: usize,
+        /// The meter's stresses for the word's syllables that fit. The word's
+        /// remaining syllables run past the end of the meter.
         expected_stress_pattern_of_word: Vec<SyllableStress>,
     },
     MeterTooLong {
@@ -185,17 +185,19 @@ pub enum MeterMismatch {
     },
 }
 
+/// The stresses `meter` expects for a word that starts at syllable `start`:
+/// one per syllable that fits, so a word running past the meter's end gets a
+/// shorter pattern than its syllable count.
 fn expected_stress_pattern_for_word(
     meter: &[SyllableStress],
     start: usize,
     syllable_count: usize,
 ) -> Vec<SyllableStress> {
-    if meter.is_empty() {
-        return Vec::new();
-    }
-
-    (0..syllable_count)
-        .map(|offset| meter[(start + offset) % meter.len()])
+    meter
+        .iter()
+        .skip(start)
+        .take(syllable_count)
+        .copied()
         .collect()
 }
 
@@ -248,7 +250,6 @@ fn retain_best_failure(best: &mut Option<FailureReport>, candidate: FailureRepor
 /// collection of valid meters. If every branch fails, returns only the reasons from the branch or
 /// branches that progressed furthest through the line.
 fn validate_recursive(
-    word_index_accumulator: usize,
     words: &[WordEntry],
     meters: &[&[SyllableStress]],
 ) -> Result<MeterMatchResult, MeterCheckError> {
@@ -259,7 +260,7 @@ fn validate_recursive(
             remaining: meter,
         })
         .collect::<Vec<_>>();
-    match validate_recursive_at(word_index_accumulator, 0, words, &cursors)? {
+    match validate_recursive_at(0, 0, words, &cursors)? {
         RecursiveMatchResult::Match => Ok(MeterMatchResult::Match),
         RecursiveMatchResult::NoMatch(failure) => Ok(MeterMatchResult::NoMatch {
             reasons: failure.reasons,
@@ -347,16 +348,12 @@ fn validate_recursive_at(
             }
             // Does the meter match the next word's stresses?
             let meter_for_word = &m[..next_word_stresses.len()];
-            if word_stresses_matches_meter(next_word_stresses, meter_for_word) {
-                meter_match_suffixes.push(MeterCursor {
+            match word_stress_mismatch_index(next_word_stresses, meter_for_word) {
+                None => meter_match_suffixes.push(MeterCursor {
                     full: cursor.full,
                     remaining: &m[next_word_stresses.len()..],
-                });
-            } else {
-                let matched_syllables =
-                    word_stress_mismatch_index(next_word_stresses, meter_for_word)
-                        .expect("a mismatching stress pattern must have a first mismatch");
-                retain_best_failure(
+                }),
+                Some(matched_syllables) => retain_best_failure(
                     &mut best_failure,
                     FailureReport::new(
                         FailureProgress {
@@ -368,7 +365,7 @@ fn validate_recursive_at(
                             word_index_failed_at: word_index_accumulator,
                         },
                     ),
-                );
+                ),
             }
         }
 
@@ -702,7 +699,7 @@ mod tests {
         let meters: Vec<&[SyllableStress]> = vec![&meter_a, &meter_b];
         let words: Vec<WordEntry> = vec![];
 
-        let reasons = assert_meter_no_match(validate_recursive(0, &words, &meters));
+        let reasons = assert_meter_no_match(validate_recursive(&words, &meters));
 
         assert!(reasons.contains(&MeterMismatch::MeterTooLong {
             remaining_syllables_in_meter: 2,
@@ -718,11 +715,12 @@ mod tests {
         let meter = [U];
         let meters: Vec<&[SyllableStress]> = vec![&meter];
 
-        let reasons = assert_meter_no_match(validate_recursive(0, &line.words, &meters));
+        let reasons = assert_meter_no_match(validate_recursive(&line.words, &meters));
 
+        // Only HELLO's first syllable fits the meter.
         assert!(reasons.contains(&MeterMismatch::MeterTooShort {
             word_index_failed_at: 0,
-            expected_stress_pattern_of_word: vec![U, U],
+            expected_stress_pattern_of_word: vec![U],
         }));
     }
 
@@ -732,7 +730,7 @@ mod tests {
         let meter = [S, S];
         let meters: Vec<&[SyllableStress]> = vec![&meter];
 
-        let reasons = assert_meter_no_match(validate_recursive(0, &line.words, &meters));
+        let reasons = assert_meter_no_match(validate_recursive(&line.words, &meters));
 
         assert!(reasons.contains(&MeterMismatch::WordsStressMismatch {
             expected_stress_pattern_of_word: vec![S, S],
@@ -750,11 +748,12 @@ mod tests {
             &meter_that_fails_first_word_stress,
         ];
 
-        let reasons = assert_meter_no_match(validate_recursive(0, &line.words, &meters));
+        let reasons = assert_meter_no_match(validate_recursive(&line.words, &meters));
 
+        // HELLO uses up the meter, leaving nothing for WORLD.
         assert!(reasons.contains(&MeterMismatch::MeterTooShort {
             word_index_failed_at: 1,
-            expected_stress_pattern_of_word: vec![U],
+            expected_stress_pattern_of_word: vec![],
         }));
         assert!(!reasons.contains(&MeterMismatch::WordsStressMismatch {
             expected_stress_pattern_of_word: vec![S, S],
