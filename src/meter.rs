@@ -378,7 +378,33 @@ impl MeterMatchResult {
     }
 }
 
-/// A word's distinct stress patterns, in dictionary order.
+/// One-syllable function words, which can go unstressed in a line even where
+/// the dictionary only stresses them (AS, BY, FROM, MY). A one-syllable word
+/// fits any meter position, so this only lets a neighbor be promoted, as in
+/// "as BEAU-ti-FUL as day".
+#[rustfmt::skip]
+const FUNCTION_WORDS: &[&str] = &[
+    // Articles and determiners
+    "a", "an", "the", "this", "that", "these", "those",
+    // Prepositions
+    "as", "at", "by", "for", "from", "in", "of", "on", "than", "through", "till", "to", "with",
+    // Conjunctions
+    "and", "but", "if", "nor", "or", "so", "though", "when", "where",
+    // Pronouns and possessives
+    "i", "me", "my", "we", "us", "our", "you", "your", "ye", "thou", "thee", "thy",
+    "he", "him", "his", "she", "her", "it", "its", "they", "them", "their",
+    // Relative pronouns
+    "who", "whom", "whose", "which",
+    // Auxiliaries
+    "am", "is", "are", "was", "were", "be", "been",
+    "has", "have", "had", "hast", "hath", "do", "does", "did", "doth",
+    "can", "could", "may", "might", "must", "shall", "should", "will", "would",
+];
+
+const UNSTRESSED_MONOSYLLABLE: &[Stress] = &[Stress::Unstressed];
+
+/// A word's distinct stress patterns, in dictionary order, then an unstressed
+/// one for a function word with a one-syllable pronunciation.
 fn distinct_stress_patterns(word: &WordEntry) -> Result<Vec<&[Stress]>, MeterCheckError> {
     let WordData::Known { pronunciations, .. } = &word.data else {
         return Err(MeterCheckError::UnknownWord(UnknownWordError {
@@ -392,6 +418,15 @@ fn distinct_stress_patterns(word: &WordEntry) -> Result<Vec<&[Stress]>, MeterChe
         if !patterns.contains(&pattern) {
             patterns.push(pattern);
         }
+    }
+    let is_function_word = FUNCTION_WORDS
+        .iter()
+        .any(|function_word| function_word.eq_ignore_ascii_case(&word.word));
+    if is_function_word
+        && patterns.iter().any(|pattern| pattern.len() == 1)
+        && !patterns.contains(&UNSTRESSED_MONOSYLLABLE)
+    {
+        patterns.push(UNSTRESSED_MONOSYLLABLE);
     }
     Ok(patterns)
 }
@@ -1452,6 +1487,25 @@ mod tests {
         assert_eq!(
             assert_meter_no_match(spec.validate_line(&Line::new("sweet adrienne", dict()))),
             [unstressed_on_beat(1, 0)]
+        );
+    }
+
+    #[test]
+    fn function_words_can_go_unstressed_beside_a_promotion() {
+        // CMUdict only stresses AS and MY.
+        assert_meter_matches_with_promotions(
+            "x/x/x/"
+                .parse::<MeterSpecification>()
+                .unwrap()
+                .validate_line(&Line::new("As beautiful as day", dict())),
+            &[promoted(1, 2)],
+        );
+        assert_meter_matches_with_promotions(
+            "x/x/"
+                .parse::<MeterSpecification>()
+                .unwrap()
+                .validate_line(&Line::new("my adrienne", dict())),
+            &[promoted(1, 0)],
         );
     }
 
