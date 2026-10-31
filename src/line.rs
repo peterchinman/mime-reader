@@ -76,75 +76,98 @@ impl From<WordPronunciations<'_>> for WordData {
 }
 
 impl WordEntry {
-    /// `word` must be a slice of `text`, the line it is read from.
-    fn new(text: &str, word: &str, data: WordData) -> Self {
-        let start = word.as_ptr().addr() - text.as_ptr().addr();
+    /// The word at `span` in `text`, the line it is read from.
+    fn new(text: &str, span: Range<usize>, data: WordData) -> Self {
         Self {
-            word: word.to_string(),
-            span: start..start + word.len(),
+            word: text[span.clone()].to_string(),
+            span,
             data,
         }
     }
 }
 
-/// Reads one whitespace-separated token of `text` into words, ignoring the
-/// punctuation around a word unless the dictionary spells the word with it.
-/// Tries the token as written (*Jr.*, *'tis*, *well-known*), then as the word
-/// with the apostrophes touching it and a period after them, for an
-/// abbreviation (*U.S.,* -> *U.S.*), then without that period (*'tis,* ->
-/// *'tis*), then as the bare word, since those apostrophes may be quotation
-/// marks (*'Hello,'* -> *Hello*). If none of those is known, a token joined by hyphens or dashes
-/// is read as its parts (*sun-kissed* -> *sun*, *kissed*). An unknown word
-/// keeps an apostrophe on one side (*xyzzin'*) but not on both (*'xyzzy'*).
-/// A token with no letters, digits or `&`, such as a dash, adds no words.
+/// Reads the whitespace-separated token at `token` in `text` into words,
+/// ignoring the punctuation around a word unless the dictionary spells the
+/// word with it. Tries the token as written (*Jr.*, *'tis*, *well-known*),
+/// then as the word with the apostrophes touching it and a period after them,
+/// for an abbreviation (*U.S.,* -> *U.S.*), then without that period (*'tis,*
+/// -> *'tis*), then as the bare word, since those apostrophes may be
+/// quotation marks (*'Hello,'* -> *Hello*). If none of those is known, a token
+/// joined by hyphens or dashes is read as its parts (*sun-kissed* -> *sun*,
+/// *kissed*). An unknown word keeps an apostrophe on one side (*xyzzin'*) but
+/// not on both (*'xyzzy'*). A token with no letters, digits or `&`, such as a
+/// dash, adds no words.
 fn read_token<D: PronouncingDictionary + ?Sized>(
     text: &str,
-    token: &str,
+    token: Range<usize>,
     dict: &D,
     words: &mut Vec<WordEntry>,
 ) {
     // `start..end` is the bare word: the token less everything around it
     // that isn't a letter, digit or `&`, apostrophes included.
     let is_punctuation = |character: char| !character.is_alphanumeric() && character != '&';
-    let start = token.len() - token.trim_start_matches(is_punctuation).len();
-    let end = token.trim_end_matches(is_punctuation).len();
+    let written = &text[token.clone()];
+    let start = token.end - written.trim_start_matches(is_punctuation).len();
+    let end = token.start + written.trim_end_matches(is_punctuation).len();
     if start >= end {
         return;
     }
+    let unquoted = start..end;
+
     // Apostrophes touching the bare word may belong to it ('tis, dancin'),
     // and so may a period after them (U.S., Jr.).
-    let apostrophes_before = start - token[..start].trim_end_matches(is_apostrophe).len();
-    let apostrophes_after =
-        token.len() - end - token[end..].trim_start_matches(is_apostrophe).len();
-    let period_after = usize::from(token[end + apostrophes_after..].starts_with('.'));
-    let unquoted = &token[start..end];
-    let unpunctuated = &token[start - apostrophes_before..end + apostrophes_after];
-    let abbreviation = &token[start - apostrophes_before..end + apostrophes_after + period_after];
+    let unpunctuated_start = token.start
+        + text[token.start..start]
+            .trim_end_matches(is_apostrophe)
+            .len();
+    let unpunctuated_end = token.end - text[end..token.end].trim_start_matches(is_apostrophe).len();
+    let unpunctuated = unpunctuated_start..unpunctuated_end;
+    let period = usize::from(text[unpunctuated_end..token.end].starts_with('.'));
+    let abbreviation = unpunctuated_start..unpunctuated_end + period;
 
     // Each spelling contains the next, so any repeats are adjacent.
-    let mut spellings = vec![token, abbreviation, unpunctuated, unquoted];
+    let mut spellings = vec![token, abbreviation, unpunctuated.clone(), unquoted.clone()];
     spellings.dedup();
 
-    let known = spellings
-        .into_iter()
-        .find_map(|spelling| Some((spelling, dict.pronunciations_for(spelling)?)));
+    let known = spellings.into_iter().find_map(|spelling| {
+        let word_pronunciations = dict.pronunciations_for(&text[spelling.clone()])?;
+        Some((spelling, word_pronunciations))
+    });
     if let Some((spelling, word_pronunciations)) = known {
         words.push(WordEntry::new(text, spelling, word_pronunciations.into()));
         return;
     }
 
-    let unknown = if apostrophes_before > 0 && apostrophes_after > 0 {
-        unquoted
-    } else {
-        unpunctuated
-    };
-    if unknown.contains(is_dash) {
-        for part in unknown.split(is_dash) {
+    let quoted = unpunctuated_start < start && unpunctuated_end > end;
+    let unknown = if quoted { unquoted } else { unpunctuated };
+    if text[unknown.clone()].contains(is_dash) {
+        for part in split_range(text, unknown, is_dash) {
             read_token(text, part, dict, words);
         }
     } else {
         words.push(WordEntry::new(text, unknown, WordData::Unknown));
     }
+}
+
+/// Splits `range` of `text` at each character matching `separator`, giving
+/// the ranges between them, empty ones included.
+fn split_range(
+    text: &str,
+    range: Range<usize>,
+    separator: fn(char) -> bool,
+) -> impl Iterator<Item = Range<usize>> + '_ {
+    let offset = range.start;
+    let separators = text[range.clone()]
+        .match_indices(separator)
+        .map(move |(index, matched)| offset + index..offset + index + matched.len());
+    let mut piece_start = range.start;
+    separators
+        .chain(std::iter::once(range.end..range.end))
+        .map(move |separator| {
+            let piece = piece_start..separator.start;
+            piece_start = separator.end;
+            piece
+        })
 }
 
 /// Straight and typographic apostrophes, which can belong to a word ('tis,
@@ -174,7 +197,7 @@ impl Line {
     /// word's span locates it in [`Self::text`].
     pub fn new<D: PronouncingDictionary + ?Sized>(s: &str, dict: &D) -> Self {
         let mut words = Vec::new();
-        for token in s.split_whitespace() {
+        for token in split_range(s, 0..s.len(), char::is_whitespace) {
             read_token(s, token, dict, &mut words);
         }
         Self {
@@ -428,6 +451,11 @@ mod tests {
         for word in &line.words {
             assert_eq!(&line.text[word.span.clone()], word.word);
         }
+
+        // A no-break space is two bytes and an ideographic space three.
+        let line = Line::new("cat\u{a0}\u{3000}dog", dict());
+        let spans: Vec<_> = line.words.iter().map(|word| word.span.clone()).collect();
+        assert_eq!(spans, [0..3, 8..11]);
     }
 
     #[test]
