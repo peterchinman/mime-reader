@@ -518,14 +518,25 @@ pub struct LineWordDto {
 impl LineWordDto {
     fn from_line(line: &Line) -> Vec<Self> {
         // Core spans are UTF-8 byte ranges; JS strings index UTF-16 units.
-        let utf16_offset = |byte: usize| line.text[..byte].encode_utf16().count();
+        // Spans ascend, so one pass over the text converts them all.
+        let mut byte = 0;
+        let mut utf16 = 0;
+        let mut utf16_offset = |offset: usize| {
+            utf16 += line.text[byte..offset].encode_utf16().count();
+            byte = offset;
+            utf16
+        };
         line.words
             .iter()
-            .map(|entry| LineWordDto {
-                word: entry.word.clone(),
-                start: utf16_offset(entry.span.start),
-                end: utf16_offset(entry.span.end),
-                known: matches!(entry.data, WordData::Known { .. }),
+            .map(|entry| {
+                let start = utf16_offset(entry.span.start);
+                let end = utf16_offset(entry.span.end);
+                LineWordDto {
+                    word: entry.word.clone(),
+                    start,
+                    end,
+                    known: matches!(entry.data, WordData::Known { .. }),
+                }
             })
             .collect()
     }
