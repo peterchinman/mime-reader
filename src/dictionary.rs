@@ -116,6 +116,23 @@ impl CmuDictionary {
                 .push(phonemes.into_boxed_slice());
         }
 
+        // CMUdict lists abbreviations with their period, some read as the
+        // word they stand for (MASS. as Massachusetts, IN. as inch). Where the
+        // spelling without the period is also a word, a period ending a
+        // sentence would turn that word into the abbreviation, so drop the
+        // abbreviation. Those that aren't also words (ST., JR., U.S.) stay.
+        let shadowing: Vec<String> = entries
+            .keys()
+            .filter(|word| {
+                word.strip_suffix('.')
+                    .is_some_and(|bare| entries.contains_key(bare))
+            })
+            .cloned()
+            .collect();
+        for word in shadowing {
+            entries.remove(&word);
+        }
+
         Ok(CmuDictionary { entries })
     }
 
@@ -181,6 +198,21 @@ mod tests {
                 Err(CmuDictionaryError::MalformedLine(line)) if line.starts_with("FOO")
             ));
         }
+    }
+
+    #[test]
+    fn abbreviations_that_shadow_a_word_are_dropped() {
+        let dict = CmuDictionary::from_bytes(
+            b"MASS  M AE1 S\n\
+              MASS.  M AE1 S\n\
+              MASS.(1)  M AE2 S AH0 CH UW1 S AH0 T S\n\
+              ST.  S T R IY1 T\n",
+        )
+        .unwrap();
+        assert!(dict.lookup("mass.").is_none());
+        assert_eq!(dict.lookup("mass").unwrap().len(), 1);
+        assert!(dict.lookup("st.").is_some());
+        assert_eq!(dict.iter().count(), 2);
     }
 
     #[test]

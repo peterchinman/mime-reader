@@ -90,9 +90,10 @@ impl WordEntry {
 /// Reads one whitespace-separated token of `text` into words, ignoring the
 /// punctuation around a word unless the dictionary spells the word with it.
 /// Tries the token as written (*Jr.*, *'tis*, *well-known*), then as the word
-/// with only the apostrophes touching it (*'tis,* -> *'tis*), then as the bare
-/// word, since those apostrophes may be quotation marks (*'Hello,'* ->
-/// *Hello*). If none of those is known, a token joined by hyphens or dashes
+/// with the apostrophes touching it and a period after them, for an
+/// abbreviation (*U.S.,* -> *U.S.*), then without that period (*'tis,* ->
+/// *'tis*), then as the bare word, since those apostrophes may be quotation
+/// marks (*'Hello,'* -> *Hello*). If none of those is known, a token joined by hyphens or dashes
 /// is read as its parts (*sun-kissed* -> *sun*, *kissed*). An unknown word
 /// keeps an apostrophe on one side (*xyzzin'*) but not on both (*'xyzzy'*).
 /// A token with no letters, digits or `&`, such as a dash, adds no words.
@@ -110,15 +111,18 @@ fn read_token<D: PronouncingDictionary + ?Sized>(
     if start >= end {
         return;
     }
-    // Apostrophes touching the bare word may belong to it ('tis, dancin').
+    // Apostrophes touching the bare word may belong to it ('tis, dancin'),
+    // and so may a period after them (U.S., Jr.).
     let apostrophes_before = start - token[..start].trim_end_matches(is_apostrophe).len();
     let apostrophes_after =
         token.len() - end - token[end..].trim_start_matches(is_apostrophe).len();
+    let period_after = usize::from(token[end + apostrophes_after..].starts_with('.'));
     let unquoted = &token[start..end];
     let unpunctuated = &token[start - apostrophes_before..end + apostrophes_after];
+    let abbreviation = &token[start - apostrophes_before..end + apostrophes_after + period_after];
 
     // Each spelling contains the next, so any repeats are adjacent.
-    let mut spellings = vec![token, unpunctuated, unquoted];
+    let mut spellings = vec![token, abbreviation, unpunctuated, unquoted];
     spellings.dedup();
 
     let known = spellings
@@ -438,6 +442,30 @@ mod tests {
         let line = Line::new("'hello' ‘world’ xyzzin',", dict());
         assert_eq!(words(&line), ["hello", "world", "xyzzin'"]);
         assert_eq!(line.unknown_words(), HashSet::from(["xyzzin'"]));
+    }
+
+    #[test]
+    fn a_period_ending_a_sentence_is_not_an_abbreviation() {
+        // CMUdict's MASS. and IN. include Massachusetts and inch.
+        assert_eq!(
+            Line::new("a darkened mass.", dict()).syllable_counts(),
+            Some(vec![4])
+        );
+        let line = Line::new("let me in.", dict());
+        let WordData::Known { pronunciations, .. } = &line.words[2].data else {
+            panic!("in should be known");
+        };
+        let phonemes = pronunciations
+            .iter()
+            .map(|pronunciation| &pronunciation.phonemes);
+        assert!(phonemes.eq(dict().lookup("in").unwrap()));
+    }
+
+    #[test]
+    fn abbreviations_keep_their_period_before_other_punctuation() {
+        let line = Line::new("U.S., Jr.; (St.)", dict());
+        assert_eq!(words(&line), ["U.S.", "Jr.", "St."]);
+        assert!(line.unknown_words().is_empty());
     }
 
     #[test]
