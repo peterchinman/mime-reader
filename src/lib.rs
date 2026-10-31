@@ -12,6 +12,7 @@ pub mod line;
 pub mod meter;
 pub mod phoneme;
 pub mod poem;
+pub mod pronunciation;
 pub mod rhyme_distance;
 pub mod rhyme_scheme;
 pub mod vowel_distance;
@@ -21,12 +22,12 @@ pub mod wasm;
 
 pub use analyzer::{
     Analyzer, Compare, ConsistentScores, ConsistentScoresOwned, PronunciationsTarget,
-    RhymeIntersectionMatch, WordTarget,
+    RhymeIntersectionMatch, RhymeIntersectionMatchOwned, WordTarget,
 };
 pub use consonant_distance::{
     AnalyticConsonantDistance, AnalyticConsonantDistanceConfig, ConsonantDistanceScorer,
 };
-pub use dictionary::{CmuDictionary, PronouncingDictionary};
+pub use dictionary::{CmuDictionary, PronouncingDictionary, Pronunciations};
 pub use error::{
     CmuDictionaryError, MeterCheckError, ParseArpabetError, ParseMeterError, ParseMeterSchemeError,
     ParseRhymeError, ParseSyllableCountError, PoemEditError, RhymeCheckError, UnknownWordError,
@@ -38,6 +39,10 @@ pub use meter::{
 };
 pub use phoneme::{Consonant, Phoneme, Stress, Vowel, VowelPhoneme};
 pub use poem::Poem;
+pub use pronunciation::{
+    ConfiguredDictionary, InflectionRule, PronunciationMode, PronunciationOrigin,
+    WordPronunciations,
+};
 pub use rhyme_distance::{
     AlignmentStep, OwnedAlignmentStep, RhymeDistanceConfig, RhymeDistanceOutput,
     RhymeDistanceScorer, RhymePairScore, RhymeScoreNormalization, TranspositionDirection,

@@ -271,7 +271,7 @@ fn rhyming_parts_of_last_word<'a>(
     let Some(word) = line.words.last() else {
         return Err(RhymeCheckError::EmptyLine);
     };
-    let WordData::Known(pronunciations) = &word.data else {
+    let WordData::Known { pronunciations, .. } = &word.data else {
         return Err(UnknownWordError {
             word: word.word.clone(),
         }
@@ -303,7 +303,7 @@ fn last_n_syllables_of_line(
         return Ok(HashSet::new());
     };
 
-    let WordData::Known(pronunciations) = &last_word.data else {
+    let WordData::Known { pronunciations, .. } = &last_word.data else {
         return Err(UnknownWordError {
             word: last_word.word.clone(),
         }
@@ -498,12 +498,13 @@ mod tests {
     fn known_word(word: &str, pronunciations: &[&[&str]]) -> WordEntry {
         WordEntry {
             word: word.to_string(),
-            data: WordData::Known(
-                pronunciations
+            data: WordData::Known {
+                pronunciations: pronunciations
                     .iter()
                     .map(|arpa| pronunciation(arpa))
                     .collect(),
-            ),
+                origin: crate::PronunciationOrigin::Dictionary { normalized: false },
+            },
         }
     }
 

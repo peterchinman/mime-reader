@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::{PronouncingDictionary, Stress, phoneme::Phoneme};
+use crate::{PronouncingDictionary, PronunciationOrigin, Stress, phoneme::Phoneme};
 
 pub struct Pronunciation {
     pub phonemes: Box<[Phoneme]>,
@@ -9,19 +9,30 @@ pub struct Pronunciation {
 
 pub enum WordData {
     Unknown,
-    Known(Vec<Pronunciation>),
+    Known {
+        pronunciations: Vec<Pronunciation>,
+        origin: PronunciationOrigin,
+    },
 }
 
 impl WordData {
     /// Returns the stress patterns of the word, if known.
     pub fn stress_patterns(&self) -> Option<HashSet<&[Stress]>> {
         match self {
-            WordData::Known(pronunciations) => Some(
+            WordData::Known { pronunciations, .. } => Some(
                 pronunciations
                     .iter()
                     .map(|p| p.stress_pattern.as_slice())
                     .collect(),
             ),
+            WordData::Unknown => None,
+        }
+    }
+
+    /// Where this word's pronunciations came from, or `None` when it is unknown.
+    pub fn origin(&self) -> Option<&PronunciationOrigin> {
+        match self {
+            WordData::Known { origin, .. } => Some(origin),
             WordData::Unknown => None,
         }
     }
@@ -34,11 +45,13 @@ pub struct WordEntry {
 
 impl WordEntry {
     fn new<D: PronouncingDictionary + ?Sized>(word: &str, dict: &D) -> Self {
-        let data = match dict.lookup(word) {
+        let data = match dict.pronunciations_for(word) {
             None => WordData::Unknown,
-            Some(raw) => {
-                let pronunciations = raw
-                    .iter()
+            Some(word_pronunciations) => {
+                let pronunciations = word_pronunciations
+                    .pronunciations
+                    .into_owned()
+                    .into_iter()
                     .map(|phonemes| {
                         let stress_pattern = phonemes
                             .iter()
@@ -48,14 +61,15 @@ impl WordEntry {
                             })
                             .collect();
                         Pronunciation {
-                            // A line owns its words' data; the dictionary
-                            // only lends pronunciations out.
-                            phonemes: phonemes.clone(),
+                            phonemes,
                             stress_pattern,
                         }
                     })
                     .collect();
-                WordData::Known(pronunciations)
+                WordData::Known {
+                    pronunciations,
+                    origin: word_pronunciations.origin,
+                }
             }
         };
         Self {
@@ -81,7 +95,7 @@ impl Line {
         self.words
             .iter()
             .filter_map(|word| match &word.data {
-                WordData::Known(_) => None,
+                WordData::Known { .. } => None,
                 WordData::Unknown => Some(word.word.as_str()),
             })
             .collect()
@@ -97,7 +111,7 @@ impl Line {
         }
         let mut totals: Vec<usize> = vec![0];
         for entry in &self.words {
-            let WordData::Known(pronunciations) = &entry.data else {
+            let WordData::Known { pronunciations, .. } = &entry.data else {
                 return None;
             };
             let mut next: Vec<usize> = Vec::new();
@@ -173,6 +187,10 @@ mod tests {
         assert_eq!(line.words.len(), 2);
         assert!(matches!(line.words[0].data, WordData::Known { .. }));
         assert!(matches!(line.words[1].data, WordData::Known { .. }));
+        assert_eq!(
+            line.words[0].data.origin(),
+            Some(&PronunciationOrigin::Dictionary { normalized: false })
+        );
     }
 
     #[test]
@@ -191,10 +209,33 @@ mod tests {
     }
 
     #[test]
+    fn derived_words_require_opt_in_and_keep_their_base_syllable_count() {
+        let strict = Line::new("kettle’s", dict());
+        assert_eq!(strict.unknown_words(), HashSet::from(["kettle’s"]));
+        assert_eq!(strict.syllable_counts(), None);
+
+        let permissive = dict().with_pronunciation_mode(crate::PronunciationMode::AllowDerived);
+        let line = Line::new("kettle’s", &permissive);
+
+        assert!(matches!(line.words[0].data, WordData::Known { .. }));
+        assert_eq!(
+            line.words[0].data.origin(),
+            Some(&PronunciationOrigin::Derived {
+                dictionary_base: "kettle".to_string(),
+                rules: vec![crate::InflectionRule::ApostropheS],
+            })
+        );
+        assert_eq!(line.syllable_counts(), Some(vec![2]));
+    }
+
+    #[test]
     fn word_with_multiple_pronunciations() {
         // "hello" has two entries in CMUdict: HELLO and HELLO(1)
         let line = Line::new("hello", dict());
-        let WordData::Known(ref pronunciations) = line.words[0].data else {
+        let WordData::Known {
+            ref pronunciations, ..
+        } = line.words[0].data
+        else {
             panic!()
         };
         assert_eq!(pronunciations.len(), 2);
