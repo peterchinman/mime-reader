@@ -4,7 +4,7 @@ use crate::{
     Stress,
     error::{
         MeterCheckError, ParseMeterError, ParseMeterSchemeError, ParseSyllableCountError,
-        UnknownWordError,
+        ParseSyllableCountSchemeError, UnknownWordError,
     },
     line::{Line, WordData, WordEntry},
 };
@@ -620,6 +620,20 @@ impl std::str::FromStr for MeterScheme {
 }
 
 impl MeterScheme {
+    /// Parses a repeating multiline scheme of exact syllable counts or inclusive ranges.
+    pub fn from_syllable_counts(s: &str) -> Result<Self, ParseSyllableCountSchemeError> {
+        let scheme = s
+            .lines()
+            .enumerate()
+            .map(|(line, text)| {
+                text.parse::<SyllableCountSpecification>()
+                    .map(|specification| specification.0)
+                    .map_err(|source| ParseSyllableCountSchemeError { line, source })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self { scheme })
+    }
+
     /// Returns the meter specification for the given line index, wrapping around the scheme if necessary.
     fn line_specification(&self, line_index: usize) -> &MeterSpecification {
         &self.scheme[line_index % self.scheme.len()]
@@ -1195,6 +1209,29 @@ mod tests {
         assert_meter_matches(ms.check_line(&line, 0));
         let _ = assert_meter_no_match(ms.check_line(&line, 1));
         assert_meter_matches(ms.check_line(&line, 2));
+    }
+
+    #[test]
+    fn syllable_count_scheme_supports_exact_counts_ranges_and_wrapping() {
+        let scheme = MeterScheme::from_syllable_counts("2\n2-3\n1").unwrap();
+
+        assert_meter_matches(scheme.check_line(&Line::new("cat dog", dict()), 0));
+        assert_meter_matches(scheme.check_line(&Line::new("cat dog bird", dict()), 1));
+        assert_meter_matches(scheme.check_line(&Line::new("cat", dict()), 2));
+        assert_meter_matches(scheme.check_line(&Line::new("cat dog", dict()), 3));
+        let _ = assert_meter_no_match(scheme.check_line(&Line::new("cat", dict()), 0));
+    }
+
+    #[test]
+    fn syllable_count_scheme_reports_the_invalid_line() {
+        let error = MeterScheme::from_syllable_counts("5\n9-7\n5").unwrap_err();
+
+        assert_eq!(error.line, 1);
+        assert!(matches!(
+            error.source,
+            ParseSyllableCountError::InvalidRange
+        ));
+        assert_eq!(error.to_string(), "line 2: min must be <= max");
     }
 
     #[test]

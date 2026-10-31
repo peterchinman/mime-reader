@@ -30,7 +30,8 @@ pub use consonant_distance::{
 pub use dictionary::{CmuDictionary, PronouncingDictionary, Pronunciations};
 pub use error::{
     CmuDictionaryError, MeterCheckError, ParseArpabetError, ParseMeterError, ParseMeterSchemeError,
-    ParseRhymeError, ParseSyllableCountError, PoemEditError, RhymeCheckError, UnknownWordError,
+    ParseRhymeError, ParseSyllableCountError, ParseSyllableCountSchemeError, PoemEditError,
+    RhymeCheckError, UnknownWordError,
 };
 pub use line::Line;
 pub use meter::{

@@ -50,6 +50,13 @@ pub enum ParseSyllableCountError {
 }
 
 #[derive(Debug, Error)]
+#[error("line {}: {source}", line + 1)]
+pub struct ParseSyllableCountSchemeError {
+    pub line: usize,
+    pub source: ParseSyllableCountError,
+}
+
+#[derive(Debug, Error)]
 pub enum ParseRhymeError {
     #[error("invalid rhyme character '{c}' at column {}", col + 1)]
     InvalidChar { c: char, col: usize },
