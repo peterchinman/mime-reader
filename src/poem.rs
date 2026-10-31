@@ -87,10 +87,7 @@ impl Poem {
         dict: &D,
     ) -> Result<(), PoemEditError> {
         let Some(line) = self.lines.get_mut(index) else {
-            return Err(PoemEditError::LineIndexOutOfBounds {
-                index,
-                line_count: self.lines.len(),
-            });
+            return Err(self.out_of_bounds(index));
         };
 
         line.line = Line::new(text, dict);
@@ -105,10 +102,7 @@ impl Poem {
         dict: &D,
     ) -> Result<(), PoemEditError> {
         if index > self.lines.len() {
-            return Err(PoemEditError::LineIndexOutOfBounds {
-                index,
-                line_count: self.lines.len(),
-            });
+            return Err(self.out_of_bounds(index));
         }
 
         let inserted_line = Line::new(text, dict);
@@ -126,10 +120,7 @@ impl Poem {
     /// Deletes the line at the given index.
     pub fn delete_line(&mut self, index: usize) -> Result<(), PoemEditError> {
         if index >= self.lines.len() {
-            return Err(PoemEditError::LineIndexOutOfBounds {
-                index,
-                line_count: self.lines.len(),
-            });
+            return Err(self.out_of_bounds(index));
         }
 
         self.lines.remove(index);
@@ -143,10 +134,14 @@ impl Poem {
         self.lines
             .get(index)
             .map(|poem_line| &poem_line.line)
-            .ok_or(PoemEditError::LineIndexOutOfBounds {
-                index,
-                line_count: self.lines.len(),
-            })
+            .ok_or_else(|| self.out_of_bounds(index))
+    }
+
+    fn out_of_bounds(&self, index: usize) -> PoemEditError {
+        PoemEditError::LineIndexOutOfBounds {
+            index,
+            line_count: self.lines.len(),
+        }
     }
 
     pub fn meter_analysis(&mut self, index: usize) -> Result<MeterAnalysis<'_>, PoemEditError> {
@@ -156,10 +151,7 @@ impl Poem {
 
     fn ensure_meter_analysis(&mut self, index: usize) -> Result<(), PoemEditError> {
         if index >= self.lines.len() {
-            return Err(PoemEditError::LineIndexOutOfBounds {
-                index,
-                line_count: self.lines.len(),
-            });
+            return Err(self.out_of_bounds(index));
         }
 
         let Some(meter_scheme) = &self.meter_scheme else {
@@ -233,10 +225,7 @@ impl Poem {
         C: ConsonantDistanceScorer,
     {
         if index >= self.lines.len() {
-            return Err(PoemEditError::LineIndexOutOfBounds {
-                index,
-                line_count: self.lines.len(),
-            });
+            return Err(self.out_of_bounds(index));
         }
 
         let Some(rhyme_scheme) = &self.rhyme_scheme else {
