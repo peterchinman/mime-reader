@@ -562,6 +562,11 @@ impl<'a> Alignment<'a> {
     }
 }
 
+/// The largest syllable count a syllable-count specification accepts. Each count
+/// in a range becomes its own meter path, so an unbounded count could stall
+/// parsing and analysis; no line of verse comes near this.
+pub const MAX_SYLLABLE_COUNT: usize = 100;
+
 #[derive(Debug)]
 pub struct SyllableCountSpecification(MeterSpecification);
 
@@ -569,26 +574,25 @@ impl std::str::FromStr for SyllableCountSpecification {
     type Err = ParseSyllableCountError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Some((min_str, max_str)) = s.split_once('-') {
-            let min = min_str
-                .trim()
+        let count = |text: &str| {
+            text.trim()
                 .parse::<usize>()
-                .map_err(|_| ParseSyllableCountError::InvalidNumber)?;
-            let max = max_str
-                .trim()
-                .parse::<usize>()
-                .map_err(|_| ParseSyllableCountError::InvalidNumber)?;
-            if min > max {
-                return Err(ParseSyllableCountError::InvalidRange);
+                .map_err(|_| ParseSyllableCountError::InvalidNumber)
+        };
+        let (min, max) = match s.split_once('-') {
+            Some((min, max)) => (count(min)?, count(max)?),
+            None => {
+                let n = count(s)?;
+                (n, n)
             }
-            Ok(Self(MeterSpecification::from_syllable_range(min, max)))
-        } else {
-            let n = s
-                .trim()
-                .parse::<usize>()
-                .map_err(|_| ParseSyllableCountError::InvalidNumber)?;
-            Ok(Self(MeterSpecification::from_syllable_range(n, n)))
+        };
+        if min > max {
+            return Err(ParseSyllableCountError::InvalidRange);
         }
+        if max > MAX_SYLLABLE_COUNT {
+            return Err(ParseSyllableCountError::TooLarge);
+        }
+        Ok(Self(MeterSpecification::from_syllable_range(min, max)))
     }
 }
 
@@ -612,15 +616,19 @@ impl std::str::FromStr for MeterScheme {
             .enumerate()
             .map(|(line, text)| {
                 text.parse::<MeterSpecification>()
-                    .map_err(|source| ParseMeterSchemeError { line, source })
+                    .map_err(|source| ParseMeterSchemeError::Line { line, source })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        if scheme.is_empty() {
+            return Err(ParseMeterSchemeError::Empty);
+        }
         Ok(MeterScheme { scheme })
     }
 }
 
 impl MeterScheme {
-    /// Parses a repeating multiline scheme of exact syllable counts or inclusive ranges.
+    /// Parses a repeating multiline scheme of exact syllable counts or inclusive
+    /// ranges, each at most [`MAX_SYLLABLE_COUNT`].
     pub fn from_syllable_counts(s: &str) -> Result<Self, ParseSyllableCountSchemeError> {
         let scheme = s
             .lines()
@@ -628,9 +636,12 @@ impl MeterScheme {
             .map(|(line, text)| {
                 text.parse::<SyllableCountSpecification>()
                     .map(|specification| specification.0)
-                    .map_err(|source| ParseSyllableCountSchemeError { line, source })
+                    .map_err(|source| ParseSyllableCountSchemeError::Line { line, source })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        if scheme.is_empty() {
+            return Err(ParseSyllableCountSchemeError::Empty);
+        }
         Ok(Self { scheme })
     }
 
@@ -1157,6 +1168,24 @@ mod tests {
         assert!(matches!(err, ParseSyllableCountError::InvalidRange));
     }
 
+    #[test]
+    fn syllable_counts_are_capped() {
+        for ok in ["100", "0-100"] {
+            assert!(ok.parse::<SyllableCountSpecification>().is_ok(), "{ok}");
+        }
+        for too_large in ["101", "8-101", "100000000"] {
+            let err = too_large.parse::<SyllableCountSpecification>().unwrap_err();
+            assert!(
+                matches!(err, ParseSyllableCountError::TooLarge),
+                "{too_large}"
+            );
+        }
+        assert_eq!(
+            ParseSyllableCountError::TooLarge.to_string(),
+            "syllable count must be at most 100"
+        );
+    }
+
     // --- MeterScheme ---
 
     #[test]
@@ -1226,21 +1255,36 @@ mod tests {
     fn syllable_count_scheme_reports_the_invalid_line() {
         let error = MeterScheme::from_syllable_counts("5\n9-7\n5").unwrap_err();
 
-        assert_eq!(error.line, 1);
         assert!(matches!(
-            error.source,
-            ParseSyllableCountError::InvalidRange
+            error,
+            ParseSyllableCountSchemeError::Line {
+                line: 1,
+                source: ParseSyllableCountError::InvalidRange,
+            }
         ));
         assert_eq!(error.to_string(), "line 2: min must be <= max");
     }
 
     #[test]
+    fn meter_schemes_need_at_least_one_line() {
+        let stress = "".parse::<MeterScheme>().unwrap_err();
+        assert!(matches!(stress, ParseMeterSchemeError::Empty));
+        assert_eq!(stress.to_string(), "meter scheme has no lines");
+
+        let counts = MeterScheme::from_syllable_counts("").unwrap_err();
+        assert!(matches!(counts, ParseSyllableCountSchemeError::Empty));
+        assert_eq!(counts.to_string(), "syllable count scheme has no lines");
+    }
+
+    #[test]
     fn meter_scheme_propagates_line_parse_error() {
         let err = "x/x/\nx/j/".parse::<MeterScheme>().unwrap_err();
-        assert_eq!(err.line, 1);
         assert!(matches!(
-            err.source,
-            ParseMeterError::InvalidChar { c: 'j', col: 2 }
+            err,
+            ParseMeterSchemeError::Line {
+                line: 1,
+                source: ParseMeterError::InvalidChar { c: 'j', col: 2 },
+            }
         ));
     }
 }

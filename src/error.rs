@@ -35,10 +35,14 @@ pub enum ParseMeterError {
 }
 
 #[derive(Debug, Error)]
-#[error("line {}: {source}", line + 1)]
-pub struct ParseMeterSchemeError {
-    pub line: usize,
-    pub source: ParseMeterError,
+pub enum ParseMeterSchemeError {
+    #[error("meter scheme has no lines")]
+    Empty,
+    #[error("line {}: {source}", line + 1)]
+    Line {
+        line: usize,
+        source: ParseMeterError,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -47,13 +51,19 @@ pub enum ParseSyllableCountError {
     InvalidNumber,
     #[error("min must be <= max")]
     InvalidRange,
+    #[error("syllable count must be at most {}", crate::meter::MAX_SYLLABLE_COUNT)]
+    TooLarge,
 }
 
 #[derive(Debug, Error)]
-#[error("line {}: {source}", line + 1)]
-pub struct ParseSyllableCountSchemeError {
-    pub line: usize,
-    pub source: ParseSyllableCountError,
+pub enum ParseSyllableCountSchemeError {
+    #[error("syllable count scheme has no lines")]
+    Empty,
+    #[error("line {}: {source}", line + 1)]
+    Line {
+        line: usize,
+        source: ParseSyllableCountError,
+    },
 }
 
 #[derive(Debug, Error)]

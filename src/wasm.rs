@@ -79,7 +79,7 @@ impl WasmAnalyzer {
         let meter = match meter_scheme {
             Some(s) => Some(match meter_mode.unwrap_or(MeterModeDto::StressPattern) {
                 MeterModeDto::StressPattern => s.parse::<MeterScheme>()?,
-                MeterModeDto::SyllableLengths => MeterScheme::from_syllable_counts(&s)?,
+                MeterModeDto::SyllableCounts => MeterScheme::from_syllable_counts(&s)?,
             }),
             None => None,
         };
@@ -588,7 +588,7 @@ impl From<MeterAnalysis<'_>> for MeterDto {
 #[tsify(from_wasm_abi)]
 pub struct PoemOptionsDto {
     /// A meter scheme: stress patterns such as `"x/x/x/x/x/"`, or with
-    /// `meter_mode: "syllable_lengths"`, line lengths such as `"8\n7-9\n5"`.
+    /// `meter_mode: "syllable_counts"`, syllable counts such as `"8\n7-9\n5"`.
     #[tsify(optional)]
     meter_scheme: Option<String>,
     /// A rhyme scheme in the core parser's format, e.g. `"ABAB"`.
@@ -609,8 +609,10 @@ pub struct PoemOptionsDto {
 #[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(rename_all = "snake_case")]
 pub enum MeterModeDto {
+    /// Stress patterns such as `"x/x/x/x/x/"`.
     StressPattern,
-    SyllableLengths,
+    /// Syllable counts or ranges such as `"8\n7-9\n5"`, each at most 100.
+    SyllableCounts,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Tsify)]
@@ -1405,13 +1407,13 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
-    fn open_poem_accepts_a_syllable_length_scheme() {
+    fn open_poem_accepts_a_syllable_count_scheme() {
         let mut poem = analyzer()
             .open_poem(
                 vec!["cat dog".into(), "cat dog bird".into(), "cat".into()],
                 Some(PoemOptionsDto {
                     meter_scheme: Some("2\n2-3\n1".into()),
-                    meter_mode: Some(MeterModeDto::SyllableLengths),
+                    meter_mode: Some(MeterModeDto::SyllableCounts),
                     ..Default::default()
                 }),
             )
@@ -1426,17 +1428,32 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
-    fn open_poem_rejects_an_invalid_syllable_length_scheme() {
+    fn open_poem_rejects_an_invalid_syllable_count_scheme() {
         let result = analyzer().open_poem(
             vec!["cat".into()],
             Some(PoemOptionsDto {
                 meter_scheme: Some("5\n9-7".into()),
-                meter_mode: Some(MeterModeDto::SyllableLengths),
+                meter_mode: Some(MeterModeDto::SyllableCounts),
                 ..Default::default()
             }),
         );
 
         assert!(result.is_err());
+    }
+
+    #[wasm_bindgen_test]
+    fn open_poem_rejects_an_empty_meter_scheme() {
+        for meter_mode in [MeterModeDto::StressPattern, MeterModeDto::SyllableCounts] {
+            let result = analyzer().open_poem(
+                vec!["cat".into()],
+                Some(PoemOptionsDto {
+                    meter_scheme: Some(String::new()),
+                    meter_mode: Some(meter_mode),
+                    ..Default::default()
+                }),
+            );
+            assert!(result.is_err(), "{meter_mode:?}");
+        }
     }
 
     #[wasm_bindgen_test]
