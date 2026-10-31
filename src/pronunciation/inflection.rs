@@ -15,6 +15,9 @@ use crate::{
 pub enum InflectionRule {
     /// `'s` or `’s`: possessives and contractions alike.
     ApostropheS,
+    /// `s'` or `s’`: plural possessives (*kettles'*), where the apostrophe
+    /// follows a final s and adds no sound.
+    SApostrophe,
     /// `-s` or `-es`: noun plurals and third-person singular verbs.
     S,
     /// `-ves` over a base in f or fe: *shelf -> shelves*, *knife -> knives*.
@@ -39,6 +42,7 @@ pub enum InflectionRule {
 #[derive(Clone, Copy)]
 enum InflectionalSuffix {
     ApostropheS,
+    SApostrophe,
     S,
     Ves,
     Ly,
@@ -73,6 +77,8 @@ impl PronunciationDerivation {
     pub(crate) fn apply(&self, base_pronunciations: &[Box<[Phoneme]>]) -> Vec<Box<[Phoneme]>> {
         base_pronunciations
             .iter()
+            // An empty pronunciation has no final sound to inflect.
+            .filter(|pronunciation| !pronunciation.is_empty())
             .flat_map(|pronunciation| self.suffix.apply(pronunciation))
             .collect()
     }
@@ -85,8 +91,9 @@ impl PronunciationDerivation {
 impl InflectionalSuffix {
     /// Every suffix, in precedence order: `derive_pronunciations` takes the
     /// first one whose base is in the dictionary.
-    const PRECEDENCE: [Self; 10] = [
+    const PRECEDENCE: [Self; 11] = [
         Self::ApostropheS,
+        Self::SApostrophe,
         Self::Er,
         Self::Est,
         Self::S,
@@ -103,6 +110,7 @@ impl InflectionalSuffix {
     fn base_candidates(self, word: &str) -> Option<Vec<String>> {
         match self {
             Self::ApostropheS => apostrophe_s_bases(word),
+            Self::SApostrophe => s_apostrophe_bases(word),
             Self::S => s_bases(word),
             Self::Ves => ves_bases(word),
             Self::Ly => ly_bases(word),
@@ -118,6 +126,7 @@ impl InflectionalSuffix {
     fn rule(self) -> InflectionRule {
         match self {
             Self::ApostropheS => InflectionRule::ApostropheS,
+            Self::SApostrophe => InflectionRule::SApostrophe,
             Self::S => InflectionRule::S,
             Self::Ves => InflectionRule::Ves,
             Self::Ly | Self::IlyFromY | Self::LyFromLe => InflectionRule::Ly,
@@ -131,6 +140,7 @@ impl InflectionalSuffix {
     fn apply(self, base: &[Phoneme]) -> Vec<Box<[Phoneme]>> {
         match self {
             Self::ApostropheS | Self::S => vec![add_s_suffix(base)],
+            Self::SApostrophe => vec![base.into()],
             Self::Ves => add_ves_suffix(base).into_iter().collect(),
             Self::Ly => vec![add_ly_suffix(base)],
             Self::IlyFromY => vec![add_ily_suffix(base)],
@@ -189,6 +199,11 @@ fn apostrophe_s_bases(word: &str) -> Option<Vec<String>> {
     Some(vec![base.to_string()])
 }
 
+fn s_apostrophe_bases(word: &str) -> Option<Vec<String>> {
+    let base = word.strip_suffix(['\'', '’'])?;
+    base.ends_with(['s', 'S']).then(|| vec![base.to_string()])
+}
+
 fn strip_suffix_ignore_ascii_case<'a>(word: &'a str, suffix: &str) -> Option<&'a str> {
     let base_len = word.len().checked_sub(suffix.len())?;
     word.get(base_len..)?
@@ -228,26 +243,27 @@ fn ves_bases(word: &str) -> Option<Vec<String>> {
     // shelf -> shelves and knife -> knives. The dictionary decides whether
     // the recovered base ends in f or fe; pronunciation application verifies
     // that the selected base pronunciation actually ends in F.
-    push_candidate(&mut base_candidates, with_spelling_suffix(stem, "f", "F"));
-    push_candidate(&mut base_candidates, with_spelling_suffix(stem, "fe", "FE"));
+    push_candidate(&mut base_candidates, with_spelling_suffix(stem, "f"));
+    push_candidate(&mut base_candidates, with_spelling_suffix(stem, "fe"));
 
     Some(base_candidates)
 }
 
-fn with_spelling_suffix(stem: &str, lowercase: &str, uppercase: &str) -> String {
-    let mut restored = String::with_capacity(stem.len() + lowercase.len());
+/// Appends a lowercase written `suffix` to `stem`, uppercased when the stem
+/// ends in an uppercase letter. `CmuDictionary` lookup ignores case; this
+/// keeps the reported dictionary base in the word's own case (KNIVES -> KNIFE).
+fn with_spelling_suffix(stem: &str, suffix: &str) -> String {
+    let uppercase = stem
+        .chars()
+        .next_back()
+        .is_some_and(|character| character.is_ascii_uppercase());
+    let mut restored = String::with_capacity(stem.len() + suffix.len());
     restored.push_str(stem);
-    restored.push_str(
-        if stem
-            .chars()
-            .next_back()
-            .is_some_and(|character| character.is_ascii_uppercase())
-        {
-            uppercase
-        } else {
-            lowercase
-        },
-    );
+    if uppercase {
+        restored.push_str(&suffix.to_ascii_uppercase());
+    } else {
+        restored.push_str(suffix);
+    }
     restored
 }
 
@@ -274,7 +290,7 @@ fn ly_bases(word: &str) -> Option<Vec<String>> {
         push_candidate(&mut base_candidates, ic_base.to_string());
     }
     push_candidate(&mut base_candidates, stem.to_string());
-    push_candidate(&mut base_candidates, restore_final_e(stem));
+    push_candidate(&mut base_candidates, with_spelling_suffix(stem, "e"));
     if let Some(doubled_l_base) = double_final_l(stem) {
         push_candidate(&mut base_candidates, doubled_l_base);
     }
@@ -285,7 +301,7 @@ fn ly_bases(word: &str) -> Option<Vec<String>> {
 /// simple -> simply and terrible -> terribly remove the written e and the weak
 /// vowel before the base's final L.
 fn ly_from_le_bases(word: &str) -> Option<Vec<String>> {
-    Some(vec![restore_final_le(ly_stem(word)?)])
+    Some(vec![with_spelling_suffix(ly_stem(word)?, "le")])
 }
 
 fn ing_bases(word: &str) -> Option<Vec<String>> {
@@ -302,7 +318,7 @@ fn ing_bases(word: &str) -> Option<Vec<String>> {
     if let Some(c_base) = remove_final_k_after_c(stem) {
         push_candidate(&mut base_candidates, c_base);
     }
-    push_candidate(&mut base_candidates, restore_final_e(stem));
+    push_candidate(&mut base_candidates, with_spelling_suffix(stem, "e"));
 
     Some(base_candidates)
 }
@@ -335,7 +351,8 @@ fn ed_bases(word: &str) -> Option<Vec<String>> {
 /// Shared by -er and -est. `silent_e_suffix` is what remains of the written
 /// suffix after a base's final e (sore -> sorer, sorest).
 fn er_est_bases(word: &str, written_suffix: &str, silent_e_suffix: &str) -> Option<Vec<String>> {
-    let stem = strip_suffix_ignore_ascii_case(word, written_suffix)?;
+    let stem =
+        strip_suffix_ignore_ascii_case(word, written_suffix).filter(|stem| !stem.is_empty())?;
     let silent_e_base = strip_suffix_ignore_ascii_case(word, silent_e_suffix)?;
     let mut base_candidates = Vec::with_capacity(4);
 
@@ -348,19 +365,19 @@ fn er_est_bases(word: &str, written_suffix: &str, silent_e_suffix: &str) -> Opti
     push_candidate(&mut base_candidates, stem.to_string());
     push_candidate(&mut base_candidates, silent_e_base.to_string());
 
-    (!base_candidates.is_empty()).then_some(base_candidates)
+    Some(base_candidates)
 }
 
+// The restored y or ie takes the case of the letter it replaces, which keeps
+// a capitalized word's single-letter base intact (Dying -> Die).
 fn restore_final_y(stem: &str) -> Option<String> {
-    let base = stem.strip_suffix('i').or_else(|| stem.strip_suffix('I'))?;
-    let mut restored = String::with_capacity(stem.len());
-    restored.push_str(base);
-    restored.push(if stem.ends_with('I') { 'Y' } else { 'y' });
-    Some(restored)
+    let base = stem.strip_suffix(['i', 'I'])?;
+    let y = if stem.ends_with('I') { "Y" } else { "y" };
+    Some(format!("{base}{y}"))
 }
 
 fn restore_final_y_after_consonant(stem: &str) -> Option<String> {
-    let base = stem.strip_suffix('i').or_else(|| stem.strip_suffix('I'))?;
+    let base = stem.strip_suffix(['i', 'I'])?;
     let preceding = base.chars().next_back()?;
     let preceded_by_consonant = preceding.is_ascii_alphabetic()
         && !matches!(preceding.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u');
@@ -371,45 +388,9 @@ fn restore_final_y_after_consonant(stem: &str) -> Option<String> {
 }
 
 fn restore_final_ie(stem: &str) -> Option<String> {
-    let base = stem.strip_suffix('y').or_else(|| stem.strip_suffix('Y'))?;
-    let mut restored = String::with_capacity(stem.len() + 1);
-    restored.push_str(base);
-    restored.push_str(if stem.ends_with('Y') { "IE" } else { "ie" });
-    Some(restored)
-}
-
-fn restore_final_e(stem: &str) -> String {
-    let mut restored = String::with_capacity(stem.len() + 1);
-    restored.push_str(stem);
-    restored.push(
-        if stem
-            .chars()
-            .next_back()
-            .is_some_and(|character| character.is_ascii_uppercase())
-        {
-            'E'
-        } else {
-            'e'
-        },
-    );
-    restored
-}
-
-fn restore_final_le(stem: &str) -> String {
-    let mut restored = String::with_capacity(stem.len() + 2);
-    restored.push_str(stem);
-    restored.push_str(
-        if stem
-            .chars()
-            .next_back()
-            .is_some_and(|character| character.is_ascii_uppercase())
-        {
-            "LE"
-        } else {
-            "le"
-        },
-    );
-    restored
+    let base = stem.strip_suffix(['y', 'Y'])?;
+    let ie = if stem.ends_with('Y') { "IE" } else { "ie" };
+    Some(format!("{base}{ie}"))
 }
 
 fn double_final_l(stem: &str) -> Option<String> {
@@ -424,7 +405,7 @@ fn double_final_l(stem: &str) -> Option<String> {
 }
 
 fn remove_final_k_after_c(stem: &str) -> Option<String> {
-    let base = stem.strip_suffix('k').or_else(|| stem.strip_suffix('K'))?;
+    let base = stem.strip_suffix(['k', 'K'])?;
     base.chars()
         .next_back()?
         .eq_ignore_ascii_case(&'c')
@@ -450,21 +431,16 @@ fn push_candidate(candidates: &mut Vec<String>, candidate: String) {
 }
 
 fn add_s_suffix(base: &[Phoneme]) -> Box<[Phoneme]> {
-    let Some(final_phoneme) = base.last() else {
-        return Box::default();
-    };
-
-    let suffix = match final_phoneme {
-        Phoneme::Consonant(consonant) if consonant.sibilant => vec![
+    let suffix = match base.last() {
+        Some(Phoneme::Consonant(consonant)) if consonant.sibilant => vec![
             vowel_phoneme(VowelPhoneme::IH),
             consonant_phoneme(ConsonantPhoneme::Z),
         ],
-        Phoneme::Consonant(consonant) if !consonant.voiced => {
+        Some(Phoneme::Consonant(consonant)) if !consonant.voiced => {
             vec![consonant_phoneme(ConsonantPhoneme::S)]
         }
-        Phoneme::Consonant(_) | Phoneme::Vowel(_) => {
-            vec![consonant_phoneme(ConsonantPhoneme::Z)]
-        }
+        // Voiced consonants and vowels.
+        _ => vec![consonant_phoneme(ConsonantPhoneme::Z)],
     };
 
     let mut inflected = Vec::with_capacity(base.len() + suffix.len());
@@ -547,15 +523,11 @@ fn add_le_to_ly_suffix(base: &[Phoneme]) -> Box<[Phoneme]> {
 }
 
 fn add_ed_suffix(base: &[Phoneme]) -> Vec<Box<[Phoneme]>> {
-    let Some(final_phoneme) = base.last() else {
-        return vec![Box::default()];
-    };
-
-    match final_phoneme {
+    match base.last() {
         // CMUdict represents the weak vowel in syllabic -ed with both IH0 and
         // AH0. Both have the same meter, while rhyme analysis may distinguish
         // them.
-        Phoneme::Consonant(consonant)
+        Some(Phoneme::Consonant(consonant))
             if matches!(consonant.phoneme, ConsonantPhoneme::T | ConsonantPhoneme::D) =>
         {
             vec![
@@ -575,13 +547,14 @@ fn add_ed_suffix(base: &[Phoneme]) -> Vec<Box<[Phoneme]>> {
                 ),
             ]
         }
-        Phoneme::Consonant(consonant) if !consonant.voiced => {
+        Some(Phoneme::Consonant(consonant)) if !consonant.voiced => {
             vec![append_suffix(
                 base,
                 [consonant_phoneme(ConsonantPhoneme::T)],
             )]
         }
-        Phoneme::Consonant(_) | Phoneme::Vowel(_) => vec![append_suffix(
+        // Voiced consonants and vowels.
+        _ => vec![append_suffix(
             base,
             [consonant_phoneme(ConsonantPhoneme::D)],
         )],
@@ -677,6 +650,64 @@ mod tests {
         );
         assert_eq!(bases(InflectionalSuffix::Est, "sorest"), ["sor", "sore"]);
         assert_eq!(bases(InflectionalSuffix::Er, "sorer"), ["sor", "sore"]);
+        // Like every other rule, -er and -est need a non-empty stem.
+        assert!(InflectionalSuffix::Er.base_candidates("er").is_none());
+        assert!(InflectionalSuffix::Est.base_candidates("EST").is_none());
+    }
+
+    #[test]
+    fn s_apostrophe_keeps_the_base_and_its_pronunciation() {
+        for (word, expected_base) in [
+            ("kettles'", "kettles"),
+            ("kettles’", "kettles"),
+            ("NASAS'", "NASAS"),
+            ("James'", "James"),
+        ] {
+            assert_eq!(
+                bases(InflectionalSuffix::SApostrophe, word),
+                [expected_base]
+            );
+        }
+        // Only an apostrophe after a final s.
+        for word in ["rockin'", "'", "kettles"] {
+            assert!(
+                InflectionalSuffix::SApostrophe
+                    .base_candidates(word)
+                    .is_none(),
+                "{word}"
+            );
+        }
+
+        let kettles = phonemes(&["K", "EH1", "T", "AH0", "L", "Z"]);
+        let pronunciations = derive(InflectionalSuffix::SApostrophe, "kettles'")
+            .apply(std::slice::from_ref(&kettles));
+        assert_eq!(pronunciations, [kettles]);
+    }
+
+    #[test]
+    fn restored_spelling_follows_the_stem_case() {
+        assert!(includes_base(
+            &bases(InflectionalSuffix::Ves, "KNIVES"),
+            "KNIFE"
+        ));
+        assert!(includes_base(
+            &bases(InflectionalSuffix::Ing, "MAKING"),
+            "MAKE"
+        ));
+        assert_eq!(bases(InflectionalSuffix::LyFromLe, "SIMPLY"), ["SIMPLE"]);
+        assert_eq!(bases(InflectionalSuffix::Er, "HAPPIER")[0], "HAPPY");
+        assert_eq!(bases(InflectionalSuffix::Ing, "Dying")[0], "Die");
+    }
+
+    #[test]
+    fn no_suffix_inflects_an_empty_pronunciation() {
+        for suffix in InflectionalSuffix::PRECEDENCE {
+            let derivation = PronunciationDerivation {
+                base_candidates: Vec::new(),
+                suffix,
+            };
+            assert!(derivation.apply(&[Box::default()]).is_empty());
+        }
     }
 
     #[test]

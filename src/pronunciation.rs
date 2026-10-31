@@ -444,4 +444,37 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn derives_plural_possessives_from_the_plural() {
+        let sparse = CmuDictionary::from_bytes(b"KETTLE  K EH1 T AH0 L\n")
+            .unwrap()
+            .with_pronunciation_mode(PronunciationMode::AllowDerived);
+
+        for word in ["kettles'", "kettles’"] {
+            let word_pronunciations = sparse.pronunciations_for(word).unwrap();
+            let arpabet: Vec<String> = word_pronunciations.pronunciations[0]
+                .iter()
+                .map(ToString::to_string)
+                .collect();
+            assert_eq!(arpabet, ["K", "EH1", "T", "AH0", "L", "Z"]);
+            assert_eq!(
+                word_pronunciations.origin,
+                PronunciationOrigin::Derived {
+                    dictionary_base: "kettle".to_string(),
+                    rules: vec![InflectionRule::S, InflectionRule::SApostrophe],
+                }
+            );
+        }
+
+        // CMUdict lists many plural possessives; those stay exact entries.
+        assert_eq!(
+            dict().pronunciations_for("birds'").unwrap().origin,
+            PronunciationOrigin::Dictionary { normalized: false }
+        );
+        assert_eq!(
+            dict().pronunciations_for("birds’").unwrap().origin,
+            PronunciationOrigin::Dictionary { normalized: true }
+        );
+    }
 }

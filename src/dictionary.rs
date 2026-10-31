@@ -105,6 +105,10 @@ impl CmuDictionary {
                 .map(|s| s.parse::<Phoneme>())
                 .collect::<Result<_, _>>()
                 .map_err(CmuDictionaryError::InvalidPhoneme)?;
+            // A pronunciation without phonemes has no syllables to scan or rhyme.
+            if phonemes.is_empty() {
+                return Err(CmuDictionaryError::MalformedLine(line.to_string()));
+            }
 
             entries
                 .entry(word.to_lowercase())
@@ -167,6 +171,16 @@ mod tests {
             dict.lookup("hello").unwrap().len(),
             dict.lookup("HELLO").unwrap().len()
         );
+    }
+
+    #[test]
+    fn entry_without_phonemes_is_malformed() {
+        for bytes in [&b"FOO  \n"[..], b"CAT  K AE1 T\nFOO   \n"] {
+            assert!(matches!(
+                CmuDictionary::from_bytes(bytes),
+                Err(CmuDictionaryError::MalformedLine(line)) if line.starts_with("FOO")
+            ));
+        }
     }
 
     #[test]

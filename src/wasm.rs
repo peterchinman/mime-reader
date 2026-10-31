@@ -469,6 +469,7 @@ impl From<PronunciationOrigin> for PronunciationOriginDto {
 #[serde(rename_all = "snake_case")]
 pub enum InflectionRuleDto {
     ApostropheS,
+    SApostrophe,
     S,
     Ves,
     Ly,
@@ -482,6 +483,7 @@ impl From<InflectionRule> for InflectionRuleDto {
     fn from(rule: InflectionRule) -> Self {
         match rule {
             InflectionRule::ApostropheS => InflectionRuleDto::ApostropheS,
+            InflectionRule::SApostrophe => InflectionRuleDto::SApostrophe,
             InflectionRule::S => InflectionRuleDto::S,
             InflectionRule::Ves => InflectionRuleDto::Ves,
             InflectionRule::Ly => InflectionRuleDto::Ly,
@@ -1201,6 +1203,22 @@ mod tests {
             PronunciationOriginDto::Derived {
                 dictionary_base: "knife".to_string(),
                 rules: vec![InflectionRuleDto::Ves],
+            }
+        );
+
+        let plural_possessive = WasmAnalyzer::new(
+            b"KETTLE  K EH1 T AH0 L\n",
+            Some(PronunciationModeDto::AllowDerived),
+        )
+        .unwrap();
+        assert_eq!(
+            plural_possessive
+                .pronunciations_for("kettles'")
+                .unwrap()
+                .origin,
+            PronunciationOriginDto::Derived {
+                dictionary_base: "kettle".to_string(),
+                rules: vec![InflectionRuleDto::S, InflectionRuleDto::SApostrophe],
             }
         );
     }
