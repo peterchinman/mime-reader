@@ -55,11 +55,18 @@ impl CmuDictionary {
                 .split_once("  ")
                 .ok_or_else(|| CmuDictionaryError::MalformedLine(line.to_string()))?;
 
-            // Strip alternate pronunciation suffix: HELLO(1) -> HELLO
-            let word = match word.find('(') {
-                Some(idx) => &word[..idx],
-                None => word,
-            };
+            // Strip alternate pronunciation suffix: HELLO(1) -> HELLO. Only a
+            // trailing number counts, since headwords such as (PAREN begin
+            // with a parenthesis.
+            let word = word
+                .strip_suffix(')')
+                .and_then(|word| word.rsplit_once('('))
+                .filter(|(base, number)| {
+                    !base.is_empty()
+                        && !number.is_empty()
+                        && number.bytes().all(|byte| byte.is_ascii_digit())
+                })
+                .map_or(word, |(base, _)| base);
 
             let phonemes: Vec<Phoneme> = phonemes_str
                 .split_whitespace()
@@ -183,5 +190,18 @@ mod tests {
             .collect();
         assert!(matches!(stresses[0], Stress::Unstressed));
         assert!(matches!(stresses[1], Stress::Primary));
+    }
+
+    #[test]
+    fn headwords_that_begin_with_a_parenthesis_keep_it() {
+        let dict = dict();
+        assert!(dict.lookup("").is_none());
+        assert!(dict.iter().all(|(word, _)| !word.is_empty()));
+        assert_eq!(dict.lookup("(paren").unwrap().len(), 1);
+        assert!(dict.lookup(")close-paren").is_some());
+
+        let sparse =
+            CmuDictionary::from_bytes(b"(PAREN  P ER0 EH1 N\n(PAREN(1)  P AE1 R AH0 N\n").unwrap();
+        assert_eq!(sparse.lookup("(paren").unwrap().len(), 2);
     }
 }
