@@ -618,7 +618,10 @@ pub enum MeterDeviationDto {
         syllable_index: usize,
         actual: PronunciationStressDto,
     },
+    /// `before_word_index` is the word the gap comes before, or the line's
+    /// word count when the gap follows its last word.
     MissingSyllable {
+        before_word_index: usize,
         meter_syllable_index: usize,
         expected: StressDto,
     },
@@ -648,9 +651,11 @@ impl From<&MeterDeviation> for MeterDeviationDto {
                 actual: (*actual).into(),
             },
             MeterDeviation::MissingSyllable {
+                before_word_index,
                 meter_syllable_index,
                 expected,
             } => Self::MissingSyllable {
+                before_word_index: *before_word_index,
                 meter_syllable_index: *meter_syllable_index,
                 expected: (*expected).into(),
             },

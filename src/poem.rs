@@ -779,6 +779,7 @@ mod tests {
         assert_eq!(
             failures,
             [crate::MeterDeviation::MissingSyllable {
+                before_word_index: 1,
                 meter_syllable_index: 3,
                 expected: crate::SyllableStress::Stressed,
             }]

@@ -231,6 +231,9 @@ pub enum MeterDeviation {
     /// A position in the meter that no syllable fills, between words or after
     /// the line's last word.
     MissingSyllable {
+        /// The word the gap comes before, or the line's word count when the
+        /// gap follows its last word.
+        before_word_index: usize,
         meter_syllable_index: usize,
         expected: SyllableStress,
     },
@@ -473,6 +476,7 @@ impl<'a> Alignment<'a> {
         if word_index == self.stress_patterns.len() {
             deviations.extend((meter_index..self.meter.len()).map(|index| {
                 MeterDeviation::MissingSyllable {
+                    before_word_index: word_index,
                     meter_syllable_index: index,
                     expected: self.meter[index],
                 }
@@ -493,6 +497,7 @@ impl<'a> Alignment<'a> {
             }
         }
         deviations.push(MeterDeviation::MissingSyllable {
+            before_word_index: word_index,
             meter_syllable_index: meter_index,
             expected: self.meter[meter_index],
         });
@@ -910,6 +915,7 @@ mod tests {
         assert_eq!(
             assert_meter_no_match(spec.validate_line(&line)),
             [MeterDeviation::MissingSyllable {
+                before_word_index: 0,
                 meter_syllable_index: 0,
                 expected: S,
             }]
@@ -983,10 +989,12 @@ mod tests {
             long_spec.deviations_for_line(&line).unwrap(),
             vec![
                 MeterDeviation::MissingSyllable {
+                    before_word_index: 1,
                     meter_syllable_index: 2,
                     expected: S,
                 },
                 MeterDeviation::MissingSyllable {
+                    before_word_index: 1,
                     meter_syllable_index: 3,
                     expected: S,
                 },
@@ -1024,11 +1032,12 @@ mod tests {
     fn deviation_analysis_counts_a_missing_syllable_between_words_once() {
         let spec: MeterSpecification = "x/x/x/x/x/".parse().unwrap();
 
-        // The line without its second "a".
+        // The line without its second "a": the gap falls before SUMMER.
         let dropped = Line::new("a lover and summer evening light", dict());
         assert_eq!(
             spec.deviations_for_line(&dropped).unwrap(),
             [MeterDeviation::MissingSyllable {
+                before_word_index: 3,
                 meter_syllable_index: 4,
                 expected: U,
             }]
@@ -1039,6 +1048,7 @@ mod tests {
         assert_eq!(
             spec.deviations_for_line(&headless).unwrap(),
             [MeterDeviation::MissingSyllable {
+                before_word_index: 0,
                 meter_syllable_index: 0,
                 expected: U,
             }]
