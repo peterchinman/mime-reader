@@ -8,7 +8,7 @@ import init, {
 	type RhymeDto,
 	type RhymeNormalizationDto,
 	type VowelConfigDto,
-} from "mime_reader";
+} from "mime-reader";
 import rhymePairTests from "../../../rhyme_pair_tests.json";
 
 // The dictionary is served as a static asset (see web/tuning/public/, which

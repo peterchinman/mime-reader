@@ -1,5 +1,5 @@
 {
-  "name": "mime_reader-tuning",
+  "name": "mime-reader-tuning",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "mime_reader": "file:../pkg"
+    "mime-reader": "file:../pkg"
   },
   "devDependencies": {
     "typescript": "^5",
