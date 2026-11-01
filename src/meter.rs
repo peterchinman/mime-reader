@@ -4,7 +4,7 @@ use crate::{
     Stress,
     error::{
         MeterCheckError, ParseMeterError, ParseMeterSchemeError, ParseSyllableCountError,
-        UnknownWordError,
+        ParseSyllableCountSchemeError, UnknownWordError,
     },
     line::{Line, WordData, WordEntry},
 };
@@ -562,6 +562,11 @@ impl<'a> Alignment<'a> {
     }
 }
 
+/// The largest syllable count a syllable-count specification accepts. Each count
+/// in a range becomes its own meter path, so an unbounded count could stall
+/// parsing and analysis; no line of verse comes near this.
+pub const MAX_SYLLABLE_COUNT: usize = 100;
+
 #[derive(Debug)]
 pub struct SyllableCountSpecification(MeterSpecification);
 
@@ -569,26 +574,25 @@ impl std::str::FromStr for SyllableCountSpecification {
     type Err = ParseSyllableCountError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Some((min_str, max_str)) = s.split_once('-') {
-            let min = min_str
-                .trim()
+        let count = |text: &str| {
+            text.trim()
                 .parse::<usize>()
-                .map_err(|_| ParseSyllableCountError::InvalidNumber)?;
-            let max = max_str
-                .trim()
-                .parse::<usize>()
-                .map_err(|_| ParseSyllableCountError::InvalidNumber)?;
-            if min > max {
-                return Err(ParseSyllableCountError::InvalidRange);
+                .map_err(|_| ParseSyllableCountError::InvalidNumber)
+        };
+        let (min, max) = match s.split_once('-') {
+            Some((min, max)) => (count(min)?, count(max)?),
+            None => {
+                let n = count(s)?;
+                (n, n)
             }
-            Ok(Self(MeterSpecification::from_syllable_range(min, max)))
-        } else {
-            let n = s
-                .trim()
-                .parse::<usize>()
-                .map_err(|_| ParseSyllableCountError::InvalidNumber)?;
-            Ok(Self(MeterSpecification::from_syllable_range(n, n)))
+        };
+        if min > max {
+            return Err(ParseSyllableCountError::InvalidRange);
         }
+        if max > MAX_SYLLABLE_COUNT {
+            return Err(ParseSyllableCountError::TooLarge);
+        }
+        Ok(Self(MeterSpecification::from_syllable_range(min, max)))
     }
 }
 
@@ -598,28 +602,56 @@ impl SyllableCountSpecification {
     }
 }
 
+/// One meter specification per line of the poem, repeating from the first
+/// when the poem is longer. Blank lines in the scheme's text are layout, such
+/// as space between stanzas, and don't count as scheme lines; parse errors
+/// still number lines as they appear in the text.
 #[derive(Debug)]
 pub struct MeterScheme {
     scheme: Vec<MeterSpecification>,
+}
+
+/// The scheme text's lines that aren't blank, numbered by their place in the text.
+fn scheme_lines(s: &str) -> impl Iterator<Item = (usize, &str)> {
+    s.lines()
+        .enumerate()
+        .filter(|(_, text)| !text.trim().is_empty())
 }
 
 impl std::str::FromStr for MeterScheme {
     type Err = ParseMeterSchemeError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let scheme = s
-            .lines()
-            .enumerate()
+        let scheme = scheme_lines(s)
             .map(|(line, text)| {
                 text.parse::<MeterSpecification>()
-                    .map_err(|source| ParseMeterSchemeError { line, source })
+                    .map_err(|source| ParseMeterSchemeError::Line { line, source })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        if scheme.is_empty() {
+            return Err(ParseMeterSchemeError::Empty);
+        }
         Ok(MeterScheme { scheme })
     }
 }
 
 impl MeterScheme {
+    /// Parses a repeating multiline scheme of exact syllable counts or inclusive
+    /// ranges, each at most [`MAX_SYLLABLE_COUNT`].
+    pub fn from_syllable_counts(s: &str) -> Result<Self, ParseSyllableCountSchemeError> {
+        let scheme = scheme_lines(s)
+            .map(|(line, text)| {
+                text.parse::<SyllableCountSpecification>()
+                    .map(|specification| specification.0)
+                    .map_err(|source| ParseSyllableCountSchemeError::Line { line, source })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if scheme.is_empty() {
+            return Err(ParseSyllableCountSchemeError::Empty);
+        }
+        Ok(Self { scheme })
+    }
+
     /// Returns the meter specification for the given line index, wrapping around the scheme if necessary.
     fn line_specification(&self, line_index: usize) -> &MeterSpecification {
         &self.scheme[line_index % self.scheme.len()]
@@ -1143,6 +1175,24 @@ mod tests {
         assert!(matches!(err, ParseSyllableCountError::InvalidRange));
     }
 
+    #[test]
+    fn syllable_counts_are_capped() {
+        for ok in ["100", "0-100"] {
+            assert!(ok.parse::<SyllableCountSpecification>().is_ok(), "{ok}");
+        }
+        for too_large in ["101", "8-101", "100000000"] {
+            let err = too_large.parse::<SyllableCountSpecification>().unwrap_err();
+            assert!(
+                matches!(err, ParseSyllableCountError::TooLarge),
+                "{too_large}"
+            );
+        }
+        assert_eq!(
+            ParseSyllableCountError::TooLarge.to_string(),
+            "syllable count must be at most 100"
+        );
+    }
+
     // --- MeterScheme ---
 
     #[test]
@@ -1198,12 +1248,86 @@ mod tests {
     }
 
     #[test]
+    fn syllable_count_scheme_supports_exact_counts_ranges_and_wrapping() {
+        let scheme = MeterScheme::from_syllable_counts("2\n2-3\n1").unwrap();
+
+        assert_meter_matches(scheme.check_line(&Line::new("cat dog", dict()), 0));
+        assert_meter_matches(scheme.check_line(&Line::new("cat dog bird", dict()), 1));
+        assert_meter_matches(scheme.check_line(&Line::new("cat", dict()), 2));
+        assert_meter_matches(scheme.check_line(&Line::new("cat dog", dict()), 3));
+        let _ = assert_meter_no_match(scheme.check_line(&Line::new("cat", dict()), 0));
+    }
+
+    #[test]
+    fn syllable_count_scheme_reports_the_invalid_line() {
+        let error = MeterScheme::from_syllable_counts("5\n9-7\n5").unwrap_err();
+
+        assert!(matches!(
+            error,
+            ParseSyllableCountSchemeError::Line {
+                line: 1,
+                source: ParseSyllableCountError::InvalidRange,
+            }
+        ));
+        assert_eq!(error.to_string(), "line 2: min must be <= max");
+    }
+
+    #[test]
+    fn meter_schemes_need_at_least_one_line() {
+        for blank in ["", "\n", " \n\t\n"] {
+            let stress = blank.parse::<MeterScheme>().unwrap_err();
+            assert!(matches!(stress, ParseMeterSchemeError::Empty), "{blank:?}");
+            let counts = MeterScheme::from_syllable_counts(blank).unwrap_err();
+            assert!(
+                matches!(counts, ParseSyllableCountSchemeError::Empty),
+                "{blank:?}"
+            );
+        }
+        assert_eq!(
+            ParseMeterSchemeError::Empty.to_string(),
+            "meter scheme is empty"
+        );
+        assert_eq!(
+            ParseSyllableCountSchemeError::Empty.to_string(),
+            "syllable count scheme is empty"
+        );
+    }
+
+    #[test]
+    fn meter_schemes_skip_blank_lines() {
+        // Two quatrain-style lines separated by a blank one: the poem's second
+        // line takes the scheme's second pattern, not the blank line.
+        let stress: MeterScheme = "x/x/\n\n  \n/x/x".parse().unwrap();
+        assert_eq!(stress.scheme.len(), 2);
+        assert_meter_matches(stress.check_line(&Line::new("hello hello", dict()), 0));
+        assert_meter_matches(stress.check_line(&Line::new("happy summer", dict()), 1));
+        assert_meter_matches(stress.check_line(&Line::new("hello hello", dict()), 2));
+
+        let counts = MeterScheme::from_syllable_counts("2\n\n3").unwrap();
+        assert_eq!(counts.scheme.len(), 2);
+        assert_meter_matches(counts.check_line(&Line::new("cat dog bird", dict()), 1));
+    }
+
+    #[test]
+    fn scheme_errors_number_lines_as_written() {
+        let stress = "x/x/\n\nx/j/".parse::<MeterScheme>().unwrap_err();
+        assert_eq!(
+            stress.to_string(),
+            "line 3: invalid stress character 'j' at column 3"
+        );
+        let counts = MeterScheme::from_syllable_counts("5\n\n9-7").unwrap_err();
+        assert_eq!(counts.to_string(), "line 3: min must be <= max");
+    }
+
+    #[test]
     fn meter_scheme_propagates_line_parse_error() {
         let err = "x/x/\nx/j/".parse::<MeterScheme>().unwrap_err();
-        assert_eq!(err.line, 1);
         assert!(matches!(
-            err.source,
-            ParseMeterError::InvalidChar { c: 'j', col: 2 }
+            err,
+            ParseMeterSchemeError::Line {
+                line: 1,
+                source: ParseMeterError::InvalidChar { c: 'j', col: 2 },
+            }
         ));
     }
 }
