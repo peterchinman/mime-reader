@@ -13,7 +13,7 @@ use crate::{
     RhymeDistanceConfig, RhymeDistanceScorer, RhymeIntersectionMatchOwned, RhymePairScore,
     RhymeScheme, RhymeScoreNormalization, Stress, TranspositionDirection, VowelHexGraphConfig,
     WordPronunciations, WordTarget,
-    line::Line,
+    line::{Line, WordData},
     meter::{MeterDeviation, MeterMatchResult, SyllableStress},
     poem::{MeterAnalysis, Poem, PoemLineAnalysis, RhymeAnalysis},
     rhyme_scheme::RhymeCheckResult,
@@ -353,6 +353,15 @@ impl WasmPoem {
         Ok(())
     }
 
+    /// The words of one line, located in its text. A meter deviation's
+    /// `word_index` or `before_word_index` indexes this list, which skips
+    /// punctuation-only tokens such as dashes and splits compounds the
+    /// dictionary doesn't list.
+    #[wasm_bindgen(js_name = lineWords)]
+    pub fn line_words(&self, index: usize) -> Result<Vec<LineWordDto>, JsError> {
+        Ok(LineWordDto::from_line(self.poem.line(index)?))
+    }
+
     /// Meter + rhyme analysis for one line, as a `{ meter, rhyme }` JS object.
     #[wasm_bindgen(js_name = lineAnalysis)]
     pub fn line_analysis(&mut self, index: usize) -> Result<LineAnalysisDto, JsError> {
@@ -510,6 +519,45 @@ impl From<InflectionRule> for InflectionRuleDto {
             InflectionRule::Er => InflectionRuleDto::Er,
             InflectionRule::Est => InflectionRuleDto::Est,
         }
+    }
+}
+
+/// One word of a line and where it sits in the line's text. `start` and `end`
+/// count UTF-16 code units, so `text.slice(start, end)` in JS is `word`,
+/// without the punctuation it was read without.
+#[derive(Serialize, Debug, PartialEq, Eq, Tsify)]
+#[tsify(into_wasm_abi)]
+pub struct LineWordDto {
+    word: String,
+    start: usize,
+    end: usize,
+    known: bool,
+}
+
+impl LineWordDto {
+    fn from_line(line: &Line) -> Vec<Self> {
+        // Core spans are UTF-8 byte ranges; JS strings index UTF-16 units.
+        // Spans ascend, so one pass over the text converts them all.
+        let mut byte = 0;
+        let mut utf16 = 0;
+        let mut utf16_offset = |offset: usize| {
+            utf16 += line.text[byte..offset].encode_utf16().count();
+            byte = offset;
+            utf16
+        };
+        line.words
+            .iter()
+            .map(|entry| {
+                let start = utf16_offset(entry.span.start);
+                let end = utf16_offset(entry.span.end);
+                LineWordDto {
+                    word: entry.word.clone(),
+                    start,
+                    end,
+                    known: matches!(entry.data, WordData::Known { .. }),
+                }
+            })
+            .collect()
     }
 }
 
@@ -1390,6 +1438,63 @@ mod tests {
             }),
         );
         assert!(result.is_err());
+    }
+
+    #[wasm_bindgen_test]
+    fn line_words_locate_words_in_utf16_text() {
+        let ws = analyzer();
+        // 🌞 is two UTF-16 units; “ ” and — are one each.
+        let poem = ws
+            .open_poem(vec!["🌞 “Hello,” sun-kissed & xyzzy—".into()], None)
+            .unwrap();
+        let word = |word: &str, start, end, known| LineWordDto {
+            word: word.into(),
+            start,
+            end,
+            known,
+        };
+        assert_eq!(
+            poem.line_words(0).unwrap(),
+            [
+                word("Hello", 4, 9, true),
+                word("sun", 12, 15, true),
+                word("kissed", 16, 22, true),
+                word("&", 23, 24, true),
+                word("xyzzy", 25, 30, false),
+            ]
+        );
+        assert!(poem.line_words(1).is_err());
+    }
+
+    #[wasm_bindgen_test]
+    fn meter_word_indices_index_line_words() {
+        let ws = analyzer();
+        // cat fills the first x, leaving /x for hello's x/.
+        let mut poem = ws
+            .open_poem(
+                vec!["“Cat,” — hello".into()],
+                Some(PoemOptionsDto {
+                    meter_scheme: Some("x/x".into()),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let MeterDto::NoMatch { failures, .. } = poem.meter_analysis(0).unwrap() else {
+            panic!("expected a meter mismatch");
+        };
+        let word_indices: Vec<usize> = failures
+            .iter()
+            .filter_map(|failure| match failure {
+                MeterDeviationDto::StressMismatch { word_index, .. }
+                | MeterDeviationDto::ExtraSyllable { word_index, .. } => Some(*word_index),
+                MeterDeviationDto::MissingSyllable { .. } => None,
+            })
+            .collect();
+        assert!(!word_indices.is_empty(), "{failures:?}");
+        let words = poem.line_words(0).unwrap();
+        for index in word_indices {
+            assert_eq!(words[index].word, "hello", "{failures:?}");
+        }
     }
 
     #[wasm_bindgen_test]

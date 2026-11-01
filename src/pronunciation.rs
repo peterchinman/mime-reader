@@ -18,7 +18,8 @@ use inflection::pronunciation_derivations;
 /// Whether words in running text may use pronunciations inferred from dictionary entries.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum PronunciationMode {
-    /// Only dictionary entries, allowing typographic apostrophe normalization.
+    /// Only dictionary entries, allowing respellings such as typographic
+    /// apostrophes and `&`.
     #[default]
     DictionaryOnly,
     /// Fall back to productive rules when no dictionary entry exists.
@@ -35,8 +36,9 @@ pub struct ConfiguredDictionary<D> {
 /// Where a word's pronunciation came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PronunciationOrigin {
-    /// The word matched a dictionary entry. `normalized` is true when a
-    /// typographic apostrophe was converted to the dictionary's straight one.
+    /// The word matched a dictionary entry. `normalized` is true when the
+    /// word was respelled to match it: a typographic apostrophe made straight,
+    /// or `&` read as *and*.
     Dictionary { normalized: bool },
     /// The pronunciation was inferred from a dictionary base by applying one
     /// or more productive rules, ordered from the base outward.
@@ -72,10 +74,9 @@ pub(crate) fn pronunciations_for<'d, D: PronouncingDictionary + ?Sized>(
         });
     }
 
-    // CMUdict uses straight apostrophes, while prose editors commonly insert
-    // typographic ones. Treat the latter as the same exact headword before
-    // falling back to a derived pronunciation.
-    let normalized = word.replace('’', "'");
+    // Respellings name the same exact headword, so try them before falling
+    // back to a derived pronunciation.
+    let normalized = dictionary_spelling(word);
     if normalized != word
         && let Some(pronunciations) = dict.lookup(&normalized)
     {
@@ -142,6 +143,18 @@ fn derive_pronunciations<D: PronouncingDictionary + ?Sized>(
     None
 }
 
+/// Respells running text the way CMUdict writes it. CMUdict uses straight
+/// apostrophes, while prose editors commonly insert typographic ones, even an
+/// opening quote for a leading elision (‘tis), and it has no entry for a
+/// bare `&`.
+fn dictionary_spelling(word: &str) -> String {
+    if word == "&" {
+        "and".to_string()
+    } else {
+        word.replace(['’', '‘'], "'")
+    }
+}
+
 fn dictionary_base_pronunciations<D: PronouncingDictionary + ?Sized>(
     dict: &D,
     base: &str,
@@ -154,7 +167,7 @@ fn dictionary_base_pronunciations<D: PronouncingDictionary + ?Sized>(
         });
     }
 
-    let normalized = base.replace('’', "'");
+    let normalized = dictionary_spelling(base);
     (normalized != base)
         .then(|| dict.lookup(&normalized))
         .flatten()
@@ -232,6 +245,13 @@ mod tests {
         assert!(matches!(normalized.pronunciations, Cow::Borrowed(_)));
         assert_eq!(
             normalized.origin,
+            PronunciationOrigin::Dictionary { normalized: true }
+        );
+
+        let ampersand = dict().pronunciations_for("&").unwrap();
+        assert_eq!(ampersand.pronunciations, dict().lookup("and").unwrap());
+        assert_eq!(
+            ampersand.origin,
             PronunciationOrigin::Dictionary { normalized: true }
         );
     }
