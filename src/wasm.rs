@@ -11,10 +11,10 @@ use crate::{
     ConsistentScoresOwned, InflectionRule, MeterExceptionConfig, MeterScheme, OwnedAlignmentStep,
     PronouncingDictionary, PronunciationMode, PronunciationOrigin, RhymeComparisonConfig,
     RhymeDistanceConfig, RhymeDistanceScorer, RhymeIntersectionMatchOwned, RhymePairScore,
-    RhymeScheme, RhymeScoreNormalization, Stress, TranspositionDirection, VowelHexGraphConfig,
+    RhymeScheme, RhymeScoreNormalization, TranspositionDirection, VowelHexGraphConfig,
     WordPronunciations, WordTarget,
     line::Line,
-    meter::{MeterDeviation, MeterMatchResult, PromotedSyllable, SyllableStress},
+    meter::{Fit, Gap, MeterDeviation, MeterMatchResult, ScannedStress, Scansion, SyllableStress},
     poem::{MeterAnalysis, Poem, PoemLineAnalysis, RhymeAnalysis},
     rhyme_scheme::RhymeCheckResult,
 };
@@ -533,13 +533,12 @@ impl From<PoemLineAnalysis<'_>> for LineAnalysisDto {
 // ---- Meter ----------------------------------------------------------------
 
 /// Flattens the three core layers — `NotApplicable` / `Err` / `Ok(Match|…|NoMatch)`
-/// — into one tagged union: `{ status: "match", promotions }`,
-/// `{ status: "match_with_exceptions", exceptions, promotions }`,
-/// `{ status: "no_match", failures, exceptions, promotions }`,
+/// — into one tagged union: `{ status: "match", scansion }`,
+/// `{ status: "match_with_exceptions", exceptions, scansion }`,
+/// `{ status: "no_match", failures, exceptions, scansion }`,
 /// `{ status: "error", message }`, or `{ status: "not_applicable" }`. `failures`
-/// and `exceptions` are deviations of the line's least-deviating reading;
-/// `exceptions` are the ones its allowance covered. `promotions` are the
-/// reading's unstressed syllables on beats, which fit the meter.
+/// and `exceptions` are the deviations of the line's scansion; `exceptions` are
+/// the ones its allowance covered.
 #[derive(Serialize, Debug, Tsify)]
 #[tsify(into_wasm_abi)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -549,16 +548,16 @@ pub enum MeterDto {
         message: String,
     },
     Match {
-        promotions: Vec<PromotedSyllableDto>,
+        scansion: ScansionDto,
     },
     MatchWithExceptions {
         exceptions: Vec<MeterDeviationDto>,
-        promotions: Vec<PromotedSyllableDto>,
+        scansion: ScansionDto,
     },
     NoMatch {
         failures: Vec<MeterDeviationDto>,
         exceptions: Vec<MeterDeviationDto>,
-        promotions: Vec<PromotedSyllableDto>,
+        scansion: ScansionDto,
     },
 }
 
@@ -570,24 +569,24 @@ impl From<MeterAnalysis<'_>> for MeterDto {
                 Err(e) => MeterDto::Error {
                     message: e.to_string(),
                 },
-                Ok(MeterMatchResult::Match { promotions }) => MeterDto::Match {
-                    promotions: promotions.iter().map(PromotedSyllableDto::from).collect(),
+                Ok(MeterMatchResult::Match { scansion }) => MeterDto::Match {
+                    scansion: scansion.into(),
                 },
                 Ok(MeterMatchResult::MatchWithExceptions {
                     exceptions,
-                    promotions,
+                    scansion,
                 }) => MeterDto::MatchWithExceptions {
                     exceptions: exceptions.iter().map(MeterDeviationDto::from).collect(),
-                    promotions: promotions.iter().map(PromotedSyllableDto::from).collect(),
+                    scansion: scansion.into(),
                 },
                 Ok(MeterMatchResult::NoMatch {
                     failures,
                     exceptions,
-                    promotions,
+                    scansion,
                 }) => MeterDto::NoMatch {
                     failures: failures.iter().map(MeterDeviationDto::from).collect(),
                     exceptions: exceptions.iter().map(MeterDeviationDto::from).collect(),
-                    promotions: promotions.iter().map(PromotedSyllableDto::from).collect(),
+                    scansion: scansion.into(),
                 },
             },
         }
@@ -641,12 +640,12 @@ pub enum MeterDeviationDto {
         word_index: usize,
         syllable_index: usize,
         expected: StressDto,
-        actual: PronunciationStressDto,
+        actual: ScannedStressDto,
     },
     ExtraSyllable {
         word_index: usize,
         syllable_index: usize,
-        actual: PronunciationStressDto,
+        actual: ScannedStressDto,
     },
     /// `before_word_index` is the word the gap comes before, or the line's
     /// word count when the gap follows its last word.
@@ -693,19 +692,95 @@ impl From<&MeterDeviation> for MeterDeviationDto {
     }
 }
 
-/// An unstressed syllable that fills a stressed position because the
-/// syllables on both sides of it are unstressed too.
-#[derive(Serialize, Debug, PartialEq, Eq, Tsify)]
-pub struct PromotedSyllableDto {
-    word_index: usize,
-    syllable_index: usize,
+/// A line's scansion: the role each syllable plays in the line's
+/// least-deviating reading, and the meter positions it leaves unfilled.
+#[derive(Serialize, Debug, Tsify)]
+pub struct ScansionDto {
+    /// One for each of the line's words.
+    words: Vec<WordScansionDto>,
+    /// Meter positions left unfilled after the last word.
+    trailing_gaps: Vec<GapDto>,
 }
 
-impl From<&PromotedSyllable> for PromotedSyllableDto {
-    fn from(promotion: &PromotedSyllable) -> Self {
+#[derive(Serialize, Debug, Tsify)]
+pub struct WordScansionDto {
+    /// Meter positions left unfilled before the word.
+    gaps_before: Vec<GapDto>,
+    /// The word's syllables, in the pronunciation the reading chose.
+    syllables: Vec<SyllableScansionDto>,
+}
+
+#[derive(Serialize, Debug, Tsify)]
+pub struct SyllableScansionDto {
+    stress: ScannedStressDto,
+    /// The meter position the syllable fills, or `undefined` for an extra
+    /// syllable.
+    position: Option<MeterPositionDto>,
+}
+
+#[derive(Serialize, Debug, Tsify)]
+pub struct MeterPositionDto {
+    index: usize,
+    expected: StressDto,
+    fit: FitDto,
+}
+
+#[derive(Serialize, Debug, Tsify)]
+pub struct GapDto {
+    index: usize,
+    expected: StressDto,
+}
+
+#[derive(Serialize, Debug, Tsify)]
+#[serde(rename_all = "snake_case")]
+pub enum FitDto {
+    Fits,
+    Promoted,
+    Mismatch,
+}
+
+impl From<&Scansion> for ScansionDto {
+    fn from(scansion: &Scansion) -> Self {
         Self {
-            word_index: promotion.word_index,
-            syllable_index: promotion.syllable_index,
+            words: scansion
+                .words
+                .iter()
+                .map(|word| WordScansionDto {
+                    gaps_before: word.gaps_before.iter().map(GapDto::from).collect(),
+                    syllables: word
+                        .syllables
+                        .iter()
+                        .map(|syllable| SyllableScansionDto {
+                            stress: syllable.stress.into(),
+                            position: syllable.position.map(|position| MeterPositionDto {
+                                index: position.index,
+                                expected: position.expected.into(),
+                                fit: position.fit.into(),
+                            }),
+                        })
+                        .collect(),
+                })
+                .collect(),
+            trailing_gaps: scansion.trailing_gaps.iter().map(GapDto::from).collect(),
+        }
+    }
+}
+
+impl From<&Gap> for GapDto {
+    fn from(gap: &Gap) -> Self {
+        Self {
+            index: gap.index,
+            expected: gap.expected.into(),
+        }
+    }
+}
+
+impl From<Fit> for FitDto {
+    fn from(fit: Fit) -> Self {
+        match fit {
+            Fit::Fits => Self::Fits,
+            Fit::Promoted => Self::Promoted,
+            Fit::Mismatch => Self::Mismatch,
         }
     }
 }
@@ -730,18 +805,18 @@ impl From<SyllableStress> for StressDto {
 
 #[derive(Serialize, Debug, Tsify)]
 #[serde(rename_all = "snake_case")]
-pub enum PronunciationStressDto {
-    Primary,
-    Secondary,
+pub enum ScannedStressDto {
+    Stressed,
     Unstressed,
+    Ambiguous,
 }
 
-impl From<Stress> for PronunciationStressDto {
-    fn from(stress: Stress) -> Self {
+impl From<ScannedStress> for ScannedStressDto {
+    fn from(stress: ScannedStress) -> Self {
         match stress {
-            Stress::Primary => Self::Primary,
-            Stress::Secondary => Self::Secondary,
-            Stress::Unstressed => Self::Unstressed,
+            ScannedStress::Stressed => Self::Stressed,
+            ScannedStress::Unstressed => Self::Unstressed,
+            ScannedStress::Ambiguous => Self::Ambiguous,
         }
     }
 }
@@ -1573,13 +1648,13 @@ mod tests {
             [MeterDeviationDto::ExtraSyllable {
                 word_index: 0,
                 syllable_index: 1,
-                actual: PronunciationStressDto::Primary,
+                actual: ScannedStressDto::Stressed,
             }]
         ));
     }
 
     #[wasm_bindgen_test]
-    fn meter_dto_reports_promoted_syllables() {
+    fn meter_dto_carries_the_scansion() {
         let mut poem = analyzer()
             .open_poem(
                 vec!["thou art more lovely and more temperate".into()],
@@ -1590,17 +1665,26 @@ mod tests {
             )
             .unwrap();
 
-        let MeterDto::Match { promotions } = poem.meter_analysis(0).unwrap() else {
+        let MeterDto::Match { scansion } = poem.meter_analysis(0).unwrap() else {
             panic!("expected a meter match");
         };
-        // TEMPERATE's last syllable takes the line's last beat.
-        assert_eq!(
-            promotions,
-            [PromotedSyllableDto {
-                word_index: 6,
-                syllable_index: 2,
-            }]
-        );
+        // TEMPERATE's last syllable is promoted to the line's last beat.
+        assert_eq!(scansion.words.len(), 7);
+        assert!(matches!(
+            scansion.words[6].syllables.as_slice(),
+            [
+                _,
+                _,
+                SyllableScansionDto {
+                    stress: ScannedStressDto::Stressed,
+                    position: Some(MeterPositionDto {
+                        index: 9,
+                        fit: FitDto::Promoted,
+                        ..
+                    }),
+                },
+            ]
+        ));
     }
 
     // ---- returned DTO shape ------------------------------------------------
