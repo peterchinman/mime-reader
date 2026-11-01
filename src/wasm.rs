@@ -14,7 +14,7 @@ use crate::{
     RhymeScheme, RhymeScoreNormalization, Stress, TranspositionDirection, VowelHexGraphConfig,
     WordPronunciations, WordTarget,
     line::Line,
-    meter::{MeterDeviation, MeterMatchResult, SyllableStress},
+    meter::{MeterDeviation, MeterMatchResult, PromotedSyllable, SyllableStress},
     poem::{MeterAnalysis, Poem, PoemLineAnalysis, RhymeAnalysis},
     rhyme_scheme::RhymeCheckResult,
 };
@@ -533,11 +533,13 @@ impl From<PoemLineAnalysis<'_>> for LineAnalysisDto {
 // ---- Meter ----------------------------------------------------------------
 
 /// Flattens the three core layers — `NotApplicable` / `Err` / `Ok(Match|…|NoMatch)`
-/// — into one tagged union: `{ status: "match" }`,
-/// `{ status: "match_with_exceptions", exceptions }`,
-/// `{ status: "no_match", failures, exceptions }`, `{ status: "error", message }`, or
-/// `{ status: "not_applicable" }`. `failures` and `exceptions` are deviations of the
-/// line's least-deviating reading; `exceptions` are the ones its allowance covered.
+/// — into one tagged union: `{ status: "match", promotions }`,
+/// `{ status: "match_with_exceptions", exceptions, promotions }`,
+/// `{ status: "no_match", failures, exceptions, promotions }`,
+/// `{ status: "error", message }`, or `{ status: "not_applicable" }`. `failures`
+/// and `exceptions` are deviations of the line's least-deviating reading;
+/// `exceptions` are the ones its allowance covered. `promotions` are the
+/// reading's unstressed syllables on beats, which fit the meter.
 #[derive(Serialize, Debug, Tsify)]
 #[tsify(into_wasm_abi)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -546,13 +548,17 @@ pub enum MeterDto {
     Error {
         message: String,
     },
-    Match,
+    Match {
+        promotions: Vec<PromotedSyllableDto>,
+    },
     MatchWithExceptions {
         exceptions: Vec<MeterDeviationDto>,
+        promotions: Vec<PromotedSyllableDto>,
     },
     NoMatch {
         failures: Vec<MeterDeviationDto>,
         exceptions: Vec<MeterDeviationDto>,
+        promotions: Vec<PromotedSyllableDto>,
     },
 }
 
@@ -564,18 +570,24 @@ impl From<MeterAnalysis<'_>> for MeterDto {
                 Err(e) => MeterDto::Error {
                     message: e.to_string(),
                 },
-                Ok(MeterMatchResult::Match) => MeterDto::Match,
-                Ok(MeterMatchResult::MatchWithExceptions { exceptions }) => {
-                    MeterDto::MatchWithExceptions {
-                        exceptions: exceptions.iter().map(MeterDeviationDto::from).collect(),
-                    }
-                }
+                Ok(MeterMatchResult::Match { promotions }) => MeterDto::Match {
+                    promotions: promotions.iter().map(PromotedSyllableDto::from).collect(),
+                },
+                Ok(MeterMatchResult::MatchWithExceptions {
+                    exceptions,
+                    promotions,
+                }) => MeterDto::MatchWithExceptions {
+                    exceptions: exceptions.iter().map(MeterDeviationDto::from).collect(),
+                    promotions: promotions.iter().map(PromotedSyllableDto::from).collect(),
+                },
                 Ok(MeterMatchResult::NoMatch {
                     failures,
                     exceptions,
+                    promotions,
                 }) => MeterDto::NoMatch {
                     failures: failures.iter().map(MeterDeviationDto::from).collect(),
                     exceptions: exceptions.iter().map(MeterDeviationDto::from).collect(),
+                    promotions: promotions.iter().map(PromotedSyllableDto::from).collect(),
                 },
             },
         }
@@ -677,6 +689,23 @@ impl From<&MeterDeviation> for MeterDeviationDto {
                 meter_syllable_index: *meter_syllable_index,
                 expected: (*expected).into(),
             },
+        }
+    }
+}
+
+/// An unstressed syllable that fills a stressed position because the
+/// syllables on both sides of it are unstressed too.
+#[derive(Serialize, Debug, PartialEq, Eq, Tsify)]
+pub struct PromotedSyllableDto {
+    word_index: usize,
+    syllable_index: usize,
+}
+
+impl From<&PromotedSyllable> for PromotedSyllableDto {
+    fn from(promotion: &PromotedSyllable) -> Self {
+        Self {
+            word_index: promotion.word_index,
+            syllable_index: promotion.syllable_index,
         }
     }
 }
@@ -1243,17 +1272,17 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(
-                matches!(poem.meter_analysis(0).unwrap(), MeterDto::Match),
+                matches!(poem.meter_analysis(0).unwrap(), MeterDto::Match { .. }),
                 allow_derived
             );
             poem.update_line(0, "kettles").unwrap();
             assert_eq!(
-                matches!(poem.meter_analysis(0).unwrap(), MeterDto::Match),
+                matches!(poem.meter_analysis(0).unwrap(), MeterDto::Match { .. }),
                 allow_derived
             );
             poem.insert_line(1, "kettle's").unwrap();
             assert_eq!(
-                matches!(poem.meter_analysis(1).unwrap(), MeterDto::Match),
+                matches!(poem.meter_analysis(1).unwrap(), MeterDto::Match { .. }),
                 allow_derived
             );
         }
@@ -1369,7 +1398,10 @@ mod tests {
                 }),
             )
             .unwrap();
-        assert!(matches!(poem.meter_analysis(1).unwrap(), MeterDto::Match));
+        assert!(matches!(
+            poem.meter_analysis(1).unwrap(),
+            MeterDto::Match { .. }
+        ));
         assert!(matches!(
             poem.rhyme_analysis(1).unwrap(),
             RhymeDto::Follower { passed: true, .. }
@@ -1422,7 +1454,7 @@ mod tests {
         for index in 0..3 {
             assert!(matches!(
                 poem.meter_analysis(index).unwrap(),
-                MeterDto::Match
+                MeterDto::Match { .. }
             ));
         }
     }
@@ -1498,11 +1530,11 @@ mod tests {
 
         assert!(matches!(
             poem.meter_analysis(0).unwrap(),
-            MeterDto::MatchWithExceptions { exceptions } if exceptions.len() == 1
+            MeterDto::MatchWithExceptions { exceptions, .. } if exceptions.len() == 1
         ));
         assert!(matches!(
             poem.meter_analysis(1).unwrap(),
-            MeterDto::MatchWithExceptions { exceptions } if exceptions.len() == 1
+            MeterDto::MatchWithExceptions { exceptions, .. } if exceptions.len() == 1
         ));
         assert!(matches!(
             poem.meter_analysis(2).unwrap(),
@@ -1510,7 +1542,7 @@ mod tests {
         ));
         assert!(matches!(
             poem.meter_analysis(3).unwrap(),
-            MeterDto::MatchWithExceptions { exceptions } if exceptions.len() == 1
+            MeterDto::MatchWithExceptions { exceptions, .. } if exceptions.len() == 1
         ));
     }
 
@@ -1529,6 +1561,7 @@ mod tests {
         let MeterDto::NoMatch {
             failures,
             exceptions,
+            ..
         } = poem.meter_analysis(0).unwrap()
         else {
             panic!("expected a meter mismatch");
@@ -1543,6 +1576,31 @@ mod tests {
                 actual: PronunciationStressDto::Primary,
             }]
         ));
+    }
+
+    #[wasm_bindgen_test]
+    fn meter_dto_reports_promoted_syllables() {
+        let mut poem = analyzer()
+            .open_poem(
+                vec!["thou art more lovely and more temperate".into()],
+                Some(PoemOptionsDto {
+                    meter_scheme: Some("x/x/x/x/x/".into()),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+
+        let MeterDto::Match { promotions } = poem.meter_analysis(0).unwrap() else {
+            panic!("expected a meter match");
+        };
+        // TEMPERATE's last syllable takes the line's last beat.
+        assert_eq!(
+            promotions,
+            [PromotedSyllableDto {
+                word_index: 6,
+                syllable_index: 2,
+            }]
+        );
     }
 
     // ---- returned DTO shape ------------------------------------------------
