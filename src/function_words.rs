@@ -35,13 +35,12 @@ const FUNCTION_WORDS: &[&str] = &[
 /// Whether `word` is a one-syllable function word, in any letter case, and
 /// with a curly apostrophe (’tis) or a straight one ('tis).
 pub(crate) fn is_function_word(word: &str) -> bool {
-    let normalized = word.chars().map(|c| match c {
-        '\u{2019}' => '\'',
-        c => c.to_ascii_lowercase(),
-    });
+    if word.contains('\u{2019}') {
+        return is_function_word(&word.replace('\u{2019}', "'"));
+    }
     FUNCTION_WORDS
         .iter()
-        .any(|function_word| function_word.chars().eq(normalized.clone()))
+        .any(|function_word| function_word.eq_ignore_ascii_case(word))
 }
 
 #[cfg(test)]
