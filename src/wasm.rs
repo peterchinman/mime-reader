@@ -8,13 +8,13 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     AnalyticConsonantDistanceConfig, Analyzer, CmuDictionary, Compare, ConfiguredDictionary,
-    ConsistentScoresOwned, InflectionRule, MeterExceptionConfig, MeterScheme, OwnedAlignmentStep,
-    PronouncingDictionary, PronunciationMode, PronunciationOrigin, RhymeComparisonConfig,
-    RhymeDistanceConfig, RhymeDistanceScorer, RhymeIntersectionMatchOwned, RhymePairScore,
-    RhymeScheme, RhymeScoreNormalization, Stress, TranspositionDirection, VowelHexGraphConfig,
-    WordPronunciations, WordTarget,
+    ConsistentScoresOwned, InflectionRule, MeterExceptionConfig, MeterRules, MeterScheme,
+    OwnedAlignmentStep, PronouncingDictionary, PronunciationMode, PronunciationOrigin,
+    RhymeComparisonConfig, RhymeDistanceConfig, RhymeDistanceScorer, RhymeIntersectionMatchOwned,
+    RhymePairScore, RhymeScheme, RhymeScoreNormalization, TranspositionDirection,
+    VowelHexGraphConfig, WordPronunciations, WordTarget,
     line::{Line, WordData},
-    meter::{MeterDeviation, MeterMatchResult, SyllableStress},
+    meter::{Fit, Gap, MeterDeviation, MeterMatchResult, ScannedStress, Scansion, SyllableStress},
     poem::{MeterAnalysis, Poem, PoemLineAnalysis, RhymeAnalysis},
     rhyme_scheme::RhymeCheckResult,
 };
@@ -75,12 +75,16 @@ impl WasmAnalyzer {
             rhyme_comparison_config,
             meter_exception_config,
             meter_mode,
+            meter_rules,
         } = options.unwrap_or_default();
         let meter = match meter_scheme {
-            Some(s) => Some(match meter_mode.unwrap_or(MeterModeDto::StressPattern) {
-                MeterModeDto::StressPattern => s.parse::<MeterScheme>()?,
-                MeterModeDto::SyllableCounts => MeterScheme::from_syllable_counts(&s)?,
-            }),
+            Some(s) => Some(
+                match meter_mode.unwrap_or(MeterModeDto::StressPattern) {
+                    MeterModeDto::StressPattern => s.parse::<MeterScheme>()?,
+                    MeterModeDto::SyllableCounts => MeterScheme::from_syllable_counts(&s)?,
+                }
+                .with_rules(meter_rules.map(MeterRules::from).unwrap_or_default()),
+            ),
             None => None,
         };
         let rhyme = match rhyme_scheme {
@@ -581,11 +585,12 @@ impl From<PoemLineAnalysis<'_>> for LineAnalysisDto {
 // ---- Meter ----------------------------------------------------------------
 
 /// Flattens the three core layers — `NotApplicable` / `Err` / `Ok(Match|…|NoMatch)`
-/// — into one tagged union: `{ status: "match" }`,
-/// `{ status: "match_with_exceptions", exceptions }`,
-/// `{ status: "no_match", failures, exceptions }`, `{ status: "error", message }`, or
-/// `{ status: "not_applicable" }`. `failures` and `exceptions` are deviations of the
-/// line's least-deviating reading; `exceptions` are the ones its allowance covered.
+/// — into one tagged union: `{ status: "match", scansion }`,
+/// `{ status: "match_with_exceptions", exceptions, scansion }`,
+/// `{ status: "no_match", failures, exceptions, scansion }`,
+/// `{ status: "error", message }`, or `{ status: "not_applicable" }`. `failures`
+/// and `exceptions` are the deviations of the line's scansion; `exceptions` are
+/// the ones its allowance covered.
 #[derive(Serialize, Debug, Tsify)]
 #[tsify(into_wasm_abi)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -594,13 +599,17 @@ pub enum MeterDto {
     Error {
         message: String,
     },
-    Match,
+    Match {
+        scansion: ScansionDto,
+    },
     MatchWithExceptions {
         exceptions: Vec<MeterDeviationDto>,
+        scansion: ScansionDto,
     },
     NoMatch {
         failures: Vec<MeterDeviationDto>,
         exceptions: Vec<MeterDeviationDto>,
+        scansion: ScansionDto,
     },
 }
 
@@ -612,18 +621,24 @@ impl From<MeterAnalysis<'_>> for MeterDto {
                 Err(e) => MeterDto::Error {
                     message: e.to_string(),
                 },
-                Ok(MeterMatchResult::Match) => MeterDto::Match,
-                Ok(MeterMatchResult::MatchWithExceptions { exceptions }) => {
-                    MeterDto::MatchWithExceptions {
-                        exceptions: exceptions.iter().map(MeterDeviationDto::from).collect(),
-                    }
-                }
+                Ok(MeterMatchResult::Match { scansion }) => MeterDto::Match {
+                    scansion: scansion.into(),
+                },
+                Ok(MeterMatchResult::MatchWithExceptions {
+                    exceptions,
+                    scansion,
+                }) => MeterDto::MatchWithExceptions {
+                    exceptions: exceptions.iter().map(MeterDeviationDto::from).collect(),
+                    scansion: scansion.into(),
+                },
                 Ok(MeterMatchResult::NoMatch {
                     failures,
                     exceptions,
+                    scansion,
                 }) => MeterDto::NoMatch {
                     failures: failures.iter().map(MeterDeviationDto::from).collect(),
                     exceptions: exceptions.iter().map(MeterDeviationDto::from).collect(),
+                    scansion: scansion.into(),
                 },
             },
         }
@@ -651,6 +666,9 @@ pub struct PoemOptionsDto {
     /// How `meter_scheme` is read; defaults to `"stress_pattern"`.
     #[tsify(optional)]
     meter_mode: Option<MeterModeDto>,
+    /// The optional rules a meter scan applies; by default, all of them do.
+    #[tsify(optional)]
+    meter_rules: Option<MeterRulesDto>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Tsify)]
@@ -661,6 +679,22 @@ pub enum MeterModeDto {
     StressPattern,
     /// Syllable counts or ranges such as `"8\n7-9\n5"`, each at most 100.
     SyllableCounts,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct MeterRulesDto {
+    /// Whether an unstressed syllable may be promoted to a beat when the
+    /// syllables on both sides of it are unstressed and off the beat.
+    promotion: bool,
+}
+
+impl From<MeterRulesDto> for MeterRules {
+    fn from(rules: MeterRulesDto) -> Self {
+        Self {
+            promotion: rules.promotion,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Tsify)]
@@ -677,12 +711,11 @@ pub enum MeterDeviationDto {
         word_index: usize,
         syllable_index: usize,
         expected: StressDto,
-        actual: PronunciationStressDto,
     },
     ExtraSyllable {
         word_index: usize,
         syllable_index: usize,
-        actual: PronunciationStressDto,
+        actual: ScannedStressDto,
     },
     /// `before_word_index` is the word the gap comes before, or the line's
     /// word count when the gap follows its last word.
@@ -700,12 +733,10 @@ impl From<&MeterDeviation> for MeterDeviationDto {
                 word_index,
                 syllable_index,
                 expected,
-                actual,
             } => Self::StressMismatch {
                 word_index: *word_index,
                 syllable_index: *syllable_index,
                 expected: (*expected).into(),
-                actual: (*actual).into(),
             },
             MeterDeviation::ExtraSyllable {
                 word_index,
@@ -725,6 +756,99 @@ impl From<&MeterDeviation> for MeterDeviationDto {
                 meter_syllable_index: *meter_syllable_index,
                 expected: (*expected).into(),
             },
+        }
+    }
+}
+
+/// A line's scansion: the role each syllable plays in the line's
+/// least-deviating reading, and the meter positions it leaves unfilled.
+#[derive(Serialize, Debug, Tsify)]
+pub struct ScansionDto {
+    /// One for each of the line's words.
+    words: Vec<WordScansionDto>,
+    /// Meter positions left unfilled after the last word.
+    trailing_gaps: Vec<GapDto>,
+}
+
+#[derive(Serialize, Debug, Tsify)]
+pub struct WordScansionDto {
+    /// Meter positions left unfilled before the word.
+    gaps_before: Vec<GapDto>,
+    /// The word's syllables, in the pronunciation the reading chose.
+    syllables: Vec<SyllableScansionDto>,
+}
+
+#[derive(Serialize, Debug, Tsify)]
+pub struct SyllableScansionDto {
+    stress: ScannedStressDto,
+    /// The meter position the syllable fills, or `undefined` for an extra
+    /// syllable.
+    position: Option<MeterPositionDto>,
+}
+
+#[derive(Serialize, Debug, Tsify)]
+pub struct MeterPositionDto {
+    index: usize,
+    expected: StressDto,
+    fit: FitDto,
+}
+
+#[derive(Serialize, Debug, Tsify)]
+pub struct GapDto {
+    index: usize,
+    expected: StressDto,
+}
+
+#[derive(Serialize, Debug, Tsify)]
+#[serde(rename_all = "snake_case")]
+pub enum FitDto {
+    Fits,
+    Promoted,
+    Mismatch,
+}
+
+impl From<&Scansion> for ScansionDto {
+    fn from(scansion: &Scansion) -> Self {
+        Self {
+            words: scansion
+                .words
+                .iter()
+                .map(|word| WordScansionDto {
+                    gaps_before: word.gaps_before.iter().map(GapDto::from).collect(),
+                    syllables: word
+                        .syllables
+                        .iter()
+                        .map(|syllable| SyllableScansionDto {
+                            stress: syllable.stress.into(),
+                            position: syllable.position.map(|position| MeterPositionDto {
+                                index: position.index,
+                                expected: position.expected.into(),
+                                fit: position.fit.into(),
+                            }),
+                        })
+                        .collect(),
+                })
+                .collect(),
+            trailing_gaps: scansion.trailing_gaps.iter().map(GapDto::from).collect(),
+        }
+    }
+}
+
+impl From<&Gap> for GapDto {
+    fn from(gap: &Gap) -> Self {
+        Self {
+            index: gap.index,
+            expected: gap.expected.into(),
+        }
+    }
+}
+
+impl From<Fit> for FitDto {
+    fn from(fit: Fit) -> Self {
+        match fit {
+            Fit::Fits => Self::Fits,
+            Fit::Promoted => Self::Promoted,
+            Fit::Mismatch => Self::Mismatch,
         }
     }
 }
@@ -749,18 +873,18 @@ impl From<SyllableStress> for StressDto {
 
 #[derive(Serialize, Debug, Tsify)]
 #[serde(rename_all = "snake_case")]
-pub enum PronunciationStressDto {
-    Primary,
-    Secondary,
+pub enum ScannedStressDto {
+    Stressed,
     Unstressed,
+    Ambiguous,
 }
 
-impl From<Stress> for PronunciationStressDto {
-    fn from(stress: Stress) -> Self {
+impl From<ScannedStress> for ScannedStressDto {
+    fn from(stress: ScannedStress) -> Self {
         match stress {
-            Stress::Primary => Self::Primary,
-            Stress::Secondary => Self::Secondary,
-            Stress::Unstressed => Self::Unstressed,
+            ScannedStress::Stressed => Self::Stressed,
+            ScannedStress::Unstressed => Self::Unstressed,
+            ScannedStress::Ambiguous => Self::Ambiguous,
         }
     }
 }
@@ -1291,17 +1415,17 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(
-                matches!(poem.meter_analysis(0).unwrap(), MeterDto::Match),
+                matches!(poem.meter_analysis(0).unwrap(), MeterDto::Match { .. }),
                 allow_derived
             );
             poem.update_line(0, "kettles").unwrap();
             assert_eq!(
-                matches!(poem.meter_analysis(0).unwrap(), MeterDto::Match),
+                matches!(poem.meter_analysis(0).unwrap(), MeterDto::Match { .. }),
                 allow_derived
             );
             poem.insert_line(1, "kettle's").unwrap();
             assert_eq!(
-                matches!(poem.meter_analysis(1).unwrap(), MeterDto::Match),
+                matches!(poem.meter_analysis(1).unwrap(), MeterDto::Match { .. }),
                 allow_derived
             );
         }
@@ -1417,7 +1541,10 @@ mod tests {
                 }),
             )
             .unwrap();
-        assert!(matches!(poem.meter_analysis(1).unwrap(), MeterDto::Match));
+        assert!(matches!(
+            poem.meter_analysis(1).unwrap(),
+            MeterDto::Match { .. }
+        ));
         assert!(matches!(
             poem.rhyme_analysis(1).unwrap(),
             RhymeDto::Follower { passed: true, .. }
@@ -1527,7 +1654,7 @@ mod tests {
         for index in 0..3 {
             assert!(matches!(
                 poem.meter_analysis(index).unwrap(),
-                MeterDto::Match
+                MeterDto::Match { .. }
             ));
         }
     }
@@ -1603,11 +1730,11 @@ mod tests {
 
         assert!(matches!(
             poem.meter_analysis(0).unwrap(),
-            MeterDto::MatchWithExceptions { exceptions } if exceptions.len() == 1
+            MeterDto::MatchWithExceptions { exceptions, .. } if exceptions.len() == 1
         ));
         assert!(matches!(
             poem.meter_analysis(1).unwrap(),
-            MeterDto::MatchWithExceptions { exceptions } if exceptions.len() == 1
+            MeterDto::MatchWithExceptions { exceptions, .. } if exceptions.len() == 1
         ));
         assert!(matches!(
             poem.meter_analysis(2).unwrap(),
@@ -1615,7 +1742,7 @@ mod tests {
         ));
         assert!(matches!(
             poem.meter_analysis(3).unwrap(),
-            MeterDto::MatchWithExceptions { exceptions } if exceptions.len() == 1
+            MeterDto::MatchWithExceptions { exceptions, .. } if exceptions.len() == 1
         ));
     }
 
@@ -1634,6 +1761,7 @@ mod tests {
         let MeterDto::NoMatch {
             failures,
             exceptions,
+            ..
         } = poem.meter_analysis(0).unwrap()
         else {
             panic!("expected a meter mismatch");
@@ -1645,7 +1773,107 @@ mod tests {
             [MeterDeviationDto::ExtraSyllable {
                 word_index: 0,
                 syllable_index: 1,
-                actual: PronunciationStressDto::Primary,
+                actual: ScannedStressDto::Stressed,
+            }]
+        ));
+    }
+
+    #[wasm_bindgen_test]
+    fn meter_dto_carries_the_scansion() {
+        let mut poem = analyzer()
+            .open_poem(
+                vec!["thou art more lovely and more temperate".into()],
+                Some(PoemOptionsDto {
+                    meter_scheme: Some("x/x/x/x/x/".into()),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+
+        let MeterDto::Match { scansion } = poem.meter_analysis(0).unwrap() else {
+            panic!("expected a meter match");
+        };
+        // TEMPERATE's last syllable is promoted to the line's last beat.
+        assert_eq!(scansion.words.len(), 7);
+        assert!(matches!(
+            scansion.words[6].syllables.as_slice(),
+            [
+                _,
+                _,
+                SyllableScansionDto {
+                    stress: ScannedStressDto::Stressed,
+                    position: Some(MeterPositionDto {
+                        index: 9,
+                        fit: FitDto::Promoted,
+                        ..
+                    }),
+                },
+            ]
+        ));
+    }
+
+    #[wasm_bindgen_test]
+    fn open_poem_can_turn_promotion_off() {
+        let open = |meter_rules| {
+            analyzer()
+                .open_poem(
+                    vec!["thou art more lovely and more temperate".into()],
+                    Some(PoemOptionsDto {
+                        meter_scheme: Some("x/x/x/x/x/".into()),
+                        meter_rules,
+                        ..Default::default()
+                    }),
+                )
+                .unwrap()
+        };
+
+        assert!(matches!(
+            open(None).meter_analysis(0).unwrap(),
+            MeterDto::Match { .. }
+        ));
+        assert!(matches!(
+            open(Some(MeterRulesDto { promotion: false }))
+                .meter_analysis(0)
+                .unwrap(),
+            MeterDto::NoMatch { .. }
+        ));
+    }
+
+    #[wasm_bindgen_test]
+    fn meter_dto_scansion_marks_gaps_and_extra_syllables() {
+        let mut poem = analyzer()
+            .open_poem(
+                vec![
+                    "a lover and summer evening light".into(),
+                    "hello world".into(),
+                ],
+                Some(PoemOptionsDto {
+                    meter_scheme: Some("x/x/x/x/x/\nx/".into()),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+
+        // The first line drops the second "a", leaving a gap before SUMMER.
+        let MeterDto::NoMatch { scansion, .. } = poem.meter_analysis(0).unwrap() else {
+            panic!("expected a meter mismatch");
+        };
+        assert!(matches!(
+            scansion.words[3].gaps_before.as_slice(),
+            [GapDto {
+                index: 4,
+                expected: StressDto::Unstressed,
+            }]
+        ));
+        // In the second, WORLD is extra, and no position decides its stress.
+        let MeterDto::NoMatch { scansion, .. } = poem.meter_analysis(1).unwrap() else {
+            panic!("expected a meter mismatch");
+        };
+        assert!(matches!(
+            scansion.words[1].syllables.as_slice(),
+            [SyllableScansionDto {
+                stress: ScannedStressDto::Ambiguous,
+                position: None,
             }]
         ));
     }

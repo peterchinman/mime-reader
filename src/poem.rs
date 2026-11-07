@@ -186,29 +186,33 @@ impl Poem {
 
         let raw_analyses = group
             .clone()
-            .map(|line_index| {
-                meter_scheme.deviations_for_line(&self.lines[line_index].line, line_index)
-            })
+            .map(|line_index| meter_scheme.scan_line(&self.lines[line_index].line, line_index))
             .collect::<Vec<_>>();
+        // A line that couldn't be scanned has no deviations to cover.
+        let deviation_counts: Vec<usize> = raw_analyses
+            .iter()
+            .map(|analysis| {
+                analysis
+                    .as_ref()
+                    .map_or(0, |scansion| scansion.deviations().count())
+            })
+            .collect();
 
         // Spend the allowance on the lines that deviate least, so the line that
         // strays most is the one that fails, whatever the lines' order. Equal
         // lines go in line order.
         let mut by_deviations: Vec<usize> = (0..raw_analyses.len()).collect();
-        by_deviations.sort_by_key(|&offset| raw_analyses[offset].as_ref().map_or(0, Vec::len));
+        by_deviations.sort_by_key(|&offset| deviation_counts[offset]);
         let mut allowed = vec![0; raw_analyses.len()];
         let mut remaining_exceptions = self.meter_exception_config.allowed_exceptions();
         for offset in by_deviations {
-            if let Ok(deviations) = &raw_analyses[offset] {
-                allowed[offset] = remaining_exceptions.min(deviations.len());
-                remaining_exceptions -= allowed[offset];
-            }
+            allowed[offset] = remaining_exceptions.min(deviation_counts[offset]);
+            remaining_exceptions -= allowed[offset];
         }
 
         for ((line_index, raw_analysis), allowed) in group.zip(raw_analyses).zip(allowed) {
             self.analyses[line_index].meter = AnalysisState::Ready(
-                raw_analysis
-                    .map(|deviations| MeterMatchResult::from_deviations(deviations, allowed)),
+                raw_analysis.map(|scansion| MeterMatchResult::from_scansion(scansion, allowed)),
             );
         }
 
@@ -401,7 +405,7 @@ impl Poem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CmuDictionary;
+    use crate::{CmuDictionary, Scansion};
     use std::sync::OnceLock;
 
     const DICT_PATH: &str = "data/CMUdict/cmudict-0.7b";
@@ -454,7 +458,9 @@ mod tests {
 
     fn cached_analysis() -> LineAnalysis {
         LineAnalysis {
-            meter: AnalysisState::Ready(Ok(MeterMatchResult::Match)),
+            meter: AnalysisState::Ready(Ok(MeterMatchResult::Match {
+                scansion: Scansion::default(),
+            })),
             rhyme: AnalysisState::Ready(Ok(RhymeCheckResult::Leader)),
         }
     }
@@ -491,11 +497,14 @@ mod tests {
             panic!("expected ready meter analysis, got {analysis:?}");
         };
 
-        assert_eq!(result, &Ok(MeterMatchResult::Match));
+        assert!(
+            matches!(result, Ok(MeterMatchResult::Match { .. })),
+            "{result:?}"
+        );
     }
 
     fn assert_meter_ready_with_exception_count(analysis: MeterAnalysis<'_>, expected: usize) {
-        let MeterAnalysis::Ready(Ok(MeterMatchResult::MatchWithExceptions { exceptions })) =
+        let MeterAnalysis::Ready(Ok(MeterMatchResult::MatchWithExceptions { exceptions, .. })) =
             analysis
         else {
             panic!("expected ready meter exceptions, got {analysis:?}");
@@ -510,6 +519,7 @@ mod tests {
         let MeterAnalysis::Ready(Ok(MeterMatchResult::NoMatch {
             failures,
             exceptions,
+            ..
         })) = analysis
         else {
             panic!("expected ready meter failure, got {analysis:?}");
@@ -558,7 +568,7 @@ mod tests {
         assert!(
             matches!(
                 &poem.analyses[index].meter,
-                AnalysisState::Ready(Ok(MeterMatchResult::Match))
+                AnalysisState::Ready(Ok(MeterMatchResult::Match { .. }))
             ),
             "meter analysis at index {index} was not ready: {:?}",
             poem.analyses[index]

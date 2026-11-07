@@ -8,6 +8,7 @@ pub mod analyzer;
 pub mod consonant_distance;
 pub mod dictionary;
 pub mod error;
+mod function_words;
 pub mod line;
 pub mod meter;
 pub mod phoneme;
@@ -35,8 +36,9 @@ pub use error::{
 };
 pub use line::Line;
 pub use meter::{
-    MeterDeviation, MeterExceptionConfig, MeterMatchResult, MeterScheme, MeterSpecification,
-    SyllableCountSpecification, SyllableStress,
+    Fit, Gap, MeterDeviation, MeterExceptionConfig, MeterMatchResult, MeterPosition, MeterRules,
+    MeterScheme, MeterSpecification, ScannedStress, Scansion, SyllableCountSpecification,
+    SyllableScansion, SyllableStress, WordScansion,
 };
 pub use phoneme::{Consonant, Phoneme, Stress, Vowel, VowelPhoneme};
 pub use poem::Poem;

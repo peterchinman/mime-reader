@@ -6,6 +6,7 @@ use crate::{
         MeterCheckError, ParseMeterError, ParseMeterSchemeError, ParseSyllableCountError,
         ParseSyllableCountSchemeError, UnknownWordError,
     },
+    function_words::is_function_word,
     line::{Line, WordData, WordEntry},
 };
 
@@ -27,6 +28,21 @@ struct Meter {
 #[derive(Debug)]
 pub struct MeterSpecification {
     possible_meters: HashSet<Meter>,
+    rules: MeterRules,
+}
+
+/// The optional rules a scan applies. By default, all of them do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MeterRules {
+    /// Whether an unstressed syllable may be promoted to a beat: see
+    /// [`Fit::Promoted`].
+    pub promotion: bool,
+}
+
+impl Default for MeterRules {
+    fn default() -> Self {
+        Self { promotion: true }
+    }
 }
 
 enum Segment {
@@ -109,7 +125,10 @@ impl std::str::FromStr for MeterSpecification {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let segments = parse_segments(s)?;
         let possible_meters = expand_segments(segments);
-        Ok(MeterSpecification { possible_meters })
+        Ok(MeterSpecification {
+            possible_meters,
+            rules: MeterRules::default(),
+        })
     }
 }
 
@@ -120,47 +139,54 @@ impl MeterSpecification {
                 meter: vec![SyllableStress::Either; n],
             })
             .collect();
-        MeterSpecification { possible_meters }
+        MeterSpecification {
+            possible_meters,
+            rules: MeterRules::default(),
+        }
+    }
+
+    /// Scans lines with `rules` instead of the defaults.
+    pub fn with_rules(mut self, rules: MeterRules) -> Self {
+        self.rules = rules;
+        self
     }
 
     /// Checks a line against the meter. This is a very permissive check—we make no guesses about the Meter of the Line, instead we try every pronunciation of every word and every optional section of the meter, and judge the line by the reading that deviates least.
     pub fn validate_line(&self, line: &Line) -> Result<MeterMatchResult, MeterCheckError> {
-        Ok(MeterMatchResult::from_deviations(
-            self.deviations_for_line(line)?,
-            0,
-        ))
+        Ok(MeterMatchResult::from_scansion(self.scan_line(line)?, 0))
     }
 
-    /// Returns the deviations of the line's least-deviating reading: its choice of
+    /// Scans the line: finds its least-deviating reading, a choice of
     /// pronunciations, optional-meter path, and alignment of syllables with the
-    /// meter. The analysis continues after a mismatch, so every wrong stress,
-    /// extra syllable, and missing syllable is recorded. An empty result means the
-    /// line fits.
-    pub fn deviations_for_line(&self, line: &Line) -> Result<Vec<MeterDeviation>, MeterCheckError> {
+    /// meter, and records the role each syllable plays in it. The analysis
+    /// continues after a mismatch, so every wrong stress, extra syllable, and
+    /// missing syllable is recorded. A scansion without deviations means the
+    /// line fits. Of equally deviating readings, the one promoting the fewest
+    /// syllables wins.
+    pub fn scan_line(&self, line: &Line) -> Result<Scansion, MeterCheckError> {
         let stress_patterns = line
             .words
             .iter()
-            .map(distinct_stress_patterns)
+            .map(|word| distinct_stress_patterns(word, self.rules))
             .collect::<Result<Vec<_>, _>>()?;
         let mut meters: Vec<&Meter> = self.possible_meters.iter().collect();
         meters.sort_by(|a, b| a.meter.cmp(&b.meter));
 
-        // The first meter path with the fewest deviations.
-        let mut best: Option<(usize, Alignment<'_>)> = None;
+        // The first meter path with the lowest cost.
+        let mut best: Option<(Cost, Alignment<'_>)> = None;
         for meter in meters {
-            let mut alignment = Alignment::new(&stress_patterns, &meter.meter);
-            let cost = alignment.cost_from_word(0, 0);
+            let mut alignment = Alignment::new(&stress_patterns, &meter.meter, self.rules);
+            let cost = alignment.cost_from_word(0, 0, PreviousSyllable::Unstressed);
             if best.as_ref().is_none_or(|(best_cost, _)| cost < *best_cost) {
                 best = Some((cost, alignment));
             }
-            if cost == 0 {
+            if cost == Cost::ZERO {
                 break;
             }
         }
 
-        Ok(best
-            .map(|(_, alignment)| alignment.deviations())
-            .unwrap_or_default())
+        let (_, alignment) = best.expect("a meter specification has at least one meter path");
+        Ok(alignment.scansion())
     }
 }
 
@@ -171,62 +197,289 @@ fn is_secondary_next_to_primary(stresses: &[Stress], i: usize) -> bool {
             || i > 0 && stresses.get(i - 1) == Some(&Stress::Primary))
 }
 
-/// Whether a word's syllable may stand in a meter position expecting `expected`.
-fn syllable_stress_matches_meter(
+fn is_stressed(stress: Stress) -> bool {
+    stress != Stress::Unstressed
+}
+
+/// Whether a syllable's stress is ambiguous, so that it fits any meter
+/// position.
+fn is_ambiguous(word_stresses: &[Stress], syllable_index: usize) -> bool {
+    // Assumption: single-syllable words are inherently ambiguous and match any meter position.
+    // Assumption: secondary stress adjacent to primary is ambiguous — matches any meter position
+    word_stresses.len() == 1 || is_secondary_next_to_primary(word_stresses, syllable_index)
+}
+
+/// How a word's syllable can stand in a meter position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyllableFit {
+    Fits,
+    /// An unstressed syllable on a beat, where the syllable before it allows a
+    /// promotion ([`Fit::Promoted`]). The syllable after it settles the
+    /// promotion: see [`promotion_holds`].
+    PendingPromotion,
+    Mismatch,
+}
+
+/// How a word's syllable can stand in a meter position expecting `expected`.
+/// `may_promote` is whether the syllable before it allows a promotion.
+fn syllable_fit(
     word_stresses: &[Stress],
     syllable_index: usize,
     expected: SyllableStress,
-) -> bool {
-    // Assumption: single-syllable words are inherently ambiguous and match any meter position.
-    // An Either position matches any stress.
-    if word_stresses.len() == 1 || expected == SyllableStress::Either {
-        return true;
+    may_promote: bool,
+) -> SyllableFit {
+    // An Either position matches any stress, and an ambiguous syllable any position.
+    if expected == SyllableStress::Either || is_ambiguous(word_stresses, syllable_index) {
+        return SyllableFit::Fits;
     }
-
-    match word_stresses[syllable_index] {
-        // Assumption: primary stress must match a stressed position
-        Stress::Primary => expected == SyllableStress::Stressed,
-        // Assumption: secondary stress adjacent to primary is ambiguous — matches any meter position
-        Stress::Secondary if is_secondary_next_to_primary(word_stresses, syllable_index) => true,
-        // Assumption: non-ambiguous secondary stress must match a stressed position
-        Stress::Secondary => expected == SyllableStress::Stressed,
-        // Assumption: unstressed syllables must match unstressed positions
-        Stress::Unstressed => expected == SyllableStress::Unstressed,
+    match (word_stresses[syllable_index], expected) {
+        // Assumption: primary stress, and secondary stress away from a primary, must match a
+        // stressed position, and an unstressed syllable an unstressed one, unless promoted.
+        (Stress::Primary | Stress::Secondary, SyllableStress::Stressed)
+        | (Stress::Unstressed, SyllableStress::Unstressed) => SyllableFit::Fits,
+        (Stress::Unstressed, SyllableStress::Stressed) if may_promote => {
+            SyllableFit::PendingPromotion
+        }
+        _ => SyllableFit::Mismatch,
     }
 }
 
-/// How a line fits its meter, judged by the line's least-deviating reading.
+/// A syllable beside a promotion: its stress, and whether it takes a beat,
+/// filling one and fitting it, so that the reading stresses it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Neighbor {
+    stress: Stress,
+    takes_beat: bool,
+}
+
+impl Neighbor {
+    fn filling(stress: Stress, expected: SyllableStress, fit: SyllableFit) -> Self {
+        Self {
+            stress,
+            takes_beat: expected == SyllableStress::Stressed && fit != SyllableFit::Mismatch,
+        }
+    }
+
+    fn extra(stress: Stress) -> Self {
+        Self {
+            stress,
+            takes_beat: false,
+        }
+    }
+
+    /// Whether the syllable keeps a syllable beside it from being promoted:
+    /// it does if it's stressed, or if it takes a beat. An unstressed syllable
+    /// that mismatches its beat is read unstressed, so it doesn't.
+    fn blocks_promotion(self) -> bool {
+        is_stressed(self.stress) || self.takes_beat
+    }
+}
+
+/// Whether a promotion pending on a syllable holds, given the syllable after
+/// it, or `None` at the end of the line.
+fn promotion_holds(next: Option<Neighbor>) -> bool {
+    !next.is_some_and(Neighbor::blocks_promotion)
+}
+
+/// How a line fits its meter, judged by its scansion. `failures` and
+/// `exceptions` split the scansion's deviations by the exception allowance.
 #[derive(Debug, PartialEq)]
 pub enum MeterMatchResult {
-    Match,
+    Match {
+        scansion: Scansion,
+    },
     /// Every deviation fit within the exception allowance.
     MatchWithExceptions {
         exceptions: Vec<MeterDeviation>,
+        scansion: Scansion,
     },
     /// `failures` are the deviations beyond the allowance. `exceptions` are
     /// the ones it covered, which come earlier in the line.
     NoMatch {
         failures: Vec<MeterDeviation>,
         exceptions: Vec<MeterDeviation>,
+        scansion: Scansion,
     },
+}
+
+/// A line's scansion: the role each syllable plays in the line's
+/// least-deviating reading, and the meter positions the reading leaves
+/// unfilled.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Scansion {
+    /// One for each of the line's words.
+    pub words: Vec<WordScansion>,
+    /// Meter positions left unfilled after the last word.
+    pub trailing_gaps: Vec<Gap>,
+}
+
+/// A word's part of a scansion.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WordScansion {
+    /// Meter positions left unfilled before the word.
+    pub gaps_before: Vec<Gap>,
+    /// The word's syllables, in the pronunciation the reading chose.
+    pub syllables: Vec<SyllableScansion>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyllableScansion {
+    /// How the reading stresses the syllable.
+    pub stress: ScannedStress,
+    /// The meter position the syllable fills, or `None` for an extra syllable.
+    pub position: Option<MeterPosition>,
+}
+
+/// How a scansion stresses a syllable. A syllable that fills a stressed or
+/// unstressed position and fits it, including by promotion, takes that
+/// position's stress. Any other syllable keeps its own stress: one that
+/// mismatches its position, fills an `Either` position, or is extra. There,
+/// a syllable whose own stress is ambiguous, like a one-syllable word's, is
+/// `Ambiguous`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ScannedStress {
+    Stressed,
+    Unstressed,
+    Ambiguous,
+}
+
+/// A meter position that a syllable fills.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MeterPosition {
+    pub index: usize,
+    /// The stress the meter expects there.
+    pub expected: SyllableStress,
+    /// How the syllable's stress fits the position.
+    pub fit: Fit,
+}
+
+/// How a syllable's stress fits the meter position it fills.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Fit {
+    Fits,
+    /// An unstressed syllable on a beat, promoted to a stress because the
+    /// syllables on both sides of it, in its own word or a neighboring one,
+    /// are unstressed and don't take beats themselves (Derek Attridge's
+    /// promotion). So two promotions can't sit side by side. A line's edges
+    /// count as unstressed, as in the last syllable of "thou art more lovely
+    /// and more TEM-per-ATE".
+    Promoted,
+    Mismatch,
+}
+
+/// A meter position that no syllable fills.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Gap {
+    pub index: usize,
+    /// The stress the meter expects there.
+    pub expected: SyllableStress,
+}
+
+impl Scansion {
+    /// Where the scansion departs from the meter, in line order.
+    pub fn deviations(&self) -> impl Iterator<Item = MeterDeviation> + '_ {
+        let word_count = self.words.len();
+        self.words
+            .iter()
+            .enumerate()
+            .flat_map(|(word_index, word)| {
+                let gaps = word
+                    .gaps_before
+                    .iter()
+                    .map(move |gap| gap.deviation(word_index));
+                let syllables = word.syllables.iter().enumerate().filter_map(
+                    move |(syllable_index, syllable)| {
+                        syllable.deviation(word_index, syllable_index)
+                    },
+                );
+                gaps.chain(syllables)
+            })
+            .chain(
+                self.trailing_gaps
+                    .iter()
+                    .map(move |gap| gap.deviation(word_count)),
+            )
+    }
+}
+
+impl SyllableScansion {
+    /// The syllable's deviation from the meter, if it mismatches its position
+    /// or is extra.
+    fn deviation(&self, word_index: usize, syllable_index: usize) -> Option<MeterDeviation> {
+        match self.position {
+            None => Some(MeterDeviation::ExtraSyllable {
+                word_index,
+                syllable_index,
+                actual: self.stress,
+            }),
+            Some(MeterPosition {
+                expected,
+                fit: Fit::Mismatch,
+                ..
+            }) => Some(MeterDeviation::StressMismatch {
+                word_index,
+                syllable_index,
+                expected,
+            }),
+            Some(_) => None,
+        }
+    }
+}
+
+impl ScannedStress {
+    /// A syllable's own stress, for where no meter position decides it.
+    fn own(stress: Stress, ambiguous: bool) -> Self {
+        if ambiguous {
+            Self::Ambiguous
+        } else if is_stressed(stress) {
+            Self::Stressed
+        } else {
+            Self::Unstressed
+        }
+    }
+}
+
+impl MeterPosition {
+    /// How a scansion stresses a syllable that fills the position, given the
+    /// syllable's own stress.
+    fn scanned_stress(&self, own: ScannedStress) -> ScannedStress {
+        match (self.expected, self.fit) {
+            (_, Fit::Mismatch) | (SyllableStress::Either, _) => own,
+            (SyllableStress::Stressed, _) => ScannedStress::Stressed,
+            (SyllableStress::Unstressed, _) => ScannedStress::Unstressed,
+        }
+    }
+}
+
+impl Gap {
+    /// The gap as a deviation, given the word it comes before.
+    fn deviation(&self, before_word_index: usize) -> MeterDeviation {
+        MeterDeviation::MissingSyllable {
+            before_word_index,
+            meter_syllable_index: self.index,
+            expected: self.expected,
+        }
+    }
 }
 
 /// One syllable-level departure of a line from its meter.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MeterDeviation {
-    /// A syllable whose stress doesn't fit its position in the meter.
+    /// A syllable whose stress doesn't fit its position in the meter: a
+    /// stressed syllable where the meter expects an unstressed one, or the
+    /// reverse.
     StressMismatch {
         word_index: usize,
         syllable_index: usize,
         expected: SyllableStress,
-        actual: Stress,
     },
     /// A syllable that fills no position in the meter: an extra syllable
     /// within the line, or one past the meter's end.
     ExtraSyllable {
         word_index: usize,
         syllable_index: usize,
-        actual: Stress,
+        /// How the scansion stresses the syllable.
+        actual: ScannedStress,
     },
     /// A position in the meter that no syllable fills, between words or after
     /// the line's last word.
@@ -276,10 +529,8 @@ impl MeterExceptionConfig {
 impl MeterMatchResult {
     /// Lets the allowance cover a line's first `allowed_exceptions` deviations;
     /// the rest are failures.
-    pub(crate) fn from_deviations(
-        mut deviations: Vec<MeterDeviation>,
-        allowed_exceptions: usize,
-    ) -> Self {
+    pub(crate) fn from_scansion(scansion: Scansion, allowed_exceptions: usize) -> Self {
+        let mut deviations: Vec<MeterDeviation> = scansion.deviations().collect();
         let failures = deviations.split_off(allowed_exceptions.min(deviations.len()));
         let exceptions = deviations;
 
@@ -287,17 +538,30 @@ impl MeterMatchResult {
             Self::NoMatch {
                 failures,
                 exceptions,
+                scansion,
             }
         } else if exceptions.is_empty() {
-            Self::Match
+            Self::Match { scansion }
         } else {
-            Self::MatchWithExceptions { exceptions }
+            Self::MatchWithExceptions {
+                exceptions,
+                scansion,
+            }
         }
     }
 }
 
-/// A word's distinct stress patterns, in dictionary order.
-fn distinct_stress_patterns(word: &WordEntry) -> Result<Vec<&[Stress]>, MeterCheckError> {
+const UNSTRESSED_MONOSYLLABLE: &[Stress] = &[Stress::Unstressed];
+
+/// A word's distinct stress patterns, in dictionary order, then, if `rules`
+/// allow promotion, an unstressed one for a function word with a one-syllable
+/// pronunciation. A one-syllable word fits any meter position, so the
+/// unstressed pattern only lets a neighbor be promoted, as in "as BEAU-ti-FUL
+/// as day".
+fn distinct_stress_patterns(
+    word: &WordEntry,
+    rules: MeterRules,
+) -> Result<Vec<&[Stress]>, MeterCheckError> {
     let WordData::Known { pronunciations, .. } = &word.data else {
         return Err(MeterCheckError::UnknownWord(UnknownWordError {
             word: word.word.clone(),
@@ -311,37 +575,268 @@ fn distinct_stress_patterns(word: &WordEntry) -> Result<Vec<&[Stress]>, MeterChe
             patterns.push(pattern);
         }
     }
+    if rules.promotion
+        && is_function_word(&word.word)
+        && patterns.iter().any(|pattern| pattern.len() == 1)
+        && !patterns.contains(&UNSTRESSED_MONOSYLLABLE)
+    {
+        patterns.push(UNSTRESSED_MONOSYLLABLE);
+    }
     Ok(patterns)
 }
 
-/// Finds the alignment of a line's syllables with one meter path that has the
-/// fewest deviations. A syllable either fills the next meter position, deviating
-/// if its stress doesn't fit there, or is extra; and a meter position can go
-/// unfilled between words. So a single extra or missing syllable anywhere in a
-/// line is one deviation, rather than shifting every syllable after it. Among
-/// equally good alignments, filling a position is preferred, which places an
-/// overlong line's extra syllables at its end.
+/// A reading's deviations, then its promotions. Readings compare by
+/// deviations first, and of equally deviating readings, the one promoting
+/// fewer syllables is the more natural.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct Cost {
+    deviations: usize,
+    promotions: usize,
+}
+
+impl Cost {
+    const ZERO: Self = Self::new(0, 0);
+    const DEVIATION: Self = Self::new(1, 0);
+    const PROMOTION: Self = Self::new(0, 1);
+    const MAX: Self = Self::new(usize::MAX, usize::MAX);
+
+    const fn new(deviations: usize, promotions: usize) -> Self {
+        Self {
+            deviations,
+            promotions,
+        }
+    }
+}
+
+impl std::ops::Add for Cost {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self::new(
+            self.deviations.saturating_add(other.deviations),
+            self.promotions.saturating_add(other.promotions),
+        )
+    }
+}
+
+/// What the alignment knows about the syllable before the one it's placing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreviousSyllable {
+    /// An unstressed syllable off the beat, or the start of the line.
+    Unstressed,
+    /// A syllable that keeps the next one from being promoted: see
+    /// [`Neighbor::blocks_promotion`].
+    Blocking,
+    /// A [`SyllableFit::PendingPromotion`], for the syllable being placed to
+    /// settle. It takes a beat, so that syllable can't be promoted.
+    PendingPromotion,
+}
+
+impl PreviousSyllable {
+    const COUNT: usize = 3;
+
+    fn after(neighbor: Neighbor) -> Self {
+        if neighbor.blocks_promotion() {
+            Self::Blocking
+        } else {
+            Self::Unstressed
+        }
+    }
+
+    /// Whether the syllable being placed may be promoted, so far as this one
+    /// goes.
+    fn allows_promotion(self) -> bool {
+        self == Self::Unstressed
+    }
+
+    /// What settling a promotion pending on this syllable costs, given the
+    /// syllable after it, or `None` at the end of the line.
+    fn settlement_cost(self, next: Option<Neighbor>) -> Cost {
+        match self {
+            Self::PendingPromotion if promotion_holds(next) => Cost::PROMOTION,
+            Self::PendingPromotion => Cost::DEVIATION,
+            Self::Unstressed | Self::Blocking => Cost::ZERO,
+        }
+    }
+}
+
+impl SyllableFit {
+    /// What filling a position costs, not counting a pending promotion, and
+    /// what the next syllable sees before it.
+    fn outcome(self, neighbor: Neighbor) -> (Cost, PreviousSyllable) {
+        match self {
+            Self::Fits => (Cost::ZERO, PreviousSyllable::after(neighbor)),
+            Self::PendingPromotion => (Cost::ZERO, PreviousSyllable::PendingPromotion),
+            Self::Mismatch => (Cost::DEVIATION, PreviousSyllable::after(neighbor)),
+        }
+    }
+}
+
+/// A syllable filling a meter position, as the search sees it.
+struct Filling {
+    /// The lowest cost of the rest of the line, from the syllable on.
+    cost: Cost,
+    expected: SyllableStress,
+    fit: SyllableFit,
+    /// What the next syllable sees before it.
+    next_previous: PreviousSyllable,
+}
+
+/// What a line's best alignment does at one point in the line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    /// A syllable fills the next meter position.
+    Filled {
+        word_index: usize,
+        /// The syllable's stress in the pronunciation the reading chose, and
+        /// whether it's ambiguous.
+        stress: Stress,
+        ambiguous: bool,
+        meter_index: usize,
+        expected: SyllableStress,
+        fit: SyllableFit,
+    },
+    /// A syllable fills no meter position.
+    Extra {
+        word_index: usize,
+        stress: Stress,
+        ambiguous: bool,
+    },
+    /// A meter position that no syllable fills.
+    Missing {
+        before_word_index: usize,
+        meter_index: usize,
+        expected: SyllableStress,
+    },
+}
+
+impl Step {
+    /// The syllable this step places, if it places one.
+    fn neighbor(&self) -> Option<Neighbor> {
+        match *self {
+            Self::Filled {
+                stress,
+                expected,
+                fit,
+                ..
+            } => Some(Neighbor::filling(stress, expected, fit)),
+            Self::Extra { stress, .. } => Some(Neighbor::extra(stress)),
+            Self::Missing { .. } => None,
+        }
+    }
+}
+
+impl Scansion {
+    /// The scansion of a line of `word_count` words, from its best
+    /// alignment's steps.
+    fn from_steps(steps: &[Step], word_count: usize) -> Self {
+        let mut scansion = Self {
+            words: vec![WordScansion::default(); word_count],
+            trailing_gaps: Vec::new(),
+        };
+        for (index, step) in steps.iter().enumerate() {
+            match *step {
+                Step::Filled {
+                    word_index,
+                    stress,
+                    ambiguous,
+                    meter_index,
+                    expected,
+                    fit,
+                } => {
+                    let fit = match fit {
+                        SyllableFit::Fits => Fit::Fits,
+                        // The next syllable settles a pending promotion.
+                        SyllableFit::PendingPromotion => {
+                            let next = steps[index + 1..].iter().find_map(Step::neighbor);
+                            if promotion_holds(next) {
+                                Fit::Promoted
+                            } else {
+                                Fit::Mismatch
+                            }
+                        }
+                        SyllableFit::Mismatch => Fit::Mismatch,
+                    };
+                    let position = MeterPosition {
+                        index: meter_index,
+                        expected,
+                        fit,
+                    };
+                    scansion.words[word_index].syllables.push(SyllableScansion {
+                        stress: position.scanned_stress(ScannedStress::own(stress, ambiguous)),
+                        position: Some(position),
+                    });
+                }
+                Step::Extra {
+                    word_index,
+                    stress,
+                    ambiguous,
+                } => scansion.words[word_index].syllables.push(SyllableScansion {
+                    stress: ScannedStress::own(stress, ambiguous),
+                    position: None,
+                }),
+                Step::Missing {
+                    before_word_index,
+                    meter_index,
+                    expected,
+                } => {
+                    let gap = Gap {
+                        index: meter_index,
+                        expected,
+                    };
+                    match scansion.words.get_mut(before_word_index) {
+                        Some(word) => word.gaps_before.push(gap),
+                        None => scansion.trailing_gaps.push(gap),
+                    }
+                }
+            }
+        }
+        scansion
+    }
+}
+
+/// Finds the lowest-cost alignment of a line's syllables with one meter path.
+/// A syllable either fills the next meter position, deviating if its stress
+/// doesn't fit there, or is extra; and a meter position can go unfilled
+/// between words. So a single extra or missing syllable anywhere in a line is
+/// one deviation, rather than shifting every syllable after it. Among equally
+/// good alignments, filling a position is preferred, which places an overlong
+/// line's extra syllables at its end.
 ///
-/// How the rest of a line aligns depends only on where the search is in the line
-/// and in the meter, so the fewest deviations from each such position are
-/// memoized; otherwise the search is exponential in the number of words with
-/// several stress patterns. The deviations themselves are traced once, through
-/// the memoized costs, after the search.
+/// Whether an unstressed syllable can be promoted ([`Fit::Promoted`]) depends
+/// on the syllables on both sides of it, which may be in other words. The
+/// search checks the syllable before when it places one, and leaves the
+/// promotion pending for the syllable after to settle, so it carries the
+/// previous syllable from syllable to syllable and word to word.
+///
+/// How the rest of a line aligns depends only on where the search is in the
+/// line and in the meter, and on the previous syllable, so the lowest cost
+/// from each such position is memoized; otherwise the search is exponential in
+/// the number of words with several stress patterns. After the search, the
+/// best alignment's steps are traced once, through the memoized costs, and
+/// the scansion is built from them.
 struct Alignment<'a> {
     /// Each word's distinct stress patterns.
     stress_patterns: &'a [Vec<&'a [Stress]>],
     meter: &'a [SyllableStress],
-    /// Memoized costs from the beginning of a word, by word and then meter position.
-    word_costs: Vec<Option<usize>>,
+    rules: MeterRules,
+    /// Memoized costs from the beginning of a word, by word, meter position,
+    /// and previous syllable.
+    word_costs: Vec<Option<Cost>>,
     /// Each word's stress patterns' first rows in `syllable_costs`: a pattern has
     /// one row per syllable.
     syllable_rows: Vec<Vec<usize>>,
-    /// Memoized costs from a syllable, by row and then meter position.
-    syllable_costs: Vec<Option<usize>>,
+    /// Memoized costs from a syllable, by row, meter position, and previous
+    /// syllable.
+    syllable_costs: Vec<Option<Cost>>,
 }
 
 impl<'a> Alignment<'a> {
-    fn new(stress_patterns: &'a [Vec<&'a [Stress]>], meter: &'a [SyllableStress]) -> Self {
+    fn new(
+        stress_patterns: &'a [Vec<&'a [Stress]>],
+        meter: &'a [SyllableStress],
+        rules: MeterRules,
+    ) -> Self {
         let mut row_count = 0;
         let syllable_rows = stress_patterns
             .iter()
@@ -360,14 +855,21 @@ impl<'a> Alignment<'a> {
         Self {
             stress_patterns,
             meter,
-            word_costs: vec![None; stress_patterns.len() * positions],
+            rules,
+            word_costs: vec![None; stress_patterns.len() * positions * PreviousSyllable::COUNT],
             syllable_rows,
-            syllable_costs: vec![None; row_count * positions],
+            syllable_costs: vec![None; row_count * positions * PreviousSyllable::COUNT],
         }
     }
 
-    fn word_cost_index(&self, word_index: usize, meter_index: usize) -> usize {
-        word_index * (self.meter.len() + 1) + meter_index
+    fn word_cost_index(
+        &self,
+        word_index: usize,
+        meter_index: usize,
+        previous: PreviousSyllable,
+    ) -> usize {
+        (word_index * (self.meter.len() + 1) + meter_index) * PreviousSyllable::COUNT
+            + previous as usize
     }
 
     fn syllable_cost_index(
@@ -376,189 +878,282 @@ impl<'a> Alignment<'a> {
         pattern_index: usize,
         syllable_index: usize,
         meter_index: usize,
+        previous: PreviousSyllable,
     ) -> usize {
         let row = self.syllable_rows[word_index][pattern_index] + syllable_index;
-        row * (self.meter.len() + 1) + meter_index
+        (row * (self.meter.len() + 1) + meter_index) * PreviousSyllable::COUNT + previous as usize
     }
 
-    /// The deviations of the best alignment of the whole line.
-    fn deviations(mut self) -> Vec<MeterDeviation> {
-        let mut deviations = Vec::new();
-        self.trace_from_word(0, 0, &mut deviations);
-        deviations
+    /// The scansion of the line's best alignment.
+    fn scansion(self) -> Scansion {
+        let word_count = self.stress_patterns.len();
+        Scansion::from_steps(&self.steps(), word_count)
     }
 
-    /// The fewest deviations aligning words `word_index..` with meter positions
+    /// The lowest cost aligning words `word_index..` with meter positions
     /// `meter_index..`, starting at the beginning of a word.
-    fn cost_from_word(&mut self, word_index: usize, meter_index: usize) -> usize {
+    fn cost_from_word(
+        &mut self,
+        word_index: usize,
+        meter_index: usize,
+        previous: PreviousSyllable,
+    ) -> Cost {
         if word_index == self.stress_patterns.len() {
             // Out of syllables: the rest of the meter goes unfilled.
-            return self.meter.len() - meter_index;
+            return Cost::new(self.meter.len() - meter_index, 0) + previous.settlement_cost(None);
         }
-        let memo_index = self.word_cost_index(word_index, meter_index);
+        let memo_index = self.word_cost_index(word_index, meter_index, previous);
         if let Some(cost) = self.word_costs[memo_index] {
             return cost;
         }
 
-        let mut cost = usize::MAX;
+        let mut cost = Cost::MAX;
         for pattern_index in 0..self.stress_patterns[word_index].len() {
-            cost = cost.min(self.cost_from_syllable(word_index, pattern_index, 0, meter_index));
-            if cost == 0 {
+            cost = cost.min(self.cost_from_syllable(
+                word_index,
+                pattern_index,
+                0,
+                meter_index,
+                previous,
+            ));
+            if cost == Cost::ZERO {
                 break;
             }
         }
         // Leave this meter position unfilled before the word.
-        if meter_index < self.meter.len() && cost > 0 {
-            cost = cost.min(1 + self.cost_from_word(word_index, meter_index + 1));
+        if meter_index < self.meter.len() && cost.deviations > 0 {
+            cost = cost
+                .min(Cost::DEVIATION + self.cost_from_word(word_index, meter_index + 1, previous));
         }
 
         self.word_costs[memo_index] = Some(cost);
         cost
     }
 
-    /// The fewest deviations aligning the rest of the line, from syllable
+    /// The lowest cost aligning the rest of the line, from syllable
     /// `syllable_index` of word `word_index` read with stress pattern
-    /// `pattern_index`, with meter positions `meter_index..`.
+    /// `pattern_index`, with meter positions `meter_index..`, including
+    /// settling a promotion pending on the syllable before.
     fn cost_from_syllable(
         &mut self,
         word_index: usize,
         pattern_index: usize,
         syllable_index: usize,
         meter_index: usize,
-    ) -> usize {
-        let stresses = self.stress_patterns[word_index][pattern_index];
-        if syllable_index == stresses.len() {
-            return self.cost_from_word(word_index + 1, meter_index);
+        previous: PreviousSyllable,
+    ) -> Cost {
+        if syllable_index == self.stress_patterns[word_index][pattern_index].len() {
+            return self.cost_from_word(word_index + 1, meter_index, previous);
         }
-        let memo_index =
-            self.syllable_cost_index(word_index, pattern_index, syllable_index, meter_index);
+        let memo_index = self.syllable_cost_index(
+            word_index,
+            pattern_index,
+            syllable_index,
+            meter_index,
+            previous,
+        );
         if let Some(cost) = self.syllable_costs[memo_index] {
             return cost;
         }
 
-        let mut cost = usize::MAX;
-        // The syllable fills the next meter position.
-        if let Some(&expected) = self.meter.get(meter_index) {
-            let fits = syllable_stress_matches_meter(stresses, syllable_index, expected);
-            cost = usize::from(!fits)
-                + self.cost_from_syllable(
-                    word_index,
-                    pattern_index,
-                    syllable_index + 1,
-                    meter_index + 1,
-                );
-        }
-        // The syllable is extra.
-        if cost > 0 {
-            cost = cost.min(
-                1 + self.cost_from_syllable(
-                    word_index,
-                    pattern_index,
-                    syllable_index + 1,
-                    meter_index,
-                ),
-            );
+        let mut cost = self
+            .filling(
+                word_index,
+                pattern_index,
+                syllable_index,
+                meter_index,
+                previous,
+            )
+            .map_or(Cost::MAX, |filling| filling.cost);
+        // Leaving the syllable extra costs a deviation, so it can only beat a
+        // filling that deviates.
+        if cost.deviations > 0 {
+            cost = cost.min(self.cost_as_extra(
+                word_index,
+                pattern_index,
+                syllable_index,
+                meter_index,
+                previous,
+            ));
         }
 
         self.syllable_costs[memo_index] = Some(cost);
         cost
     }
 
-    /// Appends the deviations of the best alignment from the beginning of word
-    /// `word_index`, taking the first of equally good choices in the order
-    /// [`Self::cost_from_word`] considers them.
-    fn trace_from_word(
-        &mut self,
-        word_index: usize,
-        meter_index: usize,
-        deviations: &mut Vec<MeterDeviation>,
-    ) {
-        if word_index == self.stress_patterns.len() {
-            deviations.extend((meter_index..self.meter.len()).map(|index| {
-                MeterDeviation::MissingSyllable {
-                    before_word_index: word_index,
-                    meter_syllable_index: index,
-                    expected: self.meter[index],
-                }
-            }));
-            return;
-        }
-
-        let cost = self.cost_from_word(word_index, meter_index);
-        for pattern_index in 0..self.stress_patterns[word_index].len() {
-            if self.cost_from_syllable(word_index, pattern_index, 0, meter_index) == cost {
-                return self.trace_from_syllable(
-                    word_index,
-                    pattern_index,
-                    0,
-                    meter_index,
-                    deviations,
-                );
-            }
-        }
-        deviations.push(MeterDeviation::MissingSyllable {
-            before_word_index: word_index,
-            meter_syllable_index: meter_index,
-            expected: self.meter[meter_index],
-        });
-        self.trace_from_word(word_index, meter_index + 1, deviations);
-    }
-
-    /// Appends the deviations of the best alignment from a syllable, taking the
-    /// first of equally good choices in the order [`Self::cost_from_syllable`]
-    /// considers them.
-    fn trace_from_syllable(
+    /// Syllable `syllable_index` of word `word_index`, read with stress
+    /// pattern `pattern_index`, filling meter position `meter_index`; `None`
+    /// past the end of the meter.
+    fn filling(
         &mut self,
         word_index: usize,
         pattern_index: usize,
         syllable_index: usize,
         meter_index: usize,
-        deviations: &mut Vec<MeterDeviation>,
-    ) {
+        previous: PreviousSyllable,
+    ) -> Option<Filling> {
         let stresses = self.stress_patterns[word_index][pattern_index];
-        let Some(&actual) = stresses.get(syllable_index) else {
-            return self.trace_from_word(word_index + 1, meter_index, deviations);
-        };
-
-        let cost = self.cost_from_syllable(word_index, pattern_index, syllable_index, meter_index);
-        if let Some(&expected) = self.meter.get(meter_index) {
-            let fits = syllable_stress_matches_meter(stresses, syllable_index, expected);
-            let rest = self.cost_from_syllable(
+        let stress = stresses[syllable_index];
+        let &expected = self.meter.get(meter_index)?;
+        let fit = syllable_fit(
+            stresses,
+            syllable_index,
+            expected,
+            self.rules.promotion && previous.allows_promotion(),
+        );
+        let neighbor = Neighbor::filling(stress, expected, fit);
+        let (fit_cost, next_previous) = fit.outcome(neighbor);
+        // The syllable settles a promotion pending on the one before.
+        let cost = previous.settlement_cost(Some(neighbor))
+            + fit_cost
+            + self.cost_from_syllable(
                 word_index,
                 pattern_index,
                 syllable_index + 1,
                 meter_index + 1,
+                next_previous,
             );
-            if usize::from(!fits) + rest == cost {
-                if !fits {
-                    deviations.push(MeterDeviation::StressMismatch {
-                        word_index,
-                        syllable_index,
-                        expected,
-                        actual,
-                    });
-                }
-                return self.trace_from_syllable(
+        Some(Filling {
+            cost,
+            expected,
+            fit,
+            next_previous,
+        })
+    }
+
+    /// The lowest cost of the rest of the line when syllable `syllable_index`
+    /// of word `word_index`, read with stress pattern `pattern_index`, is
+    /// extra, with meter positions `meter_index..` still to fill.
+    fn cost_as_extra(
+        &mut self,
+        word_index: usize,
+        pattern_index: usize,
+        syllable_index: usize,
+        meter_index: usize,
+        previous: PreviousSyllable,
+    ) -> Cost {
+        let neighbor =
+            Neighbor::extra(self.stress_patterns[word_index][pattern_index][syllable_index]);
+        previous.settlement_cost(Some(neighbor))
+            + Cost::DEVIATION
+            + self.cost_from_syllable(
+                word_index,
+                pattern_index,
+                syllable_index + 1,
+                meter_index,
+                PreviousSyllable::after(neighbor),
+            )
+    }
+
+    /// Where the best alignment from the beginning of word `word_index` starts
+    /// filling the meter, after any positions it leaves unfilled, and the
+    /// stress pattern it reads the word with: the first of equally good
+    /// choices in the order [`Self::cost_from_word`] considers them. `None`
+    /// past the last word.
+    fn word_start(
+        &mut self,
+        word_index: usize,
+        meter_index: usize,
+        previous: PreviousSyllable,
+    ) -> Option<(usize, usize)> {
+        if word_index == self.stress_patterns.len() {
+            return None;
+        }
+        let pattern_count = self.stress_patterns[word_index].len();
+        let mut meter_index = meter_index;
+        loop {
+            let cost = self.cost_from_word(word_index, meter_index, previous);
+            if let Some(pattern_index) = (0..pattern_count).find(|&pattern_index| {
+                self.cost_from_syllable(word_index, pattern_index, 0, meter_index, previous) == cost
+            }) {
+                return Some((meter_index, pattern_index));
+            }
+            meter_index += 1;
+        }
+    }
+
+    /// The steps of the best alignment of the whole line, in line order.
+    fn steps(mut self) -> Vec<Step> {
+        // Every meter position is filled or missing, and syllables may be extra.
+        let mut steps = Vec::with_capacity(self.meter.len());
+        let (mut word_index, mut meter_index) = (0, 0);
+        let mut previous = PreviousSyllable::Unstressed;
+        loop {
+            let start = self.word_start(word_index, meter_index, previous);
+            let filled_from = start.map_or(self.meter.len(), |(start, _)| start);
+            steps.extend((meter_index..filled_from).map(|meter_index| Step::Missing {
+                before_word_index: word_index,
+                meter_index,
+                expected: self.meter[meter_index],
+            }));
+            let Some((start, pattern_index)) = start else {
+                return steps;
+            };
+            meter_index = start;
+
+            let stresses = self.stress_patterns[word_index][pattern_index];
+            for (syllable_index, &stress) in stresses.iter().enumerate() {
+                let ambiguous = is_ambiguous(stresses, syllable_index);
+                match self.best_fill(
                     word_index,
                     pattern_index,
-                    syllable_index + 1,
-                    meter_index + 1,
-                    deviations,
-                );
+                    syllable_index,
+                    meter_index,
+                    previous,
+                ) {
+                    Some(filling) => {
+                        steps.push(Step::Filled {
+                            word_index,
+                            stress,
+                            ambiguous,
+                            meter_index,
+                            expected: filling.expected,
+                            fit: filling.fit,
+                        });
+                        meter_index += 1;
+                        previous = filling.next_previous;
+                    }
+                    None => {
+                        steps.push(Step::Extra {
+                            word_index,
+                            stress,
+                            ambiguous,
+                        });
+                        previous = PreviousSyllable::after(Neighbor::extra(stress));
+                    }
+                }
             }
+            word_index += 1;
         }
-        deviations.push(MeterDeviation::ExtraSyllable {
-            word_index,
-            syllable_index,
-            actual,
-        });
-        self.trace_from_syllable(
+    }
+
+    /// The best alignment's filling of meter position `meter_index` with
+    /// syllable `syllable_index` of word `word_index`, read with stress
+    /// pattern `pattern_index`, or `None` if it leaves the syllable extra.
+    /// Filling wins ties, as in [`Self::cost_from_syllable`].
+    fn best_fill(
+        &mut self,
+        word_index: usize,
+        pattern_index: usize,
+        syllable_index: usize,
+        meter_index: usize,
+        previous: PreviousSyllable,
+    ) -> Option<Filling> {
+        let filling = self.filling(
             word_index,
             pattern_index,
-            syllable_index + 1,
+            syllable_index,
             meter_index,
-            deviations,
+            previous,
+        )?;
+        let best = self.cost_from_syllable(
+            word_index,
+            pattern_index,
+            syllable_index,
+            meter_index,
+            previous,
         );
+        (filling.cost == best).then_some(filling)
     }
 }
 
@@ -652,6 +1247,14 @@ impl MeterScheme {
         Ok(Self { scheme })
     }
 
+    /// Scans lines with `rules` instead of the defaults.
+    pub fn with_rules(mut self, rules: MeterRules) -> Self {
+        for specification in &mut self.scheme {
+            specification.rules = rules;
+        }
+        self
+    }
+
     /// Returns the meter specification for the given line index, wrapping around the scheme if necessary.
     fn line_specification(&self, line_index: usize) -> &MeterSpecification {
         &self.scheme[line_index % self.scheme.len()]
@@ -665,13 +1268,8 @@ impl MeterScheme {
         self.line_specification(line_index).validate_line(line)
     }
 
-    pub fn deviations_for_line(
-        &self,
-        line: &Line,
-        line_index: usize,
-    ) -> Result<Vec<MeterDeviation>, MeterCheckError> {
-        self.line_specification(line_index)
-            .deviations_for_line(line)
+    pub fn scan_line(&self, line: &Line, line_index: usize) -> Result<Scansion, MeterCheckError> {
+        self.line_specification(line_index).scan_line(line)
     }
 }
 
@@ -701,7 +1299,14 @@ mod tests {
     const E: SyllableStress = SyllableStress::Either;
 
     fn assert_meter_matches(result: Result<MeterMatchResult, MeterCheckError>) {
-        assert!(matches!(result, Ok(MeterMatchResult::Match)), "{result:?}");
+        assert!(
+            matches!(result, Ok(MeterMatchResult::Match { .. })),
+            "{result:?}"
+        );
+    }
+
+    fn deviations(spec: &MeterSpecification, line: &Line) -> Vec<MeterDeviation> {
+        spec.scan_line(line).unwrap().deviations().collect()
     }
 
     fn assert_meter_no_match(
@@ -917,14 +1522,14 @@ mod tests {
                 word_index,
                 syllable_index: 0,
                 expected: S,
-                actual: Stress::Unstressed,
             })
         );
     }
 
     #[test]
     fn validate_line_reports_a_word_past_the_end_of_the_meter() {
-        // HELLO uses up the meter, leaving nothing for WORLD.
+        // HELLO uses up the meter, leaving nothing for WORLD. No position
+        // decides the one-syllable word's stress.
         let line = Line::new("hello world", dict());
         let spec: MeterSpecification = "x/".parse().unwrap();
 
@@ -933,7 +1538,7 @@ mod tests {
             [MeterDeviation::ExtraSyllable {
                 word_index: 1,
                 syllable_index: 0,
-                actual: Stress::Primary,
+                actual: ScannedStress::Ambiguous,
             }]
         );
     }
@@ -992,12 +1597,11 @@ mod tests {
         let spec: MeterSpecification = "// /x/x".parse().unwrap();
 
         assert_eq!(
-            spec.deviations_for_line(&line).unwrap(),
+            deviations(&spec, &line),
             vec![MeterDeviation::StressMismatch {
                 word_index: 0,
                 syllable_index: 0,
                 expected: S,
-                actual: Stress::Unstressed,
             }]
         );
     }
@@ -1010,15 +1614,15 @@ mod tests {
 
         // Only HELLO's first syllable fits the meter.
         assert_eq!(
-            short_spec.deviations_for_line(&line).unwrap(),
+            deviations(&short_spec, &line),
             vec![MeterDeviation::ExtraSyllable {
                 word_index: 0,
                 syllable_index: 1,
-                actual: Stress::Primary,
+                actual: ScannedStress::Stressed,
             }]
         );
         assert_eq!(
-            long_spec.deviations_for_line(&line).unwrap(),
+            deviations(&long_spec, &line),
             vec![
                 MeterDeviation::MissingSyllable {
                     before_word_index: 1,
@@ -1039,7 +1643,7 @@ mod tests {
         let line = Line::new("every", dict());
         let spec: MeterSpecification = "/x".parse().unwrap();
 
-        assert!(spec.deviations_for_line(&line).unwrap().is_empty());
+        assert!(deviations(&spec, &line).is_empty());
     }
 
     #[test]
@@ -1051,11 +1655,11 @@ mod tests {
         let spec: MeterSpecification = "x/x/x/x/x/".parse().unwrap();
 
         assert_eq!(
-            spec.deviations_for_line(&line).unwrap(),
+            deviations(&spec, &line),
             [MeterDeviation::ExtraSyllable {
                 word_index: 4,
                 syllable_index: 2,
-                actual: Stress::Unstressed,
+                actual: ScannedStress::Unstressed,
             }]
         );
     }
@@ -1067,7 +1671,7 @@ mod tests {
         // The line without its second "a": the gap falls before SUMMER.
         let dropped = Line::new("a lover and summer evening light", dict());
         assert_eq!(
-            spec.deviations_for_line(&dropped).unwrap(),
+            deviations(&spec, &dropped),
             [MeterDeviation::MissingSyllable {
                 before_word_index: 3,
                 meter_syllable_index: 4,
@@ -1078,7 +1682,7 @@ mod tests {
         // A headless line, without its first "a".
         let headless = Line::new("lover and a summer evening light", dict());
         assert_eq!(
-            spec.deviations_for_line(&headless).unwrap(),
+            deviations(&spec, &headless),
             [MeterDeviation::MissingSyllable {
                 before_word_index: 0,
                 meter_syllable_index: 0,
@@ -1093,7 +1697,459 @@ mod tests {
         let line = Line::new("never a lover dreams upon the town", dict());
         let spec: MeterSpecification = "x/x/x/x/x/".parse().unwrap();
 
-        assert_eq!(spec.deviations_for_line(&line).unwrap().len(), 2);
+        assert_eq!(deviations(&spec, &line).len(), 2);
+    }
+
+    // --- promotion ---
+
+    /// The word and syllable indices of the scansion's promoted syllables, in
+    /// line order.
+    fn promotions(scansion: &Scansion) -> Vec<(usize, usize)> {
+        let mut promotions = Vec::new();
+        for (word_index, word) in scansion.words.iter().enumerate() {
+            for (syllable_index, syllable) in word.syllables.iter().enumerate() {
+                if matches!(
+                    syllable.position,
+                    Some(MeterPosition {
+                        fit: Fit::Promoted,
+                        ..
+                    })
+                ) {
+                    promotions.push((word_index, syllable_index));
+                }
+            }
+        }
+        promotions
+    }
+
+    fn assert_meter_matches_with_promotions(
+        result: Result<MeterMatchResult, MeterCheckError>,
+        expected: &[(usize, usize)],
+    ) {
+        let Ok(MeterMatchResult::Match { scansion }) = result else {
+            panic!("expected Match, got {result:?}");
+        };
+        assert_eq!(promotions(&scansion), expected);
+    }
+
+    fn unstressed_on_beat(word_index: usize, syllable_index: usize) -> MeterDeviation {
+        MeterDeviation::StressMismatch {
+            word_index,
+            syllable_index,
+            expected: S,
+        }
+    }
+
+    #[test]
+    fn promotes_an_unstressed_syllable_between_unstressed_syllables() {
+        // ACCURACY is /xxx.
+        let line = Line::new("accuracy", dict());
+        let spec: MeterSpecification = "/x/x".parse().unwrap();
+
+        assert_meter_matches_with_promotions(spec.validate_line(&line), &[(0, 2)]);
+    }
+
+    #[test]
+    fn promotes_a_syllable_at_the_end_of_the_line() {
+        // TEMPERATE is /x or /xx. The line's end counts as unstressed.
+        let line = Line::new("thou art more lovely and more temperate", dict());
+        let spec: MeterSpecification = "x/x/x/x/x/".parse().unwrap();
+
+        assert_meter_matches_with_promotions(spec.validate_line(&line), &[(6, 2)]);
+    }
+
+    #[test]
+    fn does_not_promote_a_syllable_beside_a_stress_in_its_word() {
+        // BEAUTIFUL is /xx, so its second syllable follows a stress.
+        let line = Line::new("beautiful", dict());
+        let spec: MeterSpecification = "//x".parse().unwrap();
+
+        assert_eq!(
+            assert_meter_no_match(spec.validate_line(&line)),
+            [unstressed_on_beat(0, 1)]
+        );
+    }
+
+    #[test]
+    fn promotion_depends_on_the_first_syllable_of_the_next_word() {
+        // ARRAY is x/, but DREAM is stressed.
+        assert_meter_matches_with_promotions(
+            "x/x/x/"
+                .parse::<MeterSpecification>()
+                .unwrap()
+                .validate_line(&Line::new("a beautiful array", dict())),
+            &[(1, 2)],
+        );
+        assert_eq!(
+            assert_meter_no_match(
+                "x/x/x"
+                    .parse::<MeterSpecification>()
+                    .unwrap()
+                    .validate_line(&Line::new("a beautiful dream", dict()))
+            ),
+            [unstressed_on_beat(1, 2)]
+        );
+    }
+
+    #[test]
+    fn promotion_depends_on_the_last_syllable_of_the_previous_word() {
+        // ADRIENNE is xx/. THE can be unstressed, but SWEET is stressed.
+        let spec: MeterSpecification = "x/x/".parse().unwrap();
+
+        assert_meter_matches_with_promotions(
+            spec.validate_line(&Line::new("the adrienne", dict())),
+            &[(1, 0)],
+        );
+        assert_eq!(
+            assert_meter_no_match(spec.validate_line(&Line::new("sweet adrienne", dict()))),
+            [unstressed_on_beat(1, 0)]
+        );
+    }
+
+    #[test]
+    fn a_secondary_stress_blocks_a_neighbors_promotion() {
+        // ACCURACY is /xxx and METEORITE /xx\. In the `_` position, the last
+        // syllable is off the beat either way.
+        let spec: MeterSpecification = "/x/_".parse().unwrap();
+
+        assert_meter_matches_with_promotions(
+            spec.validate_line(&Line::new("accuracy", dict())),
+            &[(0, 2)],
+        );
+        assert_eq!(
+            deviations(&spec, &Line::new("meteorite", dict())),
+            [unstressed_on_beat(0, 2)]
+        );
+    }
+
+    #[test]
+    fn a_promotion_needs_neighbors_that_dont_take_beats() {
+        // ACCURACY is /xxx. Its third syllable is promoted, so its fourth,
+        // beside it, can't be too, and mismatches its beat. Read unstressed,
+        // the fourth doesn't block the third.
+        let scansion = scan("/x//", "accuracy");
+        assert_eq!(
+            scansion.deviations().collect::<Vec<_>>(),
+            [unstressed_on_beat(0, 3)]
+        );
+        assert_eq!(promotions(&scansion), [(0, 2)]);
+
+        // THE can be unstressed, but it takes the next beat, which blocks
+        // BEAUTIFUL's last syllable from being promoted.
+        let scansion = scan("/x//", "beautiful the");
+        assert_eq!(
+            scansion.deviations().collect::<Vec<_>>(),
+            [unstressed_on_beat(0, 2)]
+        );
+        assert!(promotions(&scansion).is_empty());
+    }
+
+    #[test]
+    fn function_words_can_go_unstressed_beside_a_promotion() {
+        // CMUdict only stresses AS, MY and 'TIS.
+        assert_meter_matches_with_promotions(
+            "x/x/x/"
+                .parse::<MeterSpecification>()
+                .unwrap()
+                .validate_line(&Line::new("As beautiful as day", dict())),
+            &[(1, 2)],
+        );
+        assert_meter_matches_with_promotions(
+            "x/x/"
+                .parse::<MeterSpecification>()
+                .unwrap()
+                .validate_line(&Line::new("my adrienne", dict())),
+            &[(1, 0)],
+        );
+        assert_meter_matches_with_promotions(
+            "x/x/"
+                .parse::<MeterSpecification>()
+                .unwrap()
+                .validate_line(&Line::new("’tis adrienne", dict())),
+            &[(1, 0)],
+        );
+    }
+
+    #[test]
+    fn promotion_reads_the_next_word_unstressed_when_it_can_be() {
+        // IS can be stressed or unstressed; unstressed, it lets BEAUTIFUL's
+        // last syllable take a beat.
+        let line = Line::new("the beautiful is never what it seems", dict());
+        let spec: MeterSpecification = "x/x/x/x/x/".parse().unwrap();
+
+        assert_meter_matches_with_promotions(spec.validate_line(&line), &[(1, 2)]);
+    }
+
+    #[test]
+    fn prefers_a_reading_without_promotions() {
+        // GENUINELY's first pronunciation is /xxx, which fits only by
+        // promoting its third syllable; its second, /x\x, fits outright.
+        let line = Line::new("genuinely", dict());
+        let spec: MeterSpecification = "/x/x".parse().unwrap();
+
+        assert_meter_matches_with_promotions(spec.validate_line(&line), &[]);
+    }
+
+    #[test]
+    fn prefers_a_meter_path_without_promotions() {
+        // Both optional sections fit ACCURACY (/xxx), but /x/x only by
+        // promoting its third syllable.
+        let line = Line::new("accuracy", dict());
+        let spec: MeterSpecification = "(/x/x)(/xxx)".parse().unwrap();
+
+        assert_meter_matches_with_promotions(spec.validate_line(&line), &[]);
+    }
+
+    #[test]
+    fn promotion_can_be_turned_off() {
+        let without_promotion = MeterRules { promotion: false };
+        let pentameter = "x/x/x/x/x/"
+            .parse::<MeterSpecification>()
+            .unwrap()
+            .with_rules(without_promotion);
+        let scansion = pentameter
+            .scan_line(&Line::new(
+                "thou art more lovely and more temperate",
+                dict(),
+            ))
+            .unwrap();
+        assert_eq!(scansion.deviations().count(), 1);
+        assert!(promotions(&scansion).is_empty());
+
+        // Nor does AS get its unstressed reading, which only serves promotion.
+        let line = Line::new("as", dict());
+        let has_unstressed_reading = |rules| {
+            distinct_stress_patterns(&line.words[0], rules)
+                .unwrap()
+                .contains(&UNSTRESSED_MONOSYLLABLE)
+        };
+        assert!(has_unstressed_reading(MeterRules::default()));
+        assert!(!has_unstressed_reading(without_promotion));
+    }
+
+    #[test]
+    fn a_failing_lines_scansion_marks_its_promotions() {
+        let line = Line::new("the beautiful is never what it", dict());
+        let spec: MeterSpecification = "x/x/x/x/x/".parse().unwrap();
+
+        let Ok(MeterMatchResult::NoMatch {
+            failures,
+            exceptions,
+            scansion,
+        }) = spec.validate_line(&line)
+        else {
+            panic!("expected NoMatch");
+        };
+        assert_eq!(
+            failures,
+            [MeterDeviation::MissingSyllable {
+                before_word_index: 6,
+                meter_syllable_index: 9,
+                expected: S,
+            }]
+        );
+        assert!(exceptions.is_empty());
+        assert_eq!(promotions(&scansion), [(1, 2)]);
+    }
+
+    #[test]
+    fn the_next_syllable_after_a_gap_settles_a_promotion() {
+        // A stressed one-syllable word blocks the promotion, though it scans
+        // unstressed on its offbeat.
+        let steps = [
+            Step::Filled {
+                word_index: 0,
+                stress: Stress::Unstressed,
+                ambiguous: false,
+                meter_index: 0,
+                expected: S,
+                fit: SyllableFit::PendingPromotion,
+            },
+            Step::Missing {
+                before_word_index: 1,
+                meter_index: 1,
+                expected: U,
+            },
+            Step::Filled {
+                word_index: 1,
+                stress: Stress::Primary,
+                ambiguous: true,
+                meter_index: 2,
+                expected: U,
+                fit: SyllableFit::Fits,
+            },
+        ];
+
+        assert_eq!(
+            Scansion::from_steps(&steps, 2),
+            Scansion {
+                words: vec![
+                    WordScansion {
+                        gaps_before: vec![],
+                        syllables: vec![SyllableScansion {
+                            stress: ScannedStress::Unstressed,
+                            position: Some(MeterPosition {
+                                index: 0,
+                                expected: S,
+                                fit: Fit::Mismatch,
+                            }),
+                        }],
+                    },
+                    WordScansion {
+                        gaps_before: vec![Gap {
+                            index: 1,
+                            expected: U,
+                        }],
+                        syllables: vec![SyllableScansion {
+                            stress: ScannedStress::Unstressed,
+                            position: Some(MeterPosition {
+                                index: 2,
+                                expected: U,
+                                fit: Fit::Fits,
+                            }),
+                        }],
+                    },
+                ],
+                trailing_gaps: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn an_extra_syllable_or_the_line_end_can_settle_a_promotion() {
+        let steps = [
+            Step::Filled {
+                word_index: 0,
+                stress: Stress::Unstressed,
+                ambiguous: false,
+                meter_index: 0,
+                expected: S,
+                fit: SyllableFit::PendingPromotion,
+            },
+            Step::Extra {
+                word_index: 0,
+                stress: Stress::Unstressed,
+                ambiguous: false,
+            },
+            Step::Filled {
+                word_index: 1,
+                stress: Stress::Unstressed,
+                ambiguous: false,
+                meter_index: 1,
+                expected: S,
+                fit: SyllableFit::PendingPromotion,
+            },
+        ];
+        let scansion = Scansion::from_steps(&steps, 2);
+
+        assert_eq!(promotions(&scansion), [(0, 0), (1, 0)]);
+        // A promoted syllable takes its beat's stress.
+        assert_eq!(
+            scansion.words[0].syllables[0].stress,
+            ScannedStress::Stressed
+        );
+    }
+
+    // --- scansion ---
+
+    fn scan(meter: &str, text: &str) -> Scansion {
+        meter
+            .parse::<MeterSpecification>()
+            .unwrap()
+            .scan_line(&Line::new(text, dict()))
+            .unwrap()
+    }
+
+    /// The scansion's stresses, a word at a time: `/` stressed, `x`
+    /// unstressed, `?` ambiguous.
+    fn marks(scansion: &Scansion) -> String {
+        scansion
+            .words
+            .iter()
+            .map(|word| {
+                word.syllables
+                    .iter()
+                    .map(|syllable| match syllable.stress {
+                        ScannedStress::Stressed => '/',
+                        ScannedStress::Unstressed => 'x',
+                        ScannedStress::Ambiguous => '?',
+                    })
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[test]
+    fn syllables_take_the_stress_of_positions_they_fit() {
+        // One-syllable words take their positions' stress, and so does
+        // TEMPERATE's promoted last syllable.
+        assert_eq!(
+            marks(&scan(
+                "x/x/x/x/x/",
+                "thou art more lovely and more temperate"
+            )),
+            "x / x /x / x /x/"
+        );
+    }
+
+    #[test]
+    fn a_mismatched_syllable_keeps_its_own_stress() {
+        // NEVER is /x where the meter expects x/.
+        assert_eq!(
+            marks(&scan("x/x/x/x/x/", "never a lover dreams upon the town")),
+            "/x x /x / x/ x /"
+        );
+        // BEAUTIFUL's last syllable can't be promoted beside DREAM, which
+        // scans unstressed on its offbeat.
+        assert_eq!(marks(&scan("x/x/x", "a beautiful dream")), "x /xx x");
+    }
+
+    #[test]
+    fn an_ambiguous_syllable_stays_ambiguous_where_no_position_decides() {
+        // BLUEBIRD is /\, its secondary stress beside the primary.
+        assert_eq!(marks(&scan("___", "the bluebird")), "? /?");
+        // WORLD is extra.
+        assert_eq!(marks(&scan("x/", "hello world")), "x/ ?");
+    }
+
+    #[test]
+    fn gaps_come_before_the_word_they_precede() {
+        // The line without its second "a".
+        let scansion = scan("x/x/x/x/x/", "a lover and summer evening light");
+        let gaps: Vec<(usize, Gap)> = scansion
+            .words
+            .iter()
+            .enumerate()
+            .flat_map(|(word_index, word)| {
+                word.gaps_before.iter().map(move |&gap| (word_index, gap))
+            })
+            .collect();
+        assert_eq!(
+            gaps,
+            [(
+                3,
+                Gap {
+                    index: 4,
+                    expected: U,
+                }
+            )]
+        );
+        assert!(scansion.trailing_gaps.is_empty());
+
+        assert_eq!(
+            scan("x///", "hello").trailing_gaps,
+            [
+                Gap {
+                    index: 2,
+                    expected: S,
+                },
+                Gap {
+                    index: 3,
+                    expected: S,
+                },
+            ]
+        );
     }
 
     // --- SyllableCountSpecification ---
@@ -1235,6 +2291,17 @@ mod tests {
                 .possible_meters
                 .contains(&meter(&[S, U]))
         );
+    }
+
+    #[test]
+    fn meter_scheme_rules_apply_to_every_line() {
+        let line = Line::new("accuracy", dict());
+        let scheme: MeterScheme = "/x/x\n/x/x".parse().unwrap();
+        assert_meter_matches(scheme.check_line(&line, 1));
+
+        let scheme = scheme.with_rules(MeterRules { promotion: false });
+        assert_meter_no_match(scheme.check_line(&line, 0));
+        assert_meter_no_match(scheme.check_line(&line, 1));
     }
 
     #[test]
