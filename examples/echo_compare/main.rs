@@ -18,6 +18,8 @@ mod metrics;
 mod mutate;
 #[cfg(not(target_arch = "wasm32"))]
 mod report;
+#[cfg(not(target_arch = "wasm32"))]
+mod search;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::Scored;
@@ -81,10 +83,13 @@ mod native {
             .map(|p| p.id())
             .collect();
         poems.retain(|p| args.max_lines.is_none_or(|max| p.lines.len() <= max));
+        if let Some(forms) = &args.forms {
+            poems.retain(|p| forms.contains(&p.form));
+        }
         for (index, poem) in poems.iter().enumerate() {
             pairs.extend(corpus::poem_pairs(poem, index));
         }
-        if args.mutations {
+        if args.mutations && args.search.is_none() {
             let lines: Vec<String> = poems.iter().flat_map(|p| p.lines.iter().cloned()).collect();
             pairs.extend(mutate::mutation_pairs(
                 &lines,
@@ -157,6 +162,10 @@ mod native {
         }
         println!("scored pairs: {}", kept.len());
         println!();
+
+        if let Some(trials) = args.search {
+            return crate::search::run(&args, trials, &poems, &kept, &lines);
+        }
 
         // Score.
         println!("== timing");

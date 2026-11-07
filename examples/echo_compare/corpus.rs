@@ -25,6 +25,10 @@ pub struct Poem {
     /// "public" or "private": the corpus directory it came from.
     pub source: String,
     pub form: String,
+    /// How closely the poem's echoes are expected to repeat: `strict`
+    /// (near-verbatim) or `loose` (reworded). From the `strictness:` header;
+    /// duplexes default to loose, everything else to strict.
+    pub strictness: String,
     pub title: String,
     pub author: String,
     pub year: Option<String>,
@@ -118,10 +122,21 @@ pub fn parse_poem(text: &str, path: &Path, source: &str) -> Result<Poem, String>
         &stanzas,
     )
     .map_err(fail)?;
+    let strictness = match header.get("strictness").map(|s| s.to_lowercase()) {
+        Some(s) if s == "strict" || s == "loose" => s,
+        Some(other) => {
+            return Err(fail(format!(
+                "strictness {other:?}: expected strict or loose"
+            )));
+        }
+        None if form == "duplex" => "loose".to_string(),
+        None => "strict".to_string(),
+    };
     Ok(Poem {
         path: path.to_path_buf(),
         source: source.to_string(),
         form,
+        strictness,
         title,
         author,
         year: header.get("year").cloned(),

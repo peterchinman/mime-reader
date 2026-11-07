@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use mime_reader::echo::{AlignerKind, EchoConfig, EchoNormalization};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub const USAGE: &str = "\
 echo_compare — score the labeled echo corpus with each aligner
@@ -21,7 +21,14 @@ USAGE: cargo run --release --example echo_compare -- [OPTIONS]
   --max-lines N      skip poems longer than N lines
   --by-poem          print the per-poem ranking table
   --dump FILE        write every scored pair (.csv or .json)
-  -h, --help         this text";
+  -h, --help         this text
+
+PARAMETER SEARCH (replaces the report):
+  --search N         try N random configs per aligner, then refine the best
+  --search-seed N    search seed (default 1)
+  --holdout F        share of each form's poems held out for testing (default 0.3)
+  --forms A,B        only use poems of these forms (e.g. pantoum,duplex)
+  --threads N        worker threads (default: all cores)";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Args {
@@ -35,6 +42,11 @@ pub struct Args {
     pub by_poem: bool,
     pub dump: Option<PathBuf>,
     pub help: bool,
+    pub search: Option<usize>,
+    pub search_seed: u64,
+    pub holdout: f64,
+    pub forms: Option<Vec<String>>,
+    pub threads: usize,
 }
 
 /// A path relative to the crate root.
@@ -60,6 +72,11 @@ impl Default for Args {
             by_poem: false,
             dump: None,
             help: false,
+            search: None,
+            search_seed: 1,
+            holdout: 0.3,
+            forms: None,
+            threads: std::thread::available_parallelism().map_or(1, |n| n.get()),
         }
     }
 }
@@ -103,6 +120,42 @@ impl Args {
                 }
                 "--by-poem" => args.by_poem = true,
                 "--dump" => args.dump = Some(PathBuf::from(value("--dump")?)),
+                "--search" => {
+                    args.search = Some(
+                        value("--search")?
+                            .parse()
+                            .map_err(|e| format!("--search: {e}"))?,
+                    )
+                }
+                "--search-seed" => {
+                    args.search_seed = value("--search-seed")?
+                        .parse()
+                        .map_err(|e| format!("--search-seed: {e}"))?
+                }
+                "--holdout" => {
+                    let f: f64 = value("--holdout")?
+                        .parse()
+                        .map_err(|e| format!("--holdout: {e}"))?;
+                    if !(0.0..1.0).contains(&f) {
+                        return Err("--holdout must be in [0, 1)".into());
+                    }
+                    args.holdout = f;
+                }
+                "--forms" => {
+                    args.forms = Some(
+                        value("--forms")?
+                            .split(',')
+                            .map(|f| f.trim().to_lowercase())
+                            .filter(|f| !f.is_empty())
+                            .collect(),
+                    )
+                }
+                "--threads" => {
+                    args.threads = value("--threads")?
+                        .parse::<usize>()
+                        .map_err(|e| format!("--threads: {e}"))?
+                        .max(1)
+                }
                 "-h" | "--help" => args.help = true,
                 other => return Err(format!("unknown option {other:?}\n\n{USAGE}")),
             }
@@ -116,27 +169,45 @@ impl Args {
 
 /// Echo-config fields to override, flat and all optional. Costs are in
 /// thousandths of a unit, as in [`EchoConfig`].
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigOverride {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub vowel_coefficient: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub consonant_coefficient: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub vowel_zero_point: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub consonant_zero_point: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub primary_weight: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub secondary_weight: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub unstressed_weight: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub gap_open: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub gap_extend: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub gap_open_repeated_consonant: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub move_cost: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub run_open: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub min_run: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reuse_penalty: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_runs: Option<usize>,
     /// "shorter" or "mean".
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub normalization: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_variants_per_line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_variant_pairs: Option<usize>,
 }
 
