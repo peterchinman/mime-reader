@@ -20,7 +20,7 @@ pub enum CmuDictionaryError {
     InvalidPhoneme(#[from] ParseArpabetError),
 }
 
-#[derive(Debug, Error, PartialEq)]
+#[derive(Debug, Clone, Error, PartialEq)]
 #[error("unknown word: {word}")]
 pub struct UnknownWordError {
     pub word: String,
@@ -102,4 +102,26 @@ pub enum MeterCheckError {
     },
     #[error(transparent)]
     UnknownWord(#[from] UnknownWordError),
+}
+
+#[derive(Debug, Clone, Error, PartialEq)]
+pub enum EchoError {
+    #[error(transparent)]
+    UnknownWord(#[from] UnknownWordError),
+    #[error("empty line")]
+    EmptyLine,
+}
+
+#[derive(Debug, Clone, Error, PartialEq)]
+pub enum ParseEchoTemplateError {
+    #[error("echo template is empty")]
+    Empty,
+    #[error("invalid echo template character '{c}' at column {}", col + 1)]
+    InvalidChar { c: char, col: usize },
+    #[error("invalid repeat count at column {}", col + 1)]
+    InvalidRepeat { col: usize },
+    #[error("echo template marks no repeated lines")]
+    NoEchoes,
+    #[error("line {} belongs to more than one echo group", index + 1)]
+    OverlappingGroups { index: usize },
 }

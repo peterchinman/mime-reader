@@ -39,9 +39,12 @@
 //!   [`AlignmentStep`]s.
 //! - `linear`: the single-state recurrence with optional adjacent-consonant
 //!   swaps (rhyme's DP).
+//! - `affine`: the three-state Gotoh recurrence in global, semi-global, local
+//!   and jump modes, with masks (echo's aligners).
 
 use crate::phoneme::{Consonant, ConsonantPhoneme, Phoneme, Stress, Vowel, VowelPhoneme};
 
+pub(crate) mod affine;
 mod gaps;
 pub(crate) mod linear;
 #[cfg(test)]

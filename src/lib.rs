@@ -8,6 +8,7 @@ pub mod align;
 pub mod analyzer;
 pub mod consonant_distance;
 pub mod dictionary;
+pub mod echo;
 pub mod error;
 mod function_words;
 pub mod line;
@@ -30,10 +31,14 @@ pub use consonant_distance::{
     AnalyticConsonantDistance, AnalyticConsonantDistanceConfig, ConsonantDistanceScorer,
 };
 pub use dictionary::{CmuDictionary, PronouncingDictionary, Pronunciations};
+pub use echo::{
+    AlignerKind, EchoAlignment, EchoConfig, EchoDetector, EchoMatch, EchoNormalization,
+    EchoTemplate, RepetitionScheme,
+};
 pub use error::{
-    CmuDictionaryError, MeterCheckError, ParseArpabetError, ParseMeterError, ParseMeterSchemeError,
-    ParseRhymeError, ParseSyllableCountError, ParseSyllableCountSchemeError, PoemEditError,
-    RhymeCheckError, UnknownWordError,
+    CmuDictionaryError, EchoError, MeterCheckError, ParseArpabetError, ParseEchoTemplateError,
+    ParseMeterError, ParseMeterSchemeError, ParseRhymeError, ParseSyllableCountError,
+    ParseSyllableCountSchemeError, PoemEditError, RhymeCheckError, UnknownWordError,
 };
 pub use line::Line;
 pub use meter::{

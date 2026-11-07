@@ -63,3 +63,152 @@ pub(crate) fn linear_global(
     }
     go(a, b, 0, 0, table, gaps, swap)
 }
+
+/// What the previous event of a partial alignment was: it decides whether a
+/// gap opens or extends, and whether the alignment may stop here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Last {
+    Start,
+    Pair,
+    GapA,
+    GapB,
+}
+
+/// The best score of `a` vs `b` under the affine model in `mode`, by
+/// enumerating every alignment directly from its definition:
+///
+/// - Global: start at (0, 0), consume everything.
+/// - SemiGlobal: start at the start of `a` or of `b`; stop on a pair (or
+///   before any) once either sequence is exhausted.
+/// - Local: start on any pair; stop after any pair; or align nothing (0).
+/// - Jump: start anywhere in `b`; all of `a` is consumed; any pair may
+///   instead pair `a_i` with any `b_j` for `move_cost`; stop at the end of
+///   `a` (not right after a gap in `a`'s partner).
+///
+/// Masked rows/columns may not be paired or gapped, nor gapped across.
+pub(crate) fn affine(
+    a: &[Phoneme],
+    b: &[Phoneme],
+    table: &ScoreTable,
+    gaps: &GapModel,
+    mode: super::affine::Mode,
+    mask: Option<&super::affine::Mask>,
+) -> i64 {
+    use super::affine::Mode;
+    use std::collections::HashMap;
+
+    struct Search<'s> {
+        a: &'s [Phoneme],
+        b: &'s [Phoneme],
+        table: &'s ScoreTable,
+        gaps: &'s GapModel,
+        mode: Mode,
+        mask: Option<&'s super::affine::Mask>,
+        memo: HashMap<(usize, usize, u8), i64>,
+    }
+
+    impl Search<'_> {
+        fn row_ok(&self, i: usize) -> bool {
+            self.mask.is_none_or(|mask| !mask.rows[i])
+        }
+        fn col_ok(&self, j: usize) -> bool {
+            self.mask.is_none_or(|mask| !mask.cols[j])
+        }
+        fn pair(&self, i: usize, j: usize) -> Option<i64> {
+            (self.row_ok(i) && self.col_ok(j)).then(|| self.table.score(&self.a[i], &self.b[j]))
+        }
+
+        fn go(&mut self, i: usize, j: usize, last: Last) -> i64 {
+            let key = (i, j, last as u8);
+            if let Some(&known) = self.memo.get(&key) {
+                return known;
+            }
+            let (n, m) = (self.a.len(), self.b.len());
+            let mut best = NEG_INF;
+            let may_stop = match self.mode {
+                Mode::Global => i == n && j == m,
+                Mode::SemiGlobal => matches!(last, Last::Start | Last::Pair) && (i == n || j == m),
+                Mode::Local => last == Last::Pair,
+                Mode::Jump { .. } => i == n && last != Last::GapB,
+            };
+            if may_stop {
+                best = 0;
+            }
+            if i < n
+                && j < m
+                && let Some(score) = self.pair(i, j)
+            {
+                best = best.max((score + self.go(i + 1, j + 1, Last::Pair)).max(NEG_INF));
+            }
+            if i < n && self.row_ok(i) && (j == 0 || self.col_ok(j - 1)) {
+                let open = if last == Last::GapA {
+                    0
+                } else {
+                    self.gaps.open_cost(&self.a[i], prev(self.a, i))
+                };
+                let cost = open + self.gaps.extend_cost(&self.a[i], prev(self.a, i));
+                best = best.max((self.go(i + 1, j, Last::GapA) - cost).max(NEG_INF));
+            }
+            if j < m && self.col_ok(j) && (i == 0 || self.row_ok(i - 1)) {
+                let open = if last == Last::GapB {
+                    0
+                } else {
+                    self.gaps.open_cost(&self.b[j], prev(self.b, j))
+                };
+                let cost = open + self.gaps.extend_cost(&self.b[j], prev(self.b, j));
+                best = best.max((self.go(i, j + 1, Last::GapB) - cost).max(NEG_INF));
+            }
+            if let Mode::Jump { move_cost } = self.mode
+                && i < n
+            {
+                for target in 0..m {
+                    if let Some(score) = self.pair(i, target) {
+                        let rest = self.go(i + 1, target + 1, Last::Pair);
+                        best = best.max((score - move_cost + rest).max(NEG_INF));
+                    }
+                }
+            }
+            self.memo.insert(key, best);
+            best
+        }
+    }
+
+    let mut search = Search {
+        a,
+        b,
+        table,
+        gaps,
+        mode,
+        mask,
+        memo: HashMap::new(),
+    };
+    let (n, m) = (a.len(), b.len());
+    match mode {
+        Mode::Global => search.go(0, 0, Last::Start),
+        Mode::SemiGlobal => {
+            let mut best = NEG_INF;
+            for i in 0..=n {
+                best = best.max(search.go(i, 0, Last::Start));
+            }
+            for j in 0..=m {
+                best = best.max(search.go(0, j, Last::Start));
+            }
+            best
+        }
+        Mode::Local => {
+            let mut best = 0;
+            for i in 0..n {
+                for j in 0..m {
+                    if let Some(score) = search.pair(i, j) {
+                        best = best.max(score + search.go(i + 1, j + 1, Last::Pair));
+                    }
+                }
+            }
+            best
+        }
+        Mode::Jump { .. } => (0..=m)
+            .map(|j| search.go(0, j, Last::Start))
+            .max()
+            .unwrap_or(NEG_INF),
+    }
+}
