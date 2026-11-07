@@ -186,56 +186,41 @@ fn is_ambiguous(word_stresses: &[Stress], syllable_index: usize) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SyllableFit {
     Fits,
-    /// An unstressed syllable on a beat after an unstressed syllable:
-    /// promoted if the next syllable is unstressed or the line ends, and
-    /// otherwise a mismatch.
-    PromotedIfNextUnstressed,
+    /// An unstressed syllable on a beat, where the syllable before it allows a
+    /// promotion ([`Fit::Promoted`]). The syllable after it settles the
+    /// promotion: see [`promotion_holds`].
+    PendingPromotion,
     Mismatch,
 }
 
-impl SyllableFit {
-    /// What filling the position costs, not counting a pending promotion,
-    /// and what the next syllable sees before it.
-    fn outcome(self, stress: Stress) -> (Cost, PreviousSyllable) {
-        match self {
-            Self::Fits => (Cost::ZERO, PreviousSyllable::of(stress)),
-            Self::PromotedIfNextUnstressed => (Cost::ZERO, PreviousSyllable::PendingPromotion),
-            Self::Mismatch => (Cost::DEVIATION, PreviousSyllable::of(stress)),
-        }
-    }
-}
-
 /// How a word's syllable can stand in a meter position expecting `expected`.
-/// `previous_stressed` is whether the syllable before it in the line is
-/// stressed.
+/// `may_promote` is whether the syllable before it allows a promotion.
 fn syllable_fit(
     word_stresses: &[Stress],
     syllable_index: usize,
     expected: SyllableStress,
-    previous_stressed: bool,
+    may_promote: bool,
 ) -> SyllableFit {
     // An Either position matches any stress, and an ambiguous syllable any position.
     if expected == SyllableStress::Either || is_ambiguous(word_stresses, syllable_index) {
         return SyllableFit::Fits;
     }
-
-    let fits = match word_stresses[syllable_index] {
-        // Assumption: primary stress must match a stressed position
-        Stress::Primary => expected == SyllableStress::Stressed,
-        // Assumption: non-ambiguous secondary stress must match a stressed position
-        Stress::Secondary => expected == SyllableStress::Stressed,
-        Stress::Unstressed if expected == SyllableStress::Unstressed => true,
-        // Promotion: an unstressed syllable may fill a stressed position when the
-        // syllables on both sides of it are unstressed. The line's edges count
-        // as unstressed. The syllable after it settles the promotion.
-        Stress::Unstressed if previous_stressed => false,
-        Stress::Unstressed => return SyllableFit::PromotedIfNextUnstressed,
-    };
-    if fits {
-        SyllableFit::Fits
-    } else {
-        SyllableFit::Mismatch
+    match (word_stresses[syllable_index], expected) {
+        // Assumption: primary stress, and secondary stress away from a primary, must match a
+        // stressed position, and an unstressed syllable an unstressed one, unless promoted.
+        (Stress::Primary | Stress::Secondary, SyllableStress::Stressed)
+        | (Stress::Unstressed, SyllableStress::Unstressed) => SyllableFit::Fits,
+        (Stress::Unstressed, SyllableStress::Stressed) if may_promote => {
+            SyllableFit::PendingPromotion
+        }
+        _ => SyllableFit::Mismatch,
     }
+}
+
+/// Whether a promotion pending on a syllable holds, given the stress of the
+/// syllable after it, or `None` at the end of the line.
+fn promotion_holds(next: Option<Stress>) -> bool {
+    !next.is_some_and(is_stressed)
 }
 
 /// How a line fits its meter, judged by its scansion. `failures` and
@@ -314,10 +299,11 @@ pub struct MeterPosition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Fit {
     Fits,
-    /// An unstressed syllable on a beat, between unstressed syllables in its
-    /// own word or a neighboring one (Derek Attridge's promotion). A line's
-    /// edges count as unstressed, as in the last syllable of "thou art more
-    /// lovely and more TEM-per-ATE".
+    /// An unstressed syllable on a beat, promoted to a stress because the
+    /// syllables on both sides of it, in its own word or a neighboring one,
+    /// are unstressed (Derek Attridge's promotion). A line's edges count as
+    /// unstressed, as in the last syllable of "thou art more lovely and more
+    /// TEM-per-ATE".
     Promoted,
     Mismatch,
 }
@@ -575,9 +561,8 @@ enum PreviousSyllable {
     /// An unstressed syllable, or the start of the line.
     Unstressed,
     Stressed,
-    /// An unstressed syllable on a beat after an unstressed syllable:
-    /// promoted if the syllable after it is unstressed too or the line ends,
-    /// and otherwise a mismatch.
+    /// A [`SyllableFit::PendingPromotion`], for the syllable being placed to
+    /// settle.
     PendingPromotion,
 }
 
@@ -592,19 +577,43 @@ impl PreviousSyllable {
         }
     }
 
-    fn is_stressed(self) -> bool {
-        self == Self::Stressed
+    /// Whether the syllable being placed may be promoted, so far as this one
+    /// goes.
+    fn allows_promotion(self) -> bool {
+        self != Self::Stressed
     }
 
-    /// What a pending promotion costs once the syllable after it is known.
-    /// `None` is the end of the line, which counts as unstressed.
-    fn resolution_cost(self, next: Option<Stress>) -> Cost {
+    /// What settling a promotion pending on this syllable costs, given the
+    /// stress of the syllable after it, or `None` at the end of the line.
+    fn settlement_cost(self, next: Option<Stress>) -> Cost {
         match self {
-            Self::PendingPromotion if next.is_some_and(is_stressed) => Cost::DEVIATION,
-            Self::PendingPromotion => Cost::PROMOTION,
+            Self::PendingPromotion if promotion_holds(next) => Cost::PROMOTION,
+            Self::PendingPromotion => Cost::DEVIATION,
             Self::Unstressed | Self::Stressed => Cost::ZERO,
         }
     }
+}
+
+impl SyllableFit {
+    /// What filling a position costs, not counting a pending promotion, and
+    /// what the next syllable sees before it.
+    fn outcome(self, stress: Stress) -> (Cost, PreviousSyllable) {
+        match self {
+            Self::Fits => (Cost::ZERO, PreviousSyllable::of(stress)),
+            Self::PendingPromotion => (Cost::ZERO, PreviousSyllable::PendingPromotion),
+            Self::Mismatch => (Cost::DEVIATION, PreviousSyllable::of(stress)),
+        }
+    }
+}
+
+/// A syllable filling a meter position, as the search sees it.
+struct Filling {
+    /// The lowest cost of the rest of the line, from the syllable on.
+    cost: Cost,
+    expected: SyllableStress,
+    fit: SyllableFit,
+    /// What the next syllable sees before it.
+    next_previous: PreviousSyllable,
 }
 
 /// What a line's best alignment does at one point in the line.
@@ -665,14 +674,13 @@ impl Scansion {
                 } => {
                     let fit = match fit {
                         SyllableFit::Fits => Fit::Fits,
-                        // The next syllable settles a promotion; the line's end
-                        // counts as unstressed.
-                        SyllableFit::PromotedIfNextUnstressed => {
+                        // The next syllable settles a pending promotion.
+                        SyllableFit::PendingPromotion => {
                             let next = steps[index + 1..].iter().find_map(Step::syllable_stress);
-                            if next.is_some_and(is_stressed) {
-                                Fit::Mismatch
-                            } else {
+                            if promotion_holds(next) {
                                 Fit::Promoted
+                            } else {
+                                Fit::Mismatch
                             }
                         }
                         SyllableFit::Mismatch => Fit::Mismatch,
@@ -723,12 +731,11 @@ impl Scansion {
 /// good alignments, filling a position is preferred, which places an overlong
 /// line's extra syllables at its end.
 ///
-/// Whether an unstressed syllable can be promoted to a beat depends on the
-/// syllables on both sides of it, which may be in other words. The search
-/// checks the syllable before when it places one, and leaves the promotion
-/// pending for the syllable after to settle. So it carries the previous
-/// syllable, pending promotion and all, from syllable to syllable and word to
-/// word.
+/// Whether an unstressed syllable can be promoted ([`Fit::Promoted`]) depends
+/// on the syllables on both sides of it, which may be in other words. The
+/// search checks the syllable before when it places one, and leaves the
+/// promotion pending for the syllable after to settle, so it carries the
+/// previous syllable from syllable to syllable and word to word.
 ///
 /// How the rest of a line aligns depends only on where the search is in the
 /// line and in the meter, and on the previous syllable, so the lowest cost
@@ -815,7 +822,7 @@ impl<'a> Alignment<'a> {
     ) -> Cost {
         if word_index == self.stress_patterns.len() {
             // Out of syllables: the rest of the meter goes unfilled.
-            return Cost::new(self.meter.len() - meter_index, 0) + previous.resolution_cost(None);
+            return Cost::new(self.meter.len() - meter_index, 0) + previous.settlement_cost(None);
         }
         let memo_index = self.word_cost_index(word_index, meter_index, previous);
         if let Some(cost) = self.word_costs[memo_index] {
@@ -857,10 +864,9 @@ impl<'a> Alignment<'a> {
         meter_index: usize,
         previous: PreviousSyllable,
     ) -> Cost {
-        let stresses = self.stress_patterns[word_index][pattern_index];
-        let Some(&stress) = stresses.get(syllable_index) else {
+        if syllable_index == self.stress_patterns[word_index][pattern_index].len() {
             return self.cost_from_word(word_index + 1, meter_index, previous);
-        };
+        }
         let memo_index = self.syllable_cost_index(
             word_index,
             pattern_index,
@@ -872,38 +878,91 @@ impl<'a> Alignment<'a> {
             return cost;
         }
 
-        let mut cost = Cost::MAX;
-        // The syllable fills the next meter position.
-        if let Some(&expected) = self.meter.get(meter_index) {
-            let fit = syllable_fit(stresses, syllable_index, expected, previous.is_stressed());
-            let (fit_cost, next_previous) = fit.outcome(stress);
-            cost = fit_cost
-                + self.cost_from_syllable(
-                    word_index,
-                    pattern_index,
-                    syllable_index + 1,
-                    meter_index + 1,
-                    next_previous,
-                );
-        }
-        // The syllable is extra.
+        let mut cost = self
+            .filling(
+                word_index,
+                pattern_index,
+                syllable_index,
+                meter_index,
+                previous,
+            )
+            .map_or(Cost::MAX, |filling| filling.cost);
+        // Leaving the syllable extra costs a deviation, so it can only beat a
+        // filling that deviates.
         if cost.deviations > 0 {
-            cost = cost.min(
-                Cost::DEVIATION
-                    + self.cost_from_syllable(
-                        word_index,
-                        pattern_index,
-                        syllable_index + 1,
-                        meter_index,
-                        PreviousSyllable::of(stress),
-                    ),
-            );
+            cost = cost.min(self.cost_as_extra(
+                word_index,
+                pattern_index,
+                syllable_index,
+                meter_index,
+                previous,
+            ));
         }
-        // This syllable settles a promotion pending on the one before.
-        let cost = previous.resolution_cost(Some(stress)) + cost;
 
         self.syllable_costs[memo_index] = Some(cost);
         cost
+    }
+
+    /// Syllable `syllable_index` of word `word_index`, read with stress
+    /// pattern `pattern_index`, filling meter position `meter_index`; `None`
+    /// past the end of the meter.
+    fn filling(
+        &mut self,
+        word_index: usize,
+        pattern_index: usize,
+        syllable_index: usize,
+        meter_index: usize,
+        previous: PreviousSyllable,
+    ) -> Option<Filling> {
+        let stresses = self.stress_patterns[word_index][pattern_index];
+        let stress = stresses[syllable_index];
+        let &expected = self.meter.get(meter_index)?;
+        let fit = syllable_fit(
+            stresses,
+            syllable_index,
+            expected,
+            previous.allows_promotion(),
+        );
+        let (fit_cost, next_previous) = fit.outcome(stress);
+        // The syllable settles a promotion pending on the one before.
+        let cost = previous.settlement_cost(Some(stress))
+            + fit_cost
+            + self.cost_from_syllable(
+                word_index,
+                pattern_index,
+                syllable_index + 1,
+                meter_index + 1,
+                next_previous,
+            );
+        Some(Filling {
+            cost,
+            expected,
+            fit,
+            next_previous,
+        })
+    }
+
+    /// The lowest cost of the rest of the line when syllable `syllable_index`
+    /// of word `word_index`, read with stress pattern `pattern_index`, is
+    /// extra, with meter positions `meter_index..` still to fill.
+    fn cost_as_extra(
+        &mut self,
+        word_index: usize,
+        pattern_index: usize,
+        syllable_index: usize,
+        meter_index: usize,
+        previous: PreviousSyllable,
+    ) -> Cost {
+        let stress = self.stress_patterns[word_index][pattern_index][syllable_index];
+        previous.settlement_cost(Some(stress))
+            + Cost::DEVIATION
+            + self.cost_from_syllable(
+                word_index,
+                pattern_index,
+                syllable_index + 1,
+                meter_index,
+                PreviousSyllable::of(stress),
+            )
     }
 
     /// Where the best alignment from the beginning of word `word_index` starts
@@ -962,17 +1021,17 @@ impl<'a> Alignment<'a> {
                     meter_index,
                     previous,
                 ) {
-                    Some((expected, fit)) => {
+                    Some(filling) => {
                         steps.push(Step::Filled {
                             word_index,
                             stress,
                             ambiguous,
                             meter_index,
-                            expected,
-                            fit,
+                            expected: filling.expected,
+                            fit: filling.fit,
                         });
                         meter_index += 1;
-                        previous = fit.outcome(stress).1;
+                        previous = filling.next_previous;
                     }
                     None => {
                         steps.push(Step::Extra {
@@ -988,11 +1047,10 @@ impl<'a> Alignment<'a> {
         }
     }
 
-    /// The expected stress and the fit, if the best alignment from syllable
-    /// `syllable_index` of word `word_index`, read with stress pattern
-    /// `pattern_index`, has it fill meter position `meter_index`; `None` if
-    /// the syllable is extra. Filling wins ties, as in
-    /// [`Self::cost_from_syllable`].
+    /// The best alignment's filling of meter position `meter_index` with
+    /// syllable `syllable_index` of word `word_index`, read with stress
+    /// pattern `pattern_index`, or `None` if it leaves the syllable extra.
+    /// Filling wins ties, as in [`Self::cost_from_syllable`].
     fn best_fill(
         &mut self,
         word_index: usize,
@@ -1000,21 +1058,14 @@ impl<'a> Alignment<'a> {
         syllable_index: usize,
         meter_index: usize,
         previous: PreviousSyllable,
-    ) -> Option<(SyllableStress, SyllableFit)> {
-        let stresses = self.stress_patterns[word_index][pattern_index];
-        let stress = stresses[syllable_index];
-        let &expected = self.meter.get(meter_index)?;
-        let fit = syllable_fit(stresses, syllable_index, expected, previous.is_stressed());
-        let (fit_cost, next_previous) = fit.outcome(stress);
-        let filled = previous.resolution_cost(Some(stress))
-            + fit_cost
-            + self.cost_from_syllable(
-                word_index,
-                pattern_index,
-                syllable_index + 1,
-                meter_index + 1,
-                next_previous,
-            );
+    ) -> Option<Filling> {
+        let filling = self.filling(
+            word_index,
+            pattern_index,
+            syllable_index,
+            meter_index,
+            previous,
+        )?;
         let best = self.cost_from_syllable(
             word_index,
             pattern_index,
@@ -1022,7 +1073,7 @@ impl<'a> Alignment<'a> {
             meter_index,
             previous,
         );
-        (filled == best).then_some((expected, fit))
+        (filling.cost == best).then_some(filling)
     }
 }
 
@@ -1749,7 +1800,7 @@ mod tests {
             ambiguous: false,
             meter_index,
             expected: S,
-            fit: SyllableFit::PromotedIfNextUnstressed,
+            fit: SyllableFit::PendingPromotion,
         }
     }
 
