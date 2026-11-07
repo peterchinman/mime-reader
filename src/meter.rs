@@ -1673,7 +1673,7 @@ mod tests {
 
     #[test]
     fn function_words_can_go_unstressed_beside_a_promotion() {
-        // CMUdict only stresses AS and MY.
+        // CMUdict only stresses AS, MY and 'TIS.
         assert_meter_matches_with_promotions(
             "x/x/x/"
                 .parse::<MeterSpecification>()
@@ -1686,6 +1686,13 @@ mod tests {
                 .parse::<MeterSpecification>()
                 .unwrap()
                 .validate_line(&Line::new("my adrienne", dict())),
+            &[promoted(1, 0)],
+        );
+        assert_meter_matches_with_promotions(
+            "x/x/"
+                .parse::<MeterSpecification>()
+                .unwrap()
+                .validate_line(&Line::new("’tis adrienne", dict())),
             &[promoted(1, 0)],
         );
     }
