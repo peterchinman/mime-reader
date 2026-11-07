@@ -244,32 +244,34 @@ fn syllable_fit(
     }
 }
 
-/// A syllable beside a promotion: its stress, and whether it's on a beat.
+/// A syllable beside a promotion: its stress, and whether it takes a beat,
+/// filling one and fitting it, so that the reading stresses it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Neighbor {
     stress: Stress,
-    on_beat: bool,
+    takes_beat: bool,
 }
 
 impl Neighbor {
-    fn filling(stress: Stress, expected: SyllableStress) -> Self {
+    fn filling(stress: Stress, expected: SyllableStress, fit: SyllableFit) -> Self {
         Self {
             stress,
-            on_beat: expected == SyllableStress::Stressed,
+            takes_beat: expected == SyllableStress::Stressed && fit != SyllableFit::Mismatch,
         }
     }
 
     fn extra(stress: Stress) -> Self {
         Self {
             stress,
-            on_beat: false,
+            takes_beat: false,
         }
     }
 
-    /// Whether the syllable keeps a syllable beside it from being promoted.
-    /// A promoted beat needs unstressed offbeats on both sides.
+    /// Whether the syllable keeps a syllable beside it from being promoted:
+    /// it does if it's stressed, or if it takes a beat. An unstressed syllable
+    /// that mismatches its beat is read unstressed, so it doesn't.
     fn blocks_promotion(self) -> bool {
-        is_stressed(self.stress) || self.on_beat
+        is_stressed(self.stress) || self.takes_beat
     }
 }
 
@@ -357,9 +359,10 @@ pub enum Fit {
     Fits,
     /// An unstressed syllable on a beat, promoted to a stress because the
     /// syllables on both sides of it, in its own word or a neighboring one,
-    /// are unstressed and off the beat (Derek Attridge's promotion). A line's
-    /// edges count as unstressed offbeats, as in the last syllable of "thou
-    /// art more lovely and more TEM-per-ATE".
+    /// are unstressed and don't take beats themselves (Derek Attridge's
+    /// promotion). So two promotions can't sit side by side. A line's edges
+    /// count as unstressed, as in the last syllable of "thou art more lovely
+    /// and more TEM-per-ATE".
     Promoted,
     Mismatch,
 }
@@ -625,7 +628,7 @@ enum PreviousSyllable {
     /// [`Neighbor::blocks_promotion`].
     Blocking,
     /// A [`SyllableFit::PendingPromotion`], for the syllable being placed to
-    /// settle. It's on a beat, so that syllable can't be promoted.
+    /// settle. It takes a beat, so that syllable can't be promoted.
     PendingPromotion,
 }
 
@@ -712,8 +715,11 @@ impl Step {
     fn neighbor(&self) -> Option<Neighbor> {
         match *self {
             Self::Filled {
-                stress, expected, ..
-            } => Some(Neighbor::filling(stress, expected)),
+                stress,
+                expected,
+                fit,
+                ..
+            } => Some(Neighbor::filling(stress, expected, fit)),
             Self::Extra { stress, .. } => Some(Neighbor::extra(stress)),
             Self::Missing { .. } => None,
         }
@@ -995,7 +1001,7 @@ impl<'a> Alignment<'a> {
             expected,
             self.rules.promotion && previous.allows_promotion(),
         );
-        let neighbor = Neighbor::filling(stress, expected);
+        let neighbor = Neighbor::filling(stress, expected, fit);
         let (fit_cost, next_previous) = fit.outcome(neighbor);
         // The syllable settles a promotion pending on the one before.
         let cost = previous.settlement_cost(Some(neighbor))
@@ -1817,21 +1823,25 @@ mod tests {
     }
 
     #[test]
-    fn a_promoted_beat_needs_offbeats_on_both_sides() {
-        let spec: MeterSpecification = "/x//".parse().unwrap();
-
-        // ACCURACY is /xxx. Its last two syllables can't both be promoted to
-        // beats side by side.
+    fn a_promotion_needs_neighbors_that_dont_take_beats() {
+        // ACCURACY is /xxx. Its third syllable is promoted, so its fourth,
+        // beside it, can't be too, and mismatches its beat. Read unstressed,
+        // the fourth doesn't block the third.
+        let scansion = scan("/x//", "accuracy");
         assert_eq!(
-            deviations(&spec, &Line::new("accuracy", dict())),
-            [unstressed_on_beat(0, 2), unstressed_on_beat(0, 3)]
+            scansion.deviations().collect::<Vec<_>>(),
+            [unstressed_on_beat(0, 3)]
         );
-        // THE can be unstressed, but on a beat it blocks BEAUTIFUL's last
-        // syllable from being promoted.
+        assert_eq!(promotions(&scansion), [(0, 2)]);
+
+        // THE can be unstressed, but it takes the next beat, which blocks
+        // BEAUTIFUL's last syllable from being promoted.
+        let scansion = scan("/x//", "beautiful the");
         assert_eq!(
-            deviations(&spec, &Line::new("beautiful the", dict())),
+            scansion.deviations().collect::<Vec<_>>(),
             [unstressed_on_beat(0, 2)]
         );
+        assert!(promotions(&scansion).is_empty());
     }
 
     #[test]
