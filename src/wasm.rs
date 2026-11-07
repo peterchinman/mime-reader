@@ -8,11 +8,11 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     AnalyticConsonantDistanceConfig, Analyzer, CmuDictionary, Compare, ConfiguredDictionary,
-    ConsistentScoresOwned, InflectionRule, MeterExceptionConfig, MeterScheme, OwnedAlignmentStep,
-    PronouncingDictionary, PronunciationMode, PronunciationOrigin, RhymeComparisonConfig,
-    RhymeDistanceConfig, RhymeDistanceScorer, RhymeIntersectionMatchOwned, RhymePairScore,
-    RhymeScheme, RhymeScoreNormalization, TranspositionDirection, VowelHexGraphConfig,
-    WordPronunciations, WordTarget,
+    ConsistentScoresOwned, InflectionRule, MeterExceptionConfig, MeterRules, MeterScheme,
+    OwnedAlignmentStep, PronouncingDictionary, PronunciationMode, PronunciationOrigin,
+    RhymeComparisonConfig, RhymeDistanceConfig, RhymeDistanceScorer, RhymeIntersectionMatchOwned,
+    RhymePairScore, RhymeScheme, RhymeScoreNormalization, TranspositionDirection,
+    VowelHexGraphConfig, WordPronunciations, WordTarget,
     line::{Line, WordData},
     meter::{Fit, Gap, MeterDeviation, MeterMatchResult, ScannedStress, Scansion, SyllableStress},
     poem::{MeterAnalysis, Poem, PoemLineAnalysis, RhymeAnalysis},
@@ -75,12 +75,16 @@ impl WasmAnalyzer {
             rhyme_comparison_config,
             meter_exception_config,
             meter_mode,
+            meter_rules,
         } = options.unwrap_or_default();
         let meter = match meter_scheme {
-            Some(s) => Some(match meter_mode.unwrap_or(MeterModeDto::StressPattern) {
-                MeterModeDto::StressPattern => s.parse::<MeterScheme>()?,
-                MeterModeDto::SyllableCounts => MeterScheme::from_syllable_counts(&s)?,
-            }),
+            Some(s) => Some(
+                match meter_mode.unwrap_or(MeterModeDto::StressPattern) {
+                    MeterModeDto::StressPattern => s.parse::<MeterScheme>()?,
+                    MeterModeDto::SyllableCounts => MeterScheme::from_syllable_counts(&s)?,
+                }
+                .with_rules(meter_rules.map(MeterRules::from).unwrap_or_default()),
+            ),
             None => None,
         };
         let rhyme = match rhyme_scheme {
@@ -662,6 +666,9 @@ pub struct PoemOptionsDto {
     /// How `meter_scheme` is read; defaults to `"stress_pattern"`.
     #[tsify(optional)]
     meter_mode: Option<MeterModeDto>,
+    /// The optional rules a meter scan applies; by default, all of them do.
+    #[tsify(optional)]
+    meter_rules: Option<MeterRulesDto>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Tsify)]
@@ -672,6 +679,22 @@ pub enum MeterModeDto {
     StressPattern,
     /// Syllable counts or ranges such as `"8\n7-9\n5"`, each at most 100.
     SyllableCounts,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct MeterRulesDto {
+    /// Whether an unstressed syllable may be promoted to a beat when the
+    /// syllables on both sides of it are unstressed and off the beat.
+    promotion: bool,
+}
+
+impl From<MeterRulesDto> for MeterRules {
+    fn from(rules: MeterRulesDto) -> Self {
+        Self {
+            promotion: rules.promotion,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Tsify)]
@@ -1786,6 +1809,33 @@ mod tests {
                     }),
                 },
             ]
+        ));
+    }
+
+    #[wasm_bindgen_test]
+    fn open_poem_can_turn_promotion_off() {
+        let open = |meter_rules| {
+            analyzer()
+                .open_poem(
+                    vec!["thou art more lovely and more temperate".into()],
+                    Some(PoemOptionsDto {
+                        meter_scheme: Some("x/x/x/x/x/".into()),
+                        meter_rules,
+                        ..Default::default()
+                    }),
+                )
+                .unwrap()
+        };
+
+        assert!(matches!(
+            open(None).meter_analysis(0).unwrap(),
+            MeterDto::Match { .. }
+        ));
+        assert!(matches!(
+            open(Some(MeterRulesDto { promotion: false }))
+                .meter_analysis(0)
+                .unwrap(),
+            MeterDto::NoMatch { .. }
         ));
     }
 

@@ -28,6 +28,21 @@ struct Meter {
 #[derive(Debug)]
 pub struct MeterSpecification {
     possible_meters: HashSet<Meter>,
+    rules: MeterRules,
+}
+
+/// The optional rules a scan applies. By default, all of them do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MeterRules {
+    /// Whether an unstressed syllable may be promoted to a beat: see
+    /// [`Fit::Promoted`].
+    pub promotion: bool,
+}
+
+impl Default for MeterRules {
+    fn default() -> Self {
+        Self { promotion: true }
+    }
 }
 
 enum Segment {
@@ -110,7 +125,10 @@ impl std::str::FromStr for MeterSpecification {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let segments = parse_segments(s)?;
         let possible_meters = expand_segments(segments);
-        Ok(MeterSpecification { possible_meters })
+        Ok(MeterSpecification {
+            possible_meters,
+            rules: MeterRules::default(),
+        })
     }
 }
 
@@ -121,7 +139,16 @@ impl MeterSpecification {
                 meter: vec![SyllableStress::Either; n],
             })
             .collect();
-        MeterSpecification { possible_meters }
+        MeterSpecification {
+            possible_meters,
+            rules: MeterRules::default(),
+        }
+    }
+
+    /// Scans lines with `rules` instead of the defaults.
+    pub fn with_rules(mut self, rules: MeterRules) -> Self {
+        self.rules = rules;
+        self
     }
 
     /// Checks a line against the meter. This is a very permissive check—we make no guesses about the Meter of the Line, instead we try every pronunciation of every word and every optional section of the meter, and judge the line by the reading that deviates least.
@@ -140,7 +167,7 @@ impl MeterSpecification {
         let stress_patterns = line
             .words
             .iter()
-            .map(distinct_stress_patterns)
+            .map(|word| distinct_stress_patterns(word, self.rules))
             .collect::<Result<Vec<_>, _>>()?;
         let mut meters: Vec<&Meter> = self.possible_meters.iter().collect();
         meters.sort_by(|a, b| a.meter.cmp(&b.meter));
@@ -148,7 +175,7 @@ impl MeterSpecification {
         // The first meter path with the lowest cost.
         let mut best: Option<(Cost, Alignment<'_>)> = None;
         for meter in meters {
-            let mut alignment = Alignment::new(&stress_patterns, &meter.meter);
+            let mut alignment = Alignment::new(&stress_patterns, &meter.meter, self.rules);
             let cost = alignment.cost_from_word(0, 0, PreviousSyllable::Unstressed);
             if best.as_ref().is_none_or(|(best_cost, _)| cost < *best_cost) {
                 best = Some((cost, alignment));
@@ -523,11 +550,15 @@ impl MeterMatchResult {
 
 const UNSTRESSED_MONOSYLLABLE: &[Stress] = &[Stress::Unstressed];
 
-/// A word's distinct stress patterns, in dictionary order, then an unstressed
-/// one for a function word with a one-syllable pronunciation. A one-syllable
-/// word fits any meter position, so the unstressed pattern only lets a
-/// neighbor be promoted, as in "as BEAU-ti-FUL as day".
-fn distinct_stress_patterns(word: &WordEntry) -> Result<Vec<&[Stress]>, MeterCheckError> {
+/// A word's distinct stress patterns, in dictionary order, then, if `rules`
+/// allow promotion, an unstressed one for a function word with a one-syllable
+/// pronunciation. A one-syllable word fits any meter position, so the
+/// unstressed pattern only lets a neighbor be promoted, as in "as BEAU-ti-FUL
+/// as day".
+fn distinct_stress_patterns(
+    word: &WordEntry,
+    rules: MeterRules,
+) -> Result<Vec<&[Stress]>, MeterCheckError> {
     let WordData::Known { pronunciations, .. } = &word.data else {
         return Err(MeterCheckError::UnknownWord(UnknownWordError {
             word: word.word.clone(),
@@ -541,7 +572,8 @@ fn distinct_stress_patterns(word: &WordEntry) -> Result<Vec<&[Stress]>, MeterChe
             patterns.push(pattern);
         }
     }
-    if is_function_word(&word.word)
+    if rules.promotion
+        && is_function_word(&word.word)
         && patterns.iter().any(|pattern| pattern.len() == 1)
         && !patterns.contains(&UNSTRESSED_MONOSYLLABLE)
     {
@@ -781,6 +813,7 @@ struct Alignment<'a> {
     /// Each word's distinct stress patterns.
     stress_patterns: &'a [Vec<&'a [Stress]>],
     meter: &'a [SyllableStress],
+    rules: MeterRules,
     /// Memoized costs from the beginning of a word, by word, meter position,
     /// and previous syllable.
     word_costs: Vec<Option<Cost>>,
@@ -793,7 +826,11 @@ struct Alignment<'a> {
 }
 
 impl<'a> Alignment<'a> {
-    fn new(stress_patterns: &'a [Vec<&'a [Stress]>], meter: &'a [SyllableStress]) -> Self {
+    fn new(
+        stress_patterns: &'a [Vec<&'a [Stress]>],
+        meter: &'a [SyllableStress],
+        rules: MeterRules,
+    ) -> Self {
         let mut row_count = 0;
         let syllable_rows = stress_patterns
             .iter()
@@ -812,6 +849,7 @@ impl<'a> Alignment<'a> {
         Self {
             stress_patterns,
             meter,
+            rules,
             word_costs: vec![None; stress_patterns.len() * positions * PreviousSyllable::COUNT],
             syllable_rows,
             syllable_costs: vec![None; row_count * positions * PreviousSyllable::COUNT],
@@ -955,7 +993,7 @@ impl<'a> Alignment<'a> {
             stresses,
             syllable_index,
             expected,
-            previous.allows_promotion(),
+            self.rules.promotion && previous.allows_promotion(),
         );
         let neighbor = Neighbor::filling(stress, expected);
         let (fit_cost, next_previous) = fit.outcome(neighbor);
@@ -1201,6 +1239,14 @@ impl MeterScheme {
             return Err(ParseSyllableCountSchemeError::Empty);
         }
         Ok(Self { scheme })
+    }
+
+    /// Scans lines with `rules` instead of the defaults.
+    pub fn with_rules(mut self, rules: MeterRules) -> Self {
+        for specification in &mut self.scheme {
+            specification.rules = rules;
+        }
+        self
     }
 
     /// Returns the meter specification for the given line index, wrapping around the scheme if necessary.
@@ -1845,6 +1891,33 @@ mod tests {
     }
 
     #[test]
+    fn promotion_can_be_turned_off() {
+        let without_promotion = MeterRules { promotion: false };
+        let pentameter = "x/x/x/x/x/"
+            .parse::<MeterSpecification>()
+            .unwrap()
+            .with_rules(without_promotion);
+        let scansion = pentameter
+            .scan_line(&Line::new(
+                "thou art more lovely and more temperate",
+                dict(),
+            ))
+            .unwrap();
+        assert_eq!(scansion.deviations().count(), 1);
+        assert!(promotions(&scansion).is_empty());
+
+        // Nor does AS get its unstressed reading, which only serves promotion.
+        let line = Line::new("as", dict());
+        let has_unstressed_reading = |rules| {
+            distinct_stress_patterns(&line.words[0], rules)
+                .unwrap()
+                .contains(&UNSTRESSED_MONOSYLLABLE)
+        };
+        assert!(has_unstressed_reading(MeterRules::default()));
+        assert!(!has_unstressed_reading(without_promotion));
+    }
+
+    #[test]
     fn a_failing_lines_scansion_marks_its_promotions() {
         let line = Line::new("the beautiful is never what it", dict());
         let spec: MeterSpecification = "x/x/x/x/x/".parse().unwrap();
@@ -2208,6 +2281,17 @@ mod tests {
                 .possible_meters
                 .contains(&meter(&[S, U]))
         );
+    }
+
+    #[test]
+    fn meter_scheme_rules_apply_to_every_line() {
+        let line = Line::new("accuracy", dict());
+        let scheme: MeterScheme = "/x/x\n/x/x".parse().unwrap();
+        assert_meter_matches(scheme.check_line(&line, 1));
+
+        let scheme = scheme.with_rules(MeterRules { promotion: false });
+        assert_meter_no_match(scheme.check_line(&line, 0));
+        assert_meter_no_match(scheme.check_line(&line, 1));
     }
 
     #[test]
