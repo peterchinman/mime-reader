@@ -217,10 +217,39 @@ fn syllable_fit(
     }
 }
 
-/// Whether a promotion pending on a syllable holds, given the stress of the
-/// syllable after it, or `None` at the end of the line.
-fn promotion_holds(next: Option<Stress>) -> bool {
-    !next.is_some_and(is_stressed)
+/// A syllable beside a promotion: its stress, and whether it's on a beat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Neighbor {
+    stress: Stress,
+    on_beat: bool,
+}
+
+impl Neighbor {
+    fn filling(stress: Stress, expected: SyllableStress) -> Self {
+        Self {
+            stress,
+            on_beat: expected == SyllableStress::Stressed,
+        }
+    }
+
+    fn extra(stress: Stress) -> Self {
+        Self {
+            stress,
+            on_beat: false,
+        }
+    }
+
+    /// Whether the syllable keeps a syllable beside it from being promoted.
+    /// A promoted beat needs unstressed offbeats on both sides.
+    fn blocks_promotion(self) -> bool {
+        is_stressed(self.stress) || self.on_beat
+    }
+}
+
+/// Whether a promotion pending on a syllable holds, given the syllable after
+/// it, or `None` at the end of the line.
+fn promotion_holds(next: Option<Neighbor>) -> bool {
+    !next.is_some_and(Neighbor::blocks_promotion)
 }
 
 /// How a line fits its meter, judged by its scansion. `failures` and
@@ -301,9 +330,9 @@ pub enum Fit {
     Fits,
     /// An unstressed syllable on a beat, promoted to a stress because the
     /// syllables on both sides of it, in its own word or a neighboring one,
-    /// are unstressed (Derek Attridge's promotion). A line's edges count as
-    /// unstressed, as in the last syllable of "thou art more lovely and more
-    /// TEM-per-ATE".
+    /// are unstressed and off the beat (Derek Attridge's promotion). A line's
+    /// edges count as unstressed offbeats, as in the last syllable of "thou
+    /// art more lovely and more TEM-per-ATE".
     Promoted,
     Mismatch,
 }
@@ -558,20 +587,22 @@ impl std::ops::Add for Cost {
 /// What the alignment knows about the syllable before the one it's placing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PreviousSyllable {
-    /// An unstressed syllable, or the start of the line.
+    /// An unstressed syllable off the beat, or the start of the line.
     Unstressed,
-    Stressed,
+    /// A syllable that keeps the next one from being promoted: see
+    /// [`Neighbor::blocks_promotion`].
+    Blocking,
     /// A [`SyllableFit::PendingPromotion`], for the syllable being placed to
-    /// settle.
+    /// settle. It's on a beat, so that syllable can't be promoted.
     PendingPromotion,
 }
 
 impl PreviousSyllable {
     const COUNT: usize = 3;
 
-    fn of(stress: Stress) -> Self {
-        if is_stressed(stress) {
-            Self::Stressed
+    fn after(neighbor: Neighbor) -> Self {
+        if neighbor.blocks_promotion() {
+            Self::Blocking
         } else {
             Self::Unstressed
         }
@@ -580,16 +611,16 @@ impl PreviousSyllable {
     /// Whether the syllable being placed may be promoted, so far as this one
     /// goes.
     fn allows_promotion(self) -> bool {
-        self != Self::Stressed
+        self == Self::Unstressed
     }
 
     /// What settling a promotion pending on this syllable costs, given the
-    /// stress of the syllable after it, or `None` at the end of the line.
-    fn settlement_cost(self, next: Option<Stress>) -> Cost {
+    /// syllable after it, or `None` at the end of the line.
+    fn settlement_cost(self, next: Option<Neighbor>) -> Cost {
         match self {
             Self::PendingPromotion if promotion_holds(next) => Cost::PROMOTION,
             Self::PendingPromotion => Cost::DEVIATION,
-            Self::Unstressed | Self::Stressed => Cost::ZERO,
+            Self::Unstressed | Self::Blocking => Cost::ZERO,
         }
     }
 }
@@ -597,11 +628,11 @@ impl PreviousSyllable {
 impl SyllableFit {
     /// What filling a position costs, not counting a pending promotion, and
     /// what the next syllable sees before it.
-    fn outcome(self, stress: Stress) -> (Cost, PreviousSyllable) {
+    fn outcome(self, neighbor: Neighbor) -> (Cost, PreviousSyllable) {
         match self {
-            Self::Fits => (Cost::ZERO, PreviousSyllable::of(stress)),
+            Self::Fits => (Cost::ZERO, PreviousSyllable::after(neighbor)),
             Self::PendingPromotion => (Cost::ZERO, PreviousSyllable::PendingPromotion),
-            Self::Mismatch => (Cost::DEVIATION, PreviousSyllable::of(stress)),
+            Self::Mismatch => (Cost::DEVIATION, PreviousSyllable::after(neighbor)),
         }
     }
 }
@@ -645,10 +676,13 @@ enum Step {
 }
 
 impl Step {
-    /// The stress of the syllable this step places, if it places one.
-    fn syllable_stress(&self) -> Option<Stress> {
+    /// The syllable this step places, if it places one.
+    fn neighbor(&self) -> Option<Neighbor> {
         match *self {
-            Self::Filled { stress, .. } | Self::Extra { stress, .. } => Some(stress),
+            Self::Filled {
+                stress, expected, ..
+            } => Some(Neighbor::filling(stress, expected)),
+            Self::Extra { stress, .. } => Some(Neighbor::extra(stress)),
             Self::Missing { .. } => None,
         }
     }
@@ -676,7 +710,7 @@ impl Scansion {
                         SyllableFit::Fits => Fit::Fits,
                         // The next syllable settles a pending promotion.
                         SyllableFit::PendingPromotion => {
-                            let next = steps[index + 1..].iter().find_map(Step::syllable_stress);
+                            let next = steps[index + 1..].iter().find_map(Step::neighbor);
                             if promotion_holds(next) {
                                 Fit::Promoted
                             } else {
@@ -923,9 +957,10 @@ impl<'a> Alignment<'a> {
             expected,
             previous.allows_promotion(),
         );
-        let (fit_cost, next_previous) = fit.outcome(stress);
+        let neighbor = Neighbor::filling(stress, expected);
+        let (fit_cost, next_previous) = fit.outcome(neighbor);
         // The syllable settles a promotion pending on the one before.
-        let cost = previous.settlement_cost(Some(stress))
+        let cost = previous.settlement_cost(Some(neighbor))
             + fit_cost
             + self.cost_from_syllable(
                 word_index,
@@ -953,15 +988,16 @@ impl<'a> Alignment<'a> {
         meter_index: usize,
         previous: PreviousSyllable,
     ) -> Cost {
-        let stress = self.stress_patterns[word_index][pattern_index][syllable_index];
-        previous.settlement_cost(Some(stress))
+        let neighbor =
+            Neighbor::extra(self.stress_patterns[word_index][pattern_index][syllable_index]);
+        previous.settlement_cost(Some(neighbor))
             + Cost::DEVIATION
             + self.cost_from_syllable(
                 word_index,
                 pattern_index,
                 syllable_index + 1,
                 meter_index,
-                PreviousSyllable::of(stress),
+                PreviousSyllable::after(neighbor),
             )
     }
 
@@ -1039,7 +1075,7 @@ impl<'a> Alignment<'a> {
                             stress,
                             ambiguous,
                         });
-                        previous = PreviousSyllable::of(stress);
+                        previous = PreviousSyllable::after(Neighbor::extra(stress));
                     }
                 }
             }
@@ -1719,6 +1755,24 @@ mod tests {
         assert_eq!(
             assert_meter_no_match(spec.validate_line(&Line::new("sweet adrienne", dict()))),
             [unstressed_on_beat(1, 0)]
+        );
+    }
+
+    #[test]
+    fn a_promoted_beat_needs_offbeats_on_both_sides() {
+        let spec: MeterSpecification = "/x//".parse().unwrap();
+
+        // ACCURACY is /xxx. Its last two syllables can't both be promoted to
+        // beats side by side.
+        assert_eq!(
+            deviations(&spec, &Line::new("accuracy", dict())),
+            [unstressed_on_beat(0, 2), unstressed_on_beat(0, 3)]
+        );
+        // THE can be unstressed, but on a beat it blocks BEAUTIFUL's last
+        // syllable from being promoted.
+        assert_eq!(
+            deviations(&spec, &Line::new("beautiful the", dict())),
+            [unstressed_on_beat(0, 2)]
         );
     }
 
