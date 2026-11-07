@@ -2,7 +2,8 @@
 //! they yield.
 //!
 //! A poem file is a `key: value` header (`form`, `title`, `author`
-//! required; `year`, `source`, `notes`, `template` optional), a blank line,
+//! required; `year`, `source`, `notes`, `template`, `strictness`, `exclude`
+//! optional), a blank line,
 //! then the body. Blank lines in the body separate stanzas and are not
 //! counted as lines.
 
@@ -29,6 +30,10 @@ pub struct Poem {
     /// (near-verbatim) or `loose` (reworded). From the `strictness:` header;
     /// duplexes default to loose, everything else to strict.
     pub strictness: String,
+    /// Why the poem is left out of scoring, from an `exclude:` header (e.g.
+    /// its echoes are semantic rather than phonetic). Excluded poems still
+    /// have to parse.
+    pub excluded: Option<String>,
     pub title: String,
     pub author: String,
     pub year: Option<String>,
@@ -137,6 +142,10 @@ pub fn parse_poem(text: &str, path: &Path, source: &str) -> Result<Poem, String>
         source: source.to_string(),
         form,
         strictness,
+        excluded: header
+            .get("exclude")
+            .cloned()
+            .filter(|reason| !reason.is_empty()),
         title,
         author,
         year: header.get("year").cloned(),

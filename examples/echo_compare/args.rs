@@ -26,9 +26,22 @@ USAGE: cargo run --release --example echo_compare -- [OPTIONS]
 PARAMETER SEARCH (replaces the report):
   --search N         try N random configs per aligner, then refine the best
   --search-seed N    search seed (default 1)
-  --holdout F        share of each form's poems held out for testing (default 0.3)
+  --folds K          cross-validation folds, stratified by form and strictness
+                     (default 5)
+  --objective NAME   strictness (mean of strict and loose AUC; default) or
+                     form (mean of per-form AUCs)
   --forms A,B        only use poems of these forms (e.g. pantoum,duplex)
   --threads N        worker threads (default: all cores)";
+
+/// What the parameter search averages AUC over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Objective {
+    /// Strict poems and loose poems, equally — each form counts within its
+    /// pool by its number of pairs.
+    Strictness,
+    /// Each form equally.
+    Form,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Args {
@@ -44,7 +57,8 @@ pub struct Args {
     pub help: bool,
     pub search: Option<usize>,
     pub search_seed: u64,
-    pub holdout: f64,
+    pub folds: usize,
+    pub objective: Objective,
     pub forms: Option<Vec<String>>,
     pub threads: usize,
 }
@@ -74,7 +88,8 @@ impl Default for Args {
             help: false,
             search: None,
             search_seed: 1,
-            holdout: 0.3,
+            folds: 5,
+            objective: Objective::Strictness,
             forms: None,
             threads: std::thread::available_parallelism().map_or(1, |n| n.get()),
         }
@@ -132,14 +147,24 @@ impl Args {
                         .parse()
                         .map_err(|e| format!("--search-seed: {e}"))?
                 }
-                "--holdout" => {
-                    let f: f64 = value("--holdout")?
-                        .parse()
-                        .map_err(|e| format!("--holdout: {e}"))?;
-                    if !(0.0..1.0).contains(&f) {
-                        return Err("--holdout must be in [0, 1)".into());
+                "--folds" => {
+                    args.folds = value("--folds")?
+                        .parse::<usize>()
+                        .map_err(|e| format!("--folds: {e}"))?;
+                    if args.folds < 2 {
+                        return Err("--folds must be at least 2".into());
                     }
-                    args.holdout = f;
+                }
+                "--objective" => {
+                    args.objective = match value("--objective")?.as_str() {
+                        "strictness" => Objective::Strictness,
+                        "form" => Objective::Form,
+                        other => {
+                            return Err(format!(
+                                "--objective {other:?}: expected strictness or form"
+                            ));
+                        }
+                    }
                 }
                 "--forms" => {
                     args.forms = Some(

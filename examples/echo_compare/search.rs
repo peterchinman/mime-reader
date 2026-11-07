@@ -1,22 +1,32 @@
 //! Parameter search ("fuzzing") over echo configs.
 //!
-//! Poems are split, per form, into training and held-out poems. Each
-//! candidate config scores every pair; its objective is the mean over forms
-//! of the AUC (echo vs non-echo) on the training poems, so a large form
-//! doesn't drown a small one. The held-out AUC is reported next to it, as
-//! an honest estimate of what the search found rather than what it fit.
+//! Each candidate config scores every pair. Its objective is the mean AUC
+//! (echo vs non-echo) over groups — strict and loose poems by default, or
+//! forms — so a large group doesn't drown a small one; within a group,
+//! each poem counts by its number of pairs.
+//!
+//! Poems are split into k folds, stratified by form and strictness. Every
+//! trial records its objective on each fold and on everything but each
+//! fold, at no extra scoring cost, which gives a nested cross-validation
+//! estimate: for each fold, the trial that would have won without it,
+//! judged on it. That is the honest measure of what the search found, as
+//! opposed to what it fit. (Refinement still picks parents by the all-poem
+//! objective, so the estimate leans slightly optimistic.)
 //!
 //! Random sampling over the parameters that matter to the aligner comes
-//! first; then rounds of local perturbation around the best few configs.
+//! first — each sample screened on one fold and fully scored only if it is
+//! within reach of the best so far — then rounds of local perturbation
+//! around the best few configs.
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use mime_reader::echo::{AlignerKind, EchoConfig, EchoDetector};
 use mime_reader::line::Line;
 
-use crate::args::{Args, ConfigOverride, repo_path};
+use crate::args::{Args, ConfigOverride, Objective, repo_path};
 use crate::corpus::{Label, LabeledPair, Poem};
 use crate::metrics;
 use crate::mutate::Rng;
@@ -251,6 +261,8 @@ pub struct Job {
 }
 
 /// Scores every job with `kind` under `detector`, spread over `threads`.
+/// Threads take small batches from a shared counter, so faster cores (or
+/// cores that drew easy pairs) keep working instead of idling at the end.
 fn score_all(
     detector: &EchoDetector,
     kind: AlignerKind,
@@ -258,89 +270,149 @@ fn score_all(
     lines: &[Line],
     threads: usize,
 ) -> Vec<f32> {
-    let chunk = jobs.len().div_ceil(threads.max(1)).max(1);
+    const BATCH: usize = 32;
+    let next = AtomicUsize::new(0);
     let mut scores = vec![0.0f32; jobs.len()];
-    std::thread::scope(|scope| {
-        for (jobs, out) in jobs.chunks(chunk).zip(scores.chunks_mut(chunk)) {
-            scope.spawn(move || {
-                for (job, slot) in jobs.iter().zip(out) {
-                    *slot = detector
-                        .compare_lines_with(kind, &lines[job.a], &lines[job.b])
-                        .map_or(f32::NAN, |echo| echo.alignment.similarity);
-                }
-            });
-        }
+    let batches: Vec<Vec<(usize, Vec<f32>)>> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads.max(1))
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut done = Vec::new();
+                    loop {
+                        let start = next.fetch_add(BATCH, Ordering::Relaxed);
+                        if start >= jobs.len() {
+                            break done;
+                        }
+                        let end = (start + BATCH).min(jobs.len());
+                        let batch = jobs[start..end]
+                            .iter()
+                            .map(|job| {
+                                detector
+                                    .compare_lines_with(kind, &lines[job.a], &lines[job.b])
+                                    .map_or(f32::NAN, |echo| echo.alignment.similarity)
+                            })
+                            .collect();
+                        done.push((start, batch));
+                    }
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .map(|w| w.join().expect("a scoring thread panicked"))
+            .collect()
     });
+    for (start, batch) in batches.into_iter().flatten() {
+        scores[start..start + batch.len()].copy_from_slice(&batch);
+    }
     scores
 }
 
-/// Per-form AUC over the jobs whose poem satisfies `include`, and their mean.
+/// The reporting group a poem falls in under `objective`.
+fn group_of(poem: &Poem, objective: Objective) -> &str {
+    match objective {
+        Objective::Strictness => &poem.strictness,
+        Objective::Form => &poem.form,
+    }
+}
+
+/// AUC per group (strictness or form) over the jobs whose poem satisfies
+/// `include`, and their mean.
 fn objective(
     scores: &[f32],
     jobs: &[Job],
     poems: &[Poem],
     include: &dyn Fn(usize) -> bool,
+    by: Objective,
 ) -> (Option<f64>, BTreeMap<String, f64>) {
-    let mut by_form: BTreeMap<&str, (Vec<f32>, Vec<f32>)> = BTreeMap::new();
+    let mut groups: BTreeMap<&str, (Vec<f32>, Vec<f32>)> = BTreeMap::new();
     for (job, &score) in jobs.iter().zip(scores) {
         let Some(p) = job.poem.filter(|&p| include(p)) else {
             continue;
         };
-        let entry = by_form.entry(poems[p].form.as_str()).or_default();
+        let entry = groups.entry(group_of(&poems[p], by)).or_default();
         match job.label {
             Label::Echo => entry.0.push(score),
             Label::Not => entry.1.push(score),
             Label::Unlabeled => {}
         }
     }
-    let per_form: BTreeMap<String, f64> = by_form
+    let per_group: BTreeMap<String, f64> = groups
         .into_iter()
-        .filter_map(|(form, (pos, neg))| {
-            metrics::auc(&pos, &neg).map(|auc| (form.to_string(), auc))
+        .filter_map(|(group, (pos, neg))| {
+            metrics::auc(&pos, &neg).map(|auc| (group.to_string(), auc))
         })
         .collect();
     let mean =
-        (!per_form.is_empty()).then(|| per_form.values().sum::<f64>() / per_form.len() as f64);
-    (mean, per_form)
+        (!per_group.is_empty()).then(|| per_group.values().sum::<f64>() / per_group.len() as f64);
+    (mean, per_group)
 }
 
-/// Holds out `fraction` of each form's poems (at least one when a form has
-/// two or more), deterministically in `seed`. `true` = held out.
-fn holdout(poems: &[Poem], fraction: f64, seed: u64) -> Vec<bool> {
-    let mut by_form: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+/// Assigns each poem to one of `k` folds, round-robin within each (form,
+/// strictness) stratum after a seeded shuffle, so every fold gets a fair
+/// share of each kind of poem.
+fn assign_folds(poems: &[Poem], k: usize, seed: u64) -> Vec<usize> {
+    let mut strata: BTreeMap<(&str, &str), Vec<usize>> = BTreeMap::new();
     for (i, poem) in poems.iter().enumerate() {
-        by_form.entry(&poem.form).or_default().push(i);
+        strata
+            .entry((&poem.form, &poem.strictness))
+            .or_default()
+            .push(i);
     }
     let mut rng = Rng::new(seed ^ 0x5EED_5EA2);
-    let mut test = vec![false; poems.len()];
-    for indices in by_form.values_mut() {
+    let mut fold = vec![0; poems.len()];
+    let mut offset = 0;
+    for indices in strata.values_mut() {
         indices.sort_by_key(|&i| poems[i].id());
-        for k in (1..indices.len()).rev() {
-            indices.swap(k, rng.range(0..k + 1));
+        for x in (1..indices.len()).rev() {
+            indices.swap(x, rng.range(0..x + 1));
         }
-        let n = indices.len();
-        let mut take = (fraction * n as f64).round() as usize;
-        if fraction > 0.0 && n >= 2 {
-            take = take.clamp(1, n - 1);
+        for (n, &i) in indices.iter().enumerate() {
+            fold[i] = (offset + n) % k;
         }
-        for &i in &indices[..take.min(n)] {
-            test[i] = true;
-        }
+        // Rotate where each stratum starts, so small strata don't all pile
+        // into fold 0.
+        offset += indices.len();
     }
-    test
+    fold
 }
 
 struct Trial {
     config: ConfigOverride,
-    train: f64,
-    test: Option<f64>,
-    train_forms: BTreeMap<String, f64>,
-    test_forms: BTreeMap<String, f64>,
+    /// The objective on every poem: what the search maximizes.
+    all: f64,
+    all_groups: BTreeMap<String, f64>,
+    /// Per-form AUC on every poem, for reporting.
+    forms: BTreeMap<String, f64>,
+    /// `folds[k]`: the objective on fold `k`'s poems alone.
+    folds: Vec<Option<f64>>,
+    /// `without[k]`: the objective on every poem except fold `k`'s.
+    without: Vec<Option<f64>>,
     fixture_auc: Option<f64>,
 }
 
 fn fmt(x: Option<f64>) -> String {
     x.map_or("  —  ".to_string(), |x| format!("{x:.4}"))
+}
+
+fn mean(xs: impl Iterator<Item = f64>) -> Option<f64> {
+    let xs: Vec<f64> = xs.collect();
+    (!xs.is_empty()).then(|| xs.iter().sum::<f64>() / xs.len() as f64)
+}
+
+/// The honest estimate of the search: for each fold, the trial that scores
+/// best *without* that fold, judged on that fold; averaged over folds.
+fn nested_estimate(tried: &[Trial], k: usize) -> (Option<f64>, Vec<Option<f64>>) {
+    let per_fold: Vec<Option<f64>> = (0..k)
+        .map(|f| {
+            tried
+                .iter()
+                .filter(|t| t.without[f].is_some())
+                .max_by(|a, b| a.without[f].unwrap().total_cmp(&b.without[f].unwrap()))
+                .and_then(|t| t.folds[f])
+        })
+        .collect();
+    (mean(per_fold.iter().flatten().copied()), per_fold)
 }
 
 /// Runs the search for each `--aligner`. `kept` are the scorable pairs
@@ -362,34 +434,55 @@ pub fn run(
             poem: pair.poem,
         })
         .collect();
-    let test = holdout(poems, args.holdout, args.search_seed);
-    let train_poems: Vec<String> = poems
+    let k = args.folds;
+    let fold = assign_folds(poems, k, args.search_seed);
+    // Random configs are first scored on one fold (the screen) and only
+    // fully scored if they come close to the best screen score so far.
+    const SCREEN_FOLD: usize = 0;
+    const SCREEN_MARGIN: f64 = 0.01;
+    let screen_jobs: Vec<Job> = jobs
         .iter()
-        .zip(&test)
-        .filter(|(_, t)| !**t)
-        .map(|(p, _)| p.id())
+        .filter(|j| j.poem.is_some_and(|p| fold[p] == SCREEN_FOLD))
+        .copied()
         .collect();
-    let test_poems: Vec<String> = poems
-        .iter()
-        .zip(&test)
-        .filter(|(_, t)| **t)
-        .map(|(p, _)| p.id())
-        .collect();
+
     println!(
-        "== search: {} poems for training, {} held out",
-        train_poems.len(),
-        test_poems.len()
+        "== search: {} poems in {k} folds (stratified by form and strictness); objective = mean AUC by {}",
+        poems.len(),
+        match args.objective {
+            Objective::Strictness => "strictness (strict, loose)",
+            Objective::Form => "form",
+        }
     );
-    println!("held out: {}", test_poems.join(", "));
-    let pairs_in = |held: bool| {
-        jobs.iter()
-            .filter(|j| j.poem.is_some_and(|p| test[p] == held) && j.label != Label::Unlabeled)
-            .count()
-    };
+    for f in 0..k {
+        let in_fold: Vec<&Poem> = poems
+            .iter()
+            .zip(&fold)
+            .filter(|(_, x)| **x == f)
+            .map(|(p, _)| p)
+            .collect();
+        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+        for p in &in_fold {
+            *counts
+                .entry(format!("{} {}", p.strictness, p.form))
+                .or_default() += 1;
+        }
+        let summary: Vec<String> = counts.iter().map(|(g, n)| format!("{g} {n}")).collect();
+        println!(
+            "  fold {f}: {} poems ({})",
+            in_fold.len(),
+            summary.join(", ")
+        );
+    }
     println!(
-        "pairs: {} training, {} held out, {} fixture; {} threads",
-        pairs_in(false),
-        pairs_in(true),
+        "pairs: {} labeled, {} in the screen fold, {} fixture; {} threads",
+        jobs.iter()
+            .filter(|j| j.poem.is_some() && j.label != Label::Unlabeled)
+            .count(),
+        screen_jobs
+            .iter()
+            .filter(|j| j.label != Label::Unlabeled)
+            .count(),
         jobs.iter().filter(|j| j.poem.is_none()).count(),
         args.threads
     );
@@ -398,100 +491,142 @@ pub fn run(
     std::fs::create_dir_all(repo_path("target/echo")).map_err(|e| e.to_string())?;
     for &kind in &args.aligners {
         let mut rng = Rng::new(args.search_seed.wrapping_add(kind as u64 * 7919));
-        let evaluate = |o: &ConfigOverride| -> Result<Trial, String> {
+        let detector_for = |o: &ConfigOverride| -> Result<EchoDetector, String> {
             let mut config = EchoConfig::default();
             o.apply(&mut config)?;
-            let detector = EchoDetector::with_config(config);
-            let scores = score_all(&detector, kind, &jobs, lines, args.threads);
-            let (train, train_forms) = objective(&scores, &jobs, poems, &|p| !test[p]);
-            let (test_mean, test_forms) = objective(&scores, &jobs, poems, &|p| test[p]);
-            let (fixture_pos, fixture_neg): (Vec<f32>, Vec<f32>) = {
-                let pick = |label| -> Vec<f32> {
-                    jobs.iter()
-                        .zip(&scores)
-                        .filter(|(j, _)| j.poem.is_none() && j.label == label)
-                        .map(|(_, &s)| s)
-                        .collect()
-                };
-                (pick(Label::Echo), pick(Label::Not))
+            Ok(EchoDetector::with_config(config))
+        };
+        let screen = |o: &ConfigOverride| -> Result<f64, String> {
+            let scores = score_all(&detector_for(o)?, kind, &screen_jobs, lines, args.threads);
+            Ok(
+                objective(&scores, &screen_jobs, poems, &|_| true, args.objective)
+                    .0
+                    .unwrap_or(f64::NAN),
+            )
+        };
+        let evaluate = |o: &ConfigOverride| -> Result<(Trial, f64), String> {
+            let scores = score_all(&detector_for(o)?, kind, &jobs, lines, args.threads);
+            let (all, all_groups) = objective(&scores, &jobs, poems, &|_| true, args.objective);
+            let (_, forms) = objective(&scores, &jobs, poems, &|_| true, Objective::Form);
+            let folds = (0..k)
+                .map(|f| objective(&scores, &jobs, poems, &|p| fold[p] == f, args.objective).0)
+                .collect::<Vec<_>>();
+            let without = (0..k)
+                .map(|f| objective(&scores, &jobs, poems, &|p| fold[p] != f, args.objective).0)
+                .collect();
+            let pick = |label| -> Vec<f32> {
+                jobs.iter()
+                    .zip(&scores)
+                    .filter(|(j, _)| j.poem.is_none() && j.label == label)
+                    .map(|(_, &s)| s)
+                    .collect()
             };
-            Ok(Trial {
-                config: o.clone(),
-                train: train.unwrap_or(f64::NAN),
-                test: test_mean,
-                train_forms,
-                test_forms,
-                fixture_auc: metrics::auc(&fixture_pos, &fixture_neg),
-            })
+            let screen_score = folds[SCREEN_FOLD].unwrap_or(f64::NAN);
+            Ok((
+                Trial {
+                    config: o.clone(),
+                    all: all.unwrap_or(f64::NAN),
+                    all_groups,
+                    forms,
+                    folds,
+                    without,
+                    fixture_auc: metrics::auc(&pick(Label::Echo), &pick(Label::Not)),
+                },
+                screen_score,
+            ))
         };
 
         let start = Instant::now();
-        let baseline = evaluate(&override_of(kind, &EchoConfig::default()))?;
+        let (baseline, baseline_screen) = evaluate(&override_of(kind, &EchoConfig::default()))?;
         let per_trial = start.elapsed();
         println!(
-            "== {kind}: {trials} random + {} refinement trials (~{:.1}s each)",
+            "== {kind}: {trials} random (screened on fold {SCREEN_FOLD}) + {} refinement trials (~{:.1}s per full trial)",
             trials / 2,
             per_trial.as_secs_f64()
         );
         println!(
-            "defaults        train {}  held-out {}  fixture {}",
-            fmt(Some(baseline.train)),
-            fmt(baseline.test),
+            "defaults        objective {}  mean fold {}  fixture {}",
+            fmt(Some(baseline.all)),
+            fmt(mean(baseline.folds.iter().flatten().copied())),
             fmt(baseline.fixture_auc)
         );
 
+        let mut best_screen = baseline_screen;
+        let mut screened_out = 0;
         let mut tried: Vec<Trial> = Vec::with_capacity(trials + trials / 2 + 1);
-        for _ in 0..trials {
-            tried.push(evaluate(&sample(kind, &mut rng))?);
-        }
         tried.push(baseline);
-        let by_train = |tried: &mut Vec<Trial>| {
-            tried.sort_by(|a, b| b.train.total_cmp(&a.train));
+        for _ in 0..trials {
+            let candidate = sample(kind, &mut rng);
+            let quick = screen(&candidate)?;
+            if quick.is_nan() || quick < best_screen - SCREEN_MARGIN {
+                screened_out += 1;
+                continue;
+            }
+            let (trial, screen_score) = evaluate(&candidate)?;
+            best_screen = best_screen.max(screen_score);
+            tried.push(trial);
+        }
+        let by_objective = |tried: &mut Vec<Trial>| {
+            tried.sort_by(|a, b| b.all.total_cmp(&a.all));
         };
-        by_train(&mut tried);
+        by_objective(&mut tried);
         for round in 0..trials / 2 {
             let parent = tried[rng.range(0..tried.len().min(5))].config.clone();
             let scale = if round < trials / 4 { 0.15 } else { 0.06 };
-            let child = evaluate(&perturb(kind, &parent, scale, &mut rng))?;
+            let (child, _) = evaluate(&perturb(kind, &parent, scale, &mut rng))?;
             tried.push(child);
-            by_train(&mut tried);
+            by_objective(&mut tried);
         }
 
         println!(
-            "{:<5} {:>8} {:>9} {:>8}  per-form held-out AUC",
-            "rank", "train", "held-out", "fixture"
+            "screened out {screened_out} of {trials} random configs; {} fully scored",
+            tried.len()
+        );
+        println!(
+            "{:<5} {:>9} {:>9} {:>8}  per-group AUC | per-form AUC (all poems)",
+            "rank", "objective", "mean fold", "fixture"
         );
         for (rank, trial) in tried.iter().take(8).enumerate() {
+            let groups: Vec<String> = trial
+                .all_groups
+                .iter()
+                .map(|(g, a)| format!("{g} {a:.4}"))
+                .collect();
             let forms: Vec<String> = trial
-                .test_forms
+                .forms
                 .iter()
                 .map(|(f, a)| format!("{f} {a:.4}"))
                 .collect();
             println!(
-                "{:<5} {:>8} {:>9} {:>8}  {}",
+                "{:<5} {:>9} {:>9} {:>8}  {} | {}",
                 rank + 1,
-                fmt(Some(trial.train)),
-                fmt(trial.test),
+                fmt(Some(trial.all)),
+                fmt(mean(trial.folds.iter().flatten().copied())),
                 fmt(trial.fixture_auc),
+                groups.join(", "),
                 forms.join(", ")
             );
         }
+        let (nested, per_fold) = nested_estimate(&tried, k);
+        let default_trial = tried
+            .iter()
+            .find(|t| t.config == override_of(kind, &EchoConfig::default()))
+            .expect("the defaults are among the trials");
+        let per_fold: Vec<String> = per_fold.iter().map(|x| fmt(*x)).collect();
+        println!(
+            "nested CV estimate (best config chosen without each fold, scored on it): {} [{}]; defaults {}",
+            fmt(nested),
+            per_fold.join(", "),
+            fmt(mean(default_trial.folds.iter().flatten().copied()))
+        );
         let best = &tried[0];
         let json = serde_json::to_string(&best.config).map_err(|e| e.to_string())?;
         println!("best config:   ECHO_CONFIG='{json}'");
-        let train_forms: Vec<String> = best
-            .train_forms
-            .iter()
-            .map(|(f, a)| format!("{f} {a:.4}"))
-            .collect();
-        println!("best training per-form AUC: {}", train_forms.join(", "));
 
         // Thresholds at the best config, per form and per strictness, on
         // every poem.
-        let mut config = EchoConfig::default();
-        best.config.apply(&mut config)?;
         let scores = score_all(
-            &EchoDetector::with_config(config),
+            &detector_for(&best.config)?,
             kind,
             &jobs,
             lines,
@@ -503,6 +638,7 @@ pub fn run(
             for key in [
                 format!("form {}", poems[p].form),
                 format!("strictness {}", poems[p].strictness),
+                format!("{} {}", poems[p].strictness, poems[p].form),
             ] {
                 let entry = groups.entry(key).or_default();
                 match job.label {
@@ -515,7 +651,7 @@ pub fn run(
         for (group, (pos, neg)) in &groups {
             if let Some(op) = metrics::best_threshold(pos, neg) {
                 println!(
-                    "  {group:<20} threshold {:.3}  BA {:.3}  TPR {:.3}  TNR {:.3}  AUC {}",
+                    "  {group:<24} threshold {:.3}  BA {:.3}  TPR {:.3}  TNR {:.3}  AUC {}",
                     op.threshold,
                     op.balanced_accuracy,
                     op.tpr,
@@ -534,10 +670,11 @@ pub fn run(
         for trial in &tried {
             let row = serde_json::json!({
                 "config": trial.config,
-                "train": trial.train,
-                "held_out": trial.test,
-                "train_forms": trial.train_forms,
-                "held_out_forms": trial.test_forms,
+                "objective": trial.all,
+                "groups": trial.all_groups,
+                "forms": trial.forms,
+                "folds": trial.folds,
+                "without_fold": trial.without,
                 "fixture_auc": trial.fixture_auc,
             });
             writeln!(file, "{row}").map_err(|e| e.to_string())?;
@@ -590,5 +727,55 @@ mod tests {
                 .unwrap();
             assert_eq!(config, EchoConfig::default());
         }
+    }
+
+    #[test]
+    fn folds_spread_every_stratum() {
+        use crate::corpus::parse_poem;
+        use std::path::Path;
+        let poem = |form: &str, strictness: &str, n: usize| {
+            let text = format!(
+                "form: refrain\ntitle: {form}{n}\nauthor: A\nstrictness: {strictness}\ntemplate: A_A\n\nx\ny\nx\n"
+            );
+            let mut p =
+                parse_poem(&text, Path::new(&format!("{form}-{n}.txt")), "private").unwrap();
+            p.form = form.to_string();
+            p
+        };
+        let mut poems = Vec::new();
+        for n in 0..7 {
+            poems.push(poem("pantoum", "loose", n));
+        }
+        for n in 0..3 {
+            poems.push(poem("duplex", "loose", n));
+        }
+        let fold = assign_folds(&poems, 5, 1);
+        assert!(fold.iter().all(|&f| f < 5));
+        // Seven loose pantoums over five folds: every fold gets one or two.
+        let mut per_fold = [0; 5];
+        for (p, &f) in poems.iter().zip(&fold) {
+            if p.form == "pantoum" {
+                per_fold[f] += 1;
+            }
+        }
+        assert!(
+            per_fold.iter().all(|&n| (1..=2).contains(&n)),
+            "{per_fold:?}"
+        );
+        // The three duplexes land in three different folds.
+        let mut duplex_folds: Vec<usize> = poems
+            .iter()
+            .zip(&fold)
+            .filter(|(p, _)| p.form == "duplex")
+            .map(|(_, &f)| f)
+            .collect();
+        duplex_folds.sort();
+        duplex_folds.dedup();
+        assert_eq!(duplex_folds.len(), 3);
+        assert_eq!(
+            assign_folds(&poems, 5, 1),
+            fold,
+            "deterministic in the seed"
+        );
     }
 }

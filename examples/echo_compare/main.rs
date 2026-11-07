@@ -83,6 +83,11 @@ mod native {
             .filter(|p| args.max_lines.is_some_and(|max| p.lines.len() > max))
             .map(|p| p.id())
             .collect();
+        let excluded: Vec<String> = poems
+            .iter()
+            .filter_map(|p| p.excluded.as_ref().map(|why| format!("{} ({why})", p.id())))
+            .collect();
+        poems.retain(|p| p.excluded.is_none());
         poems.retain(|p| args.max_lines.is_none_or(|max| p.lines.len() <= max));
         if let Some(forms) = &args.forms {
             poems.retain(|p| forms.contains(&p.form));
@@ -115,6 +120,9 @@ mod native {
                 format!("; skipped over --max-lines: {}", skipped.join(", "))
             }
         );
+        if !excluded.is_empty() {
+            println!("excluded: {}", excluded.join("; "));
+        }
         let counts: Vec<String> = by_source.iter().map(|(s, n)| format!("{s} {n}")).collect();
         println!("pairs: {}", counts.join(", "));
 
