@@ -1,0 +1,55 @@
+form: blues
+title: The "St. Louis Blues"
+author: W. C. Handy
+year: 1914
+source: https://commons.wikimedia.org/wiki/File:W._C._Handy_-_St._Louis_Blues_(1914,_Pace_and_Handy).pdf
+notes: lyrics transcribed from the sheet-music scan (lines follow musical phrases; hyphenated syllables joined); first edition (Pace & Handy, Memphis, copyright 1914); verses 1-3 then chorus (2 stanzas), repeats not expanded; spelling as printed; the later Handy Bros. printing on Wikisource adds 3 chorus stanzas not used here
+template: AA_BB_____ CC_DD_____ __________ ____ ___
+
+I hate to see de evening sun go down
+Hate to see de evenin' sun go down
+Cause ma baby he done lef dis town.
+
+Feelin' tomorrow lak ah feel today
+Feel tomorrow lak ah feel today
+I'll pack my trunk make ma git away
+
+St. Louis 'oman wid her diamon' rings
+Pulls dat man roun' by her apron strings
+'Twant for powder an' for store-bought hair
+De man ah love would not gone nowhere.
+
+Been to de Gypsy to get ma fortune tole
+To de Gypsy done got ma fortune tole
+Cause Im is wile bout ma Jelly Roll.
+
+Gypsy done tole me "don't you wear no black
+Yas she done tole me "don't you wear no black
+Go to St Louis you can win him back
+
+Help me to Cairo make St Louis by maself
+Git to Cairo find ma ole friend Jeff
+Gwine to pin maself close to his side
+If ah flag his train I sho can ride.
+
+You ought to see dat stove pipe brown of mine
+Lak he owns de Dimon Joseph line
+He'd make a cross-eyed 'oman go stone blin'.
+
+Blacker than midnight teeth lak flags o' truce
+Blackest man in de whole St Louis,
+Blacker de berry, sweeter are the juice
+
+About a crap game he knows a pow'ful lot
+But when work-time comes, he's on de dot
+Gwine to ask him for a cold ten-spot
+What it takes to git it he's cert'nly got.
+
+Got de St Louis Blues jes blue as ah can be
+Dat man got a heart lak a rock cast in the sea
+Or else he wouldn't gone so far from me.
+Dog-gone-it!
+
+I loves dat man lak a school-boy loves his pie
+Lak a Kentucky Col'nel loves his mint an rye,
+I'll love ma baby till de day ah die.

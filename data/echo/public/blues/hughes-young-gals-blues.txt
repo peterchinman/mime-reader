@@ -1,0 +1,35 @@
+form: blues
+title: Young Gal's Blues
+author: Langston Hughes
+year: 1927
+source: https://en.wikisource.org/wiki/Fine_Clothes_to_the_Jew/Young_Gal's_Blues
+notes: text from Fine Clothes to the Jew (Knopf, 1927), proofread Wikisource transcription of the scan; each blues line split in two: 6-line AAB stanzas
+template: abab__*4
+
+I'm gonna walk to de graveyard
+'Hind ma friend Miss Cora Lee.
+Gonna walk to de graveyard
+'Hind ma dear friend Cora Lee
+Cause when I'm dead some
+Body'll have to walk behind me.
+
+I'm goin' to de po' house
+To see ma old Aunt Clew.
+Goin' to de po' house
+To see ma old Aunt Clew.
+When I'm old an' ugly
+I'll want to see somebody, too.
+
+De po' house is lonely
+An' de grave is cold.
+O, de po' house is lonely,
+De graveyard grave is cold.
+But I'd rather be dead than
+To be ugly an' old.
+
+When love is gone what
+Can a young gal do?
+When love is gone, O,
+What can a young gal do?
+Keep on a-lovin' me, daddy,
+Cause I don't want to be blue.

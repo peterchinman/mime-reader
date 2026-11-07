@@ -1,0 +1,133 @@
+{
+  "verbatim": {
+    "comment": "The same line repeated exactly. Every aligner must score these 1.",
+    "class": 1,
+    "expected": "echo",
+    "pairs": [
+      ["the light is gone from the hill", "the light is gone from the hill"],
+      ["a hand I hold across the river", "a hand I hold across the river"],
+      ["we sang until the morning came", "we sang until the morning came"],
+      ["nobody knows the trouble I have seen", "nobody knows the trouble I have seen"]
+    ]
+  },
+  "substitution": {
+    "comment": "One word swapped for another; the rest repeated in place.",
+    "class": 2,
+    "expected": "echo",
+    "pairs": [
+      ["the light is gone from the hill", "the light is gone from the field"],
+      ["my mother calls the dog inside", "my mother calls the cat inside"],
+      ["we sang until the morning came", "we danced until the morning came"],
+      ["the river runs beneath the bridge", "the river runs beneath the stone"]
+    ]
+  },
+  "long_insertion": {
+    "comment": "A phrase inserted inside the line: one gap, however long.",
+    "class": 3,
+    "expected": "echo",
+    "pairs": [
+      ["I saw a bird in the forest", "I saw a bird—it was yellow and gold—in the forest"],
+      ["the house is quiet now", "the house, with all its windows dark, is quiet now"],
+      ["she walked into the sea", "she walked, without a word to anyone, into the sea"],
+      ["we buried him at noon", "we buried him, the dog we loved, at noon"]
+    ]
+  },
+  "end_truncation": {
+    "comment": "One line is the other cut short (or extended) at an end.",
+    "class": 4,
+    "expected": "echo",
+    "pairs": [
+      ["the light is gone from the hill", "the light is gone"],
+      ["nobody knows the trouble I have seen", "nobody knows the trouble"],
+      ["the bread was warm", "the bread was warm and broken on the table"],
+      ["and miles to go before I sleep", "miles to go before I sleep"]
+    ]
+  },
+  "two_block_swap": {
+    "comment": "The line's two halves exchanged.",
+    "class": 5,
+    "expected": "echo",
+    "pairs": [
+      ["in the morning the birds were singing", "the birds were singing in the morning"],
+      ["under the bridge the water runs", "the water runs under the bridge"],
+      ["slowly the snow began to fall", "the snow began to fall slowly"],
+      ["at night I hear the trains", "I hear the trains at night"]
+    ]
+  },
+  "block_permutation": {
+    "comment": "Three or more blocks re-ordered.",
+    "class": 6,
+    "expected": "echo",
+    "pairs": [
+      ["in the garden after dark the roses close", "the roses close after dark in the garden"],
+      ["with a candle up the stairs to bed we went", "to bed we went up the stairs with a candle"],
+      ["every morning by the river my father fished", "my father fished by the river every morning"],
+      ["over the fields across the water came the bells", "came the bells across the water over the fields"]
+    ]
+  },
+  "resegmentation": {
+    "comment": "The same sounds with the word boundaries moved, often with re-ordering too.",
+    "class": 7,
+    "expected": "echo",
+    "pairs": [
+      ["dark demands I call my own", "call my own dark demand sigh"],
+      ["a nice man", "an ice man"],
+      ["I scream for summer", "ice cream for summer"],
+      ["a stuffy nose", "the stuff he knows"]
+    ]
+  },
+  "morphological": {
+    "comment": "Inflection changed: tense, number, -ing.",
+    "class": 8,
+    "expected": "echo",
+    "pairs": [
+      ["the dog runs to the river", "the dogs ran to the rivers"],
+      ["she calls the children home", "she called the child home"],
+      ["I am walking to the station", "I walked to the station"],
+      ["the light that leaves the window", "the light that left the window"]
+    ]
+  },
+  "phonetic_near": {
+    "comment": "Different words that sound nearly the same.",
+    "class": 9,
+    "expected": "echo",
+    "pairs": [
+      ["a pale and fading light", "a bale and fading kite"],
+      ["the cold wind blows", "the gold wind glows"],
+      ["my heart is breaking", "my hearth is baking"],
+      ["she sells the shells", "she smells the smells"]
+    ]
+  },
+  "unrelated": {
+    "comment": "Nothing in common beyond chance.",
+    "class": 11,
+    "expected": "not",
+    "pairs": [
+      ["the light is gone from the hill", "potatoes boil in copper pots"],
+      ["a hand I hold across the river", "the cat sat on the mat"],
+      ["we sang until the morning came", "brisk winds buffet quarries"],
+      ["my mother calls the dog inside", "nobody knows the trouble I have seen"]
+    ]
+  },
+  "hard_negative_skeleton": {
+    "comment": "Same syntactic skeleton and function words, different content.",
+    "class": 11,
+    "expected": "not",
+    "pairs": [
+      ["the light is gone from the hill", "the boat is lost on the sea"],
+      ["I will go to the river", "you must come from the city"],
+      ["my mother calls the dog inside", "my father keeps the car outside"],
+      ["we sang until the morning came", "they slept before the evening fell"]
+    ]
+  },
+  "ambiguous_rhyme_skeleton": {
+    "comment": "A shared skeleton plus a rhyme: echo or not is a judgment call. Unlabeled; reported but not scored.",
+    "class": 0,
+    "expected": "unlabeled",
+    "pairs": [
+      ["she walked into the night", "he talked about the fight"],
+      ["the cat sat on the mat", "the bat flew from the hat"],
+      ["I lay awake and heard the rain", "you sat alone and felt the pain"]
+    ]
+  }
+}

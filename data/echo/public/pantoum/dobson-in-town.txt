@@ -1,0 +1,57 @@
+form: pantoum
+title: In Town
+author: Austin Dobson
+year: 1887
+source: https://www.gutenberg.org/ebooks/45736
+notes: text from Gleeson White, ed., Ballades and Rondeaus, Chants Royal, Sestinas, Villanelles, &c. (1887), Gutenberg #45736; epigraph: "The blue fly sung in the pane."--Tennyson; nonstandard close: last stanza's 2nd line is new (does not repeat stanza 1 line 3), its 4th line repeats stanza 1 line 1
+template: SA_B ACBD CEDF EGFH GIHJ IKJL KMLN MONP OQPR Q_RS
+
+Toiling in Town now is "horrid"
+(There is that woman again!)--
+June in the zenith is torrid,
+Thought gets dry in the brain.
+
+There is that woman again:
+"Strawberries! fourpence a pottle!"
+Thought gets dry in the brain;
+Ink gets dry in the bottle.
+
+"Strawberries! fourpence a pottle!"
+Oh for the green of a lane!--
+Ink gets dry in the bottle;
+"Buzz" goes a fly in the pane!
+
+Oh for the green of a lane,
+Where one might lie and be lazy!
+"Buzz" goes a fly in the pane;
+Bluebottles drive me crazy!
+
+Where one might lie and be lazy,
+Careless of Town and all in it!--
+Bluebottles drive me crazy:
+I shall go mad in a minute!
+
+Careless of Town and all in it,
+With some one to soothe and to still you;
+I shall go mad in a minute,
+Bluebottle, then I shall kill you!
+
+With some one to soothe and to still you,
+As only one's feminine kin do,--
+Bluebottle, then I shall kill you:
+There now! I've broken the window!
+
+As only one's feminine kin do,--
+Some muslin-clad Mabel or May!--
+There now! I've broken the window!
+Bluebottle's off and away!
+
+Some muslin-clad Mabel or May,
+To dash one with eau de Cologne;--
+Bluebottle's off and away,
+And why should I stay here alone?
+
+To dash one with eau de Cologne,
+All over one's eminent forehead;
+And why should I stay here alone?
+Toiling in Town now is "horrid."

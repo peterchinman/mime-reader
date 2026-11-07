@@ -1,0 +1,37 @@
+form: blues
+title: Beale Street Blues
+author: W. C. Handy
+year: 1917
+source: https://commons.wikimedia.org/wiki/File:Beale_Street_Blues.pdf
+notes: lyrics transcribed from the sheet-music scan (lines follow musical phrases; hyphenated syllables joined); headed 'Beale Street' on the music, Pace & Handy, copyright 1917; the Wikisource text adds a stanza ('You'll see men who rank...') that is not in this scan and is not used
+template: ______ ____ ____ ____ AA_ BB_
+
+I've seen the lights of gay Broadway,
+Old Market Street down by the Frisco Bay,
+I've strolled the Prado, I've gambled on the Bourse
+The seven wonders of the world I've seen
+And many are the places I have been.
+Take my advice folks and see Beale Street first.
+
+You'll see pretty Browns in beautiful gowns,
+You'll see tailor mades and hand me, downs
+You'll meet honest men and pick-pockets skilled
+You'll find that bus'ness never closes till somebody gets killed.
+
+You'll see Hog-Nose rest'rants and Chitlin' Cafes
+You'll see Jugs that tell of bygone days
+And places, once places, now just a sham,
+You'll see Golden Balls enough to pave the New Jerusalem.
+
+If Beale Street could talk If Beale Street could talk,
+Married men would have to take their beds and walk
+Except one or two, who never drink booze
+And the blind man on the corner who sings the Beale Street Blues.
+
+I'd rather be here, than any place I know
+I'd rather be here than any place I know
+It's goin' to take the Sergant For to make me go,
+
+Goin' to the river, maybe, bye and bye
+Goin' to the river, and there's a reason why
+Because the rivers wet And Beale Streets done gone dry.

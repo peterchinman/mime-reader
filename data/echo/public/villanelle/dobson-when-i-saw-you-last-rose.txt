@@ -1,0 +1,31 @@
+form: villanelle
+title: When I saw you last, Rose
+author: Austin Dobson
+year: 1887
+source: https://www.gutenberg.org/ebooks/45736
+notes: text from Gleeson White, ed., Ballades and Rondeaus, Chants Royal, Sestinas, Villanelles, &c. (1887), Gutenberg #45736; dashes are single hyphens in this transcription
+
+When I saw you last, Rose,
+You were only so high;-
+How fast the time goes!
+
+Like a bud ere it blows,
+You just peeped at the sky,
+When I saw you last, Rose!
+
+Now your petals unclose,
+Now your May-time is nigh;-
+How fast the time goes!
+
+And a life,-how it grows!
+You were scarcely so shy,
+When I saw you last, Rose!
+
+In your bosom it shows
+There's a guest on the sly;
+How fast the time goes!
+
+Is it Cupid? Who knows!
+Yet you used not to sigh,
+When I saw you last, Rose;-
+How fast the time goes!

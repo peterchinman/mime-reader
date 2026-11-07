@@ -1,0 +1,31 @@
+form: villanelle
+title: Villanelle (To M. Joseph Boulmier, Author of "Les Villanelles")
+author: Andrew Lang
+year: 1911
+source: https://www.gutenberg.org/ebooks/3138
+notes: text from Ballades and Rhymes, from Ballades in Blue China and Rhymes a la Mode (Longmans, 1911), Gutenberg #3138; small-caps opening normalized; italics removed
+
+Villanelle, why art thou mute?
+Hath the singer ceased to sing?
+Hath the Master lost his lute?
+
+Many a pipe and scrannel flute
+On the breeze their discords fling;
+Villanelle, why art thou mute?
+
+Sound of tumult and dispute,
+Noise of war the echoes bring;
+Hath the Master lost his lute?
+
+Once he sang of bud and shoot
+In the season of the Spring;
+Villanelle, why art thou mute?
+
+Fading leaf and falling fruit
+Say, “The year is on the wing,
+Hath the Master lost his lute?”
+
+Ere the axe lie at the root,
+Ere the winter come as king,
+Villanelle, why art thou mute?
+Hath the Master lost his lute?

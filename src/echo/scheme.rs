@@ -186,4 +186,63 @@ mod tests {
         assert_eq!(pair.outcome, Err(EchoError::EmptyLine));
         assert!(!result.passed);
     }
+
+    /// The synthetic fixture pairs in `echo_pair_tests.json`, as
+    /// (group, class, expected, a, b). (serde_json is a native-only
+    /// dev-dependency.)
+    #[cfg(not(target_arch = "wasm32"))]
+    fn fixture_pairs() -> Vec<(String, u64, String, String, String)> {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/echo_pair_tests.json");
+        let text = std::fs::read_to_string(path).expect("echo_pair_tests.json is readable");
+        let json: serde_json::Value =
+            serde_json::from_str(&text).expect("echo_pair_tests.json parses");
+        let mut pairs = Vec::new();
+        for (group, entry) in json.as_object().expect("an object of groups") {
+            let class = entry["class"].as_u64().expect("class");
+            let expected = entry["expected"].as_str().expect("expected").to_string();
+            for pair in entry["pairs"].as_array().expect("pairs") {
+                let a = pair[0].as_str().expect("leader").to_string();
+                let b = pair[1].as_str().expect("follower").to_string();
+                pairs.push((group.clone(), class, expected.clone(), a, b));
+            }
+        }
+        pairs
+    }
+
+    /// A loose regression floor for every aligner, to be tightened once the
+    /// comparison harness picks an aligner and threshold: verbatim pairs
+    /// score ~1, and echoes outscore non-echoes on average.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fixture_pairs_separate_for_every_aligner() {
+        let pairs = fixture_pairs();
+        assert!(pairs.len() >= 40);
+        for kind in AlignerKind::ALL {
+            let (mut positives, mut negatives) = (Vec::new(), Vec::new());
+            for (group, class, expected, a, b) in &pairs {
+                let echo = detector()
+                    .compare_lines_with(kind, &Line::new(a, dict()), &Line::new(b, dict()))
+                    .unwrap_or_else(|e| panic!("{group}: {a:?} / {b:?}: {e}"));
+                let similarity = echo.alignment.similarity;
+                if *class == 1 {
+                    assert!(
+                        similarity >= 0.99,
+                        "{kind} {group}: {a:?} / {b:?} = {similarity}"
+                    );
+                }
+                match expected.as_str() {
+                    "echo" => positives.push(similarity),
+                    "not" => negatives.push(similarity),
+                    _ => {}
+                }
+            }
+            let mean = |xs: &[f32]| xs.iter().sum::<f32>() / xs.len() as f32;
+            assert!(
+                mean(&positives) > mean(&negatives),
+                "{kind}: mean echo {} ≤ mean non-echo {}",
+                mean(&positives),
+                mean(&negatives)
+            );
+        }
+    }
 }

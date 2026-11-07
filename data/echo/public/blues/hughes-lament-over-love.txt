@@ -1,0 +1,35 @@
+form: blues
+title: Lament Over Love
+author: Langston Hughes
+year: 1927
+source: https://en.wikisource.org/wiki/Fine_Clothes_to_the_Jew/Lament_Over_Love
+notes: text from Fine Clothes to the Jew (Knopf, 1927), proofread Wikisource transcription of the scan; each blues line split in two: 6-line AAB stanzas
+template: abab__*4
+
+I hope ma chile'll
+Never love a man.
+I say I hope ma chile'll
+Never love a man.
+Cause love can hurt you
+Mo'n anything else can.
+
+I'm goin' down to de river
+An' I ain't goin' there to swim.
+Goin' down to de river,
+Ain't goin' there to swim.
+Ma true love's left me, an'
+I'm goin' there to think about him.
+
+Love is like whiskey,
+Love is like red, red wine.
+Love is like whiskey,
+O, like sweet red wine.
+If you wants to be happy
+You got to love all de time.
+
+I'm goin' up in a tower
+Tall as a tree is tall.
+Say up in a tower
+Tall as a tree is tall.
+Gonna think about ma man an'
+Let ma fool-self fall.

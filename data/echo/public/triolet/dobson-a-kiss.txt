@@ -1,0 +1,15 @@
+form: triolet
+title: A Kiss
+author: Austin Dobson
+year: 1887
+source: https://www.gutenberg.org/ebooks/45736
+notes: text from Gleeson White, ed., Ballades and Rondeaus, Chants Royal, Sestinas, Villanelles, &c. (1887), Gutenberg #45736; from the triolet group Rose-Leaves; italics removed
+
+Rose kissed me to-day,
+Will she kiss me to-morrow?
+Let it be as it may,
+Rose kissed me to-day.
+But the pleasure gives way
+To a savour of sorrow;--
+Rose kissed me to-day,--
+Will she kiss me to-morrow?

@@ -1,0 +1,35 @@
+form: blues
+title: Bound No'th Blues
+author: Langston Hughes
+year: 1927
+source: https://en.wikisource.org/wiki/Fine_Clothes_to_the_Jew/Bound_No'th_Blues
+notes: text from Fine Clothes to the Jew (Knopf, 1927), proofread Wikisource transcription of the scan; each blues line split in two: 6-line AAB stanzas; spaced ellipses rendered as ' . . .'; st. 4's second B line is only loosely varied
+template: abab__*4
+
+Goin' down de road, Lawd,
+Goin' down de road.
+Down de road, Lawd,
+Way, way down de road.
+Got to find somebody
+To help me carry dis load.
+
+Road's in front o' me,
+Nothin' to do but walk.
+Road's in front o' me,
+Walk . . . and walk . . . and walk.
+I'd like to meet a good friend
+To come along an' talk.
+
+Hates to be lonely,
+Lawd, I hates to be sad.
+Says I hates to be lonely,
+Hates to be lonely an' sad,
+But ever friend you finds seems
+Like they try to do you bad.
+
+Road, road, road, O!
+Road, road . . . road . . . road, road!
+Road, road, road, O!
+On de No'thern road.
+These Mississippi towns ain't
+Fit fer a hoppin' toad.

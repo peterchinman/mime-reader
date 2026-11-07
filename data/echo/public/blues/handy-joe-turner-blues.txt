@@ -1,0 +1,39 @@
+form: blues
+title: Joe Turner Blues
+author: W. C. Handy
+year: 1915
+source: https://archive.org/details/b10408083
+notes: lyrics transcribed from the sheet-music scan (lines follow musical phrases; hyphenated syllables joined); Pace & Handy, Memphis, copyright 1915; 3 verses then chorus; chorus pickup 'You will be' joined to its first line; hummed '(uhm)' syllables omitted; 2nd line of each tercet repeats the tail of the 1st
+template: AAA BB_ CC_ DD_ EE_ FF_ GG_ HH_
+
+You'll never miss the water till your well runs dry,
+Till your well runs dry.
+You'll never miss Joe Turner till he says "Good Bye."
+
+Sweet Babe, I'm goin' to leave you, and the time ain't long,
+No, the time ain't long.
+If you don't b'lieve I'm leavin', count the days I'm gone.
+
+I bought a bull-dog for to watch you while you sleep,
+Guard you while you sleep.
+Spent all my money, now you call Joe Turner "Cheap."
+
+You never 'preciate the little things I do,
+Not one thing I do.
+And that's the very reason why I'm leavin' you.
+
+Sometimes I feel like nothin', somethin' throwed away,
+Somethin' throwed away.
+And then I get my guitar, play the blues all day.
+
+Now if your heart beat like mine it's not made of steel,
+No, tain't made of steel.
+And when you learn I left you this is how you'll feel.
+
+You will be sorry, be sorry from your heart,
+Sorry to your heart,
+Someday when you and I must part.
+
+And ev'ry time you hear a whistle blow,
+Hear a steamboat blow,
+You'll hate the day you lost your Joe.

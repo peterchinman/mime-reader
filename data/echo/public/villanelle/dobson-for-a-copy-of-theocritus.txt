@@ -1,0 +1,31 @@
+form: villanelle
+title: For a Copy of Theocritus
+author: Austin Dobson
+year: 1887
+source: https://www.gutenberg.org/ebooks/45736
+notes: text from Gleeson White, ed., Ballades and Rondeaus, Chants Royal, Sestinas, Villanelles, &c. (1887), Gutenberg #45736; small-caps THEOCRITUS kept as printed
+
+O singer of the field and fold,
+THEOCRITUS! Pan's pipe was thine,--
+Thine was the happier Age of Gold.
+
+For thee the scent of new-turned mould,
+The bee-hives, and the murmuring pine,
+O singer of the field and fold!
+
+Thou sang'st the simple feasts of old,--
+The beechen bowl made glad with wine ...
+Thine was the happier Age of Gold!
+
+Thou bad'st the rustic loves be told,--
+Thou bad'st the tuneful reeds combine,
+O singer of the field and fold!
+
+And round thee, ever laughing, rolled
+The blithe and blue Sicilian brine ...
+Thine was the happier Age of Gold.
+
+Alas for us! our songs are cold;
+Our northern suns too sadly shine:--
+O singer of the field and fold,
+Thine was the happier Age of Gold.

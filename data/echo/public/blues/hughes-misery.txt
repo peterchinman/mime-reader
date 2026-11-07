@@ -1,0 +1,27 @@
+form: blues
+title: Misery
+author: Langston Hughes
+year: 1927
+source: https://en.wikisource.org/wiki/Fine_Clothes_to_the_Jew/Misery
+notes: text from Fine Clothes to the Jew (Knopf, 1927), proofread Wikisource transcription of the scan; quatrains; first line repeated with variation
+template: aa__*4
+
+Play de blues for me.
+Play de blues for me.
+No other music
+'Ll ease ma misery.
+
+Sing a soothin' song.
+Said a soothin' song,
+Cause de man I love's done
+Done me wrong.
+
+Can't you understand,
+O, understand
+A good woman's cryin'
+For a no-good man?
+
+Black gal like me,
+Black gal like me
+'S got to hear a blues
+For her misery.

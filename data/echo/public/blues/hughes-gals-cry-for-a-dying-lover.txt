@@ -1,0 +1,28 @@
+form: blues
+title: Gal's Cry For a Dying Lover
+author: Langston Hughes
+year: 1927
+source: https://en.wikisource.org/wiki/Fine_Clothes_to_the_Jew/Gal's_Cry_For_a_Dying_Lover
+notes: text from Fine Clothes to the Jew (Knopf, 1927), proofread Wikisource transcription of the scan; each blues line split in two: 6-line AAB stanzas
+template: abab__*3
+
+Heard de owl a hootin',
+Knowed somebody's 'bout to die.
+Heard de owl a hootin',
+Knowed somebody's 'bout to die.
+Put ma head un'neath de kiver,
+Started in to moan an' cry.
+
+Hound dawg's barkin'
+Means he's gonna leave this world.
+Hound dawg's barkin'
+Means he's gonna leave this world.
+O, Lawd have mercy
+On a po' black girl.
+
+Black an' ugly
+But he sho do treat me kind.
+I'm black an' ugly
+But he sho do treat me kind.
+High-in-heaben Jesus,
+Please don't take this man o' mine.

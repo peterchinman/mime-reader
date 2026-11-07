@@ -1,0 +1,22 @@
+form: blues
+title: Bad Luck Card
+author: Langston Hughes
+year: 1927
+source: https://en.wikisource.org/wiki/Fine_Clothes_to_the_Jew/Bad_Luck_Card
+notes: text from Fine Clothes to the Jew (Knopf, 1927), proofread Wikisource transcription of the scan; quatrains; only the 'Gypsy done...' line recurs (varied)
+template: __A___A___A_
+
+Cause you don't love me
+Is awful, awful hard.
+Gypsy done showed me
+Ma bad luck card.
+
+There ain't no good left
+In this world for me.
+Gypsy done tole me,—
+Unlucky as can be.
+
+I don't know what
+Po' weary me can do.
+Gypsy says I'd kill ma self
+If I was you.
