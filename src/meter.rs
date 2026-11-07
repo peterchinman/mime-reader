@@ -1650,12 +1650,8 @@ mod tests {
 
     // --- promotion ---
 
-    /// A promoted syllable's word and syllable indices.
-    fn promoted(word_index: usize, syllable_index: usize) -> (usize, usize) {
-        (word_index, syllable_index)
-    }
-
-    /// The scansion's promoted syllables, in line order.
+    /// The word and syllable indices of the scansion's promoted syllables, in
+    /// line order.
     fn promotions(scansion: &Scansion) -> Vec<(usize, usize)> {
         let mut promotions = Vec::new();
         for (word_index, word) in scansion.words.iter().enumerate() {
@@ -1667,7 +1663,7 @@ mod tests {
                         ..
                     })
                 ) {
-                    promotions.push(promoted(word_index, syllable_index));
+                    promotions.push((word_index, syllable_index));
                 }
             }
         }
@@ -1698,7 +1694,7 @@ mod tests {
         let line = Line::new("accuracy", dict());
         let spec: MeterSpecification = "/x/x".parse().unwrap();
 
-        assert_meter_matches_with_promotions(spec.validate_line(&line), &[promoted(0, 2)]);
+        assert_meter_matches_with_promotions(spec.validate_line(&line), &[(0, 2)]);
     }
 
     #[test]
@@ -1707,7 +1703,7 @@ mod tests {
         let line = Line::new("thou art more lovely and more temperate", dict());
         let spec: MeterSpecification = "x/x/x/x/x/".parse().unwrap();
 
-        assert_meter_matches_with_promotions(spec.validate_line(&line), &[promoted(6, 2)]);
+        assert_meter_matches_with_promotions(spec.validate_line(&line), &[(6, 2)]);
     }
 
     #[test]
@@ -1730,7 +1726,7 @@ mod tests {
                 .parse::<MeterSpecification>()
                 .unwrap()
                 .validate_line(&Line::new("a beautiful array", dict())),
-            &[promoted(1, 2)],
+            &[(1, 2)],
         );
         assert_eq!(
             assert_meter_no_match(
@@ -1750,11 +1746,27 @@ mod tests {
 
         assert_meter_matches_with_promotions(
             spec.validate_line(&Line::new("the adrienne", dict())),
-            &[promoted(1, 0)],
+            &[(1, 0)],
         );
         assert_eq!(
             assert_meter_no_match(spec.validate_line(&Line::new("sweet adrienne", dict()))),
             [unstressed_on_beat(1, 0)]
+        );
+    }
+
+    #[test]
+    fn a_secondary_stress_blocks_a_neighbors_promotion() {
+        // ACCURACY is /xxx and METEORITE /xx\. In the `_` position, the last
+        // syllable is off the beat either way.
+        let spec: MeterSpecification = "/x/_".parse().unwrap();
+
+        assert_meter_matches_with_promotions(
+            spec.validate_line(&Line::new("accuracy", dict())),
+            &[(0, 2)],
+        );
+        assert_eq!(
+            deviations(&spec, &Line::new("meteorite", dict())),
+            [unstressed_on_beat(0, 2)]
         );
     }
 
@@ -1784,21 +1796,21 @@ mod tests {
                 .parse::<MeterSpecification>()
                 .unwrap()
                 .validate_line(&Line::new("As beautiful as day", dict())),
-            &[promoted(1, 2)],
+            &[(1, 2)],
         );
         assert_meter_matches_with_promotions(
             "x/x/"
                 .parse::<MeterSpecification>()
                 .unwrap()
                 .validate_line(&Line::new("my adrienne", dict())),
-            &[promoted(1, 0)],
+            &[(1, 0)],
         );
         assert_meter_matches_with_promotions(
             "x/x/"
                 .parse::<MeterSpecification>()
                 .unwrap()
                 .validate_line(&Line::new("’tis adrienne", dict())),
-            &[promoted(1, 0)],
+            &[(1, 0)],
         );
     }
 
@@ -1809,7 +1821,7 @@ mod tests {
         let line = Line::new("the beautiful is never what it seems", dict());
         let spec: MeterSpecification = "x/x/x/x/x/".parse().unwrap();
 
-        assert_meter_matches_with_promotions(spec.validate_line(&line), &[promoted(1, 2)]);
+        assert_meter_matches_with_promotions(spec.validate_line(&line), &[(1, 2)]);
     }
 
     #[test]
@@ -1818,6 +1830,16 @@ mod tests {
         // promoting its third syllable; its second, /x\x, fits outright.
         let line = Line::new("genuinely", dict());
         let spec: MeterSpecification = "/x/x".parse().unwrap();
+
+        assert_meter_matches_with_promotions(spec.validate_line(&line), &[]);
+    }
+
+    #[test]
+    fn prefers_a_meter_path_without_promotions() {
+        // Both optional sections fit ACCURACY (/xxx), but /x/x only by
+        // promoting its third syllable.
+        let line = Line::new("accuracy", dict());
+        let spec: MeterSpecification = "(/x/x)(/xxx)".parse().unwrap();
 
         assert_meter_matches_with_promotions(spec.validate_line(&line), &[]);
     }
@@ -1844,18 +1866,7 @@ mod tests {
             }]
         );
         assert!(exceptions.is_empty());
-        assert_eq!(promotions(&scansion), [promoted(1, 2)]);
-    }
-
-    fn pending(word_index: usize, meter_index: usize) -> Step {
-        Step::Filled {
-            word_index,
-            stress: Stress::Unstressed,
-            ambiguous: false,
-            meter_index,
-            expected: S,
-            fit: SyllableFit::PendingPromotion,
-        }
+        assert_eq!(promotions(&scansion), [(1, 2)]);
     }
 
     #[test]
@@ -1863,7 +1874,14 @@ mod tests {
         // A stressed one-syllable word blocks the promotion, though it scans
         // unstressed on its offbeat.
         let steps = [
-            pending(0, 0),
+            Step::Filled {
+                word_index: 0,
+                stress: Stress::Unstressed,
+                ambiguous: false,
+                meter_index: 0,
+                expected: S,
+                fit: SyllableFit::PendingPromotion,
+            },
             Step::Missing {
                 before_word_index: 1,
                 meter_index: 1,
@@ -1917,17 +1935,31 @@ mod tests {
     #[test]
     fn an_extra_syllable_or_the_line_end_can_settle_a_promotion() {
         let steps = [
-            pending(0, 0),
+            Step::Filled {
+                word_index: 0,
+                stress: Stress::Unstressed,
+                ambiguous: false,
+                meter_index: 0,
+                expected: S,
+                fit: SyllableFit::PendingPromotion,
+            },
             Step::Extra {
                 word_index: 0,
                 stress: Stress::Unstressed,
                 ambiguous: false,
             },
-            pending(1, 1),
+            Step::Filled {
+                word_index: 1,
+                stress: Stress::Unstressed,
+                ambiguous: false,
+                meter_index: 1,
+                expected: S,
+                fit: SyllableFit::PendingPromotion,
+            },
         ];
         let scansion = Scansion::from_steps(&steps, 2);
 
-        assert_eq!(promotions(&scansion), [promoted(0, 0), promoted(1, 0)]);
+        assert_eq!(promotions(&scansion), [(0, 0), (1, 0)]);
         // A promoted syllable takes its beat's stress.
         assert_eq!(
             scansion.words[0].syllables[0].stress,

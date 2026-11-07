@@ -1789,6 +1789,45 @@ mod tests {
         ));
     }
 
+    #[wasm_bindgen_test]
+    fn meter_dto_scansion_marks_gaps_and_extra_syllables() {
+        let mut poem = analyzer()
+            .open_poem(
+                vec![
+                    "a lover and summer evening light".into(),
+                    "hello world".into(),
+                ],
+                Some(PoemOptionsDto {
+                    meter_scheme: Some("x/x/x/x/x/\nx/".into()),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+
+        // The first line drops the second "a", leaving a gap before SUMMER.
+        let MeterDto::NoMatch { scansion, .. } = poem.meter_analysis(0).unwrap() else {
+            panic!("expected a meter mismatch");
+        };
+        assert!(matches!(
+            scansion.words[3].gaps_before.as_slice(),
+            [GapDto {
+                index: 4,
+                expected: StressDto::Unstressed,
+            }]
+        ));
+        // In the second, WORLD is extra, and no position decides its stress.
+        let MeterDto::NoMatch { scansion, .. } = poem.meter_analysis(1).unwrap() else {
+            panic!("expected a meter mismatch");
+        };
+        assert!(matches!(
+            scansion.words[1].syllables.as_slice(),
+            [SyllableScansionDto {
+                stress: ScannedStressDto::Ambiguous,
+                position: None,
+            }]
+        ));
+    }
+
     // ---- returned DTO shape ------------------------------------------------
     //
     // The methods now return the concrete DTO enums, so we match on them
