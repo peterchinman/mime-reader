@@ -375,7 +375,6 @@ impl SyllableScansion {
                 word_index,
                 syllable_index,
                 expected,
-                actual: self.stress,
             }),
             Some(_) => None,
         }
@@ -421,13 +420,13 @@ impl Gap {
 /// One syllable-level departure of a line from its meter.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MeterDeviation {
-    /// A syllable whose stress doesn't fit its position in the meter.
+    /// A syllable whose stress doesn't fit its position in the meter: a
+    /// stressed syllable where the meter expects an unstressed one, or the
+    /// reverse.
     StressMismatch {
         word_index: usize,
         syllable_index: usize,
         expected: SyllableStress,
-        /// How the scansion stresses the syllable.
-        actual: ScannedStress,
     },
     /// A syllable that fills no position in the meter: an extra syllable
     /// within the line, or one past the meter's end.
@@ -1384,7 +1383,6 @@ mod tests {
                 word_index,
                 syllable_index: 0,
                 expected: S,
-                actual: ScannedStress::Unstressed,
             })
         );
     }
@@ -1465,7 +1463,6 @@ mod tests {
                 word_index: 0,
                 syllable_index: 0,
                 expected: S,
-                actual: ScannedStress::Unstressed,
             }]
         );
     }
@@ -1605,7 +1602,6 @@ mod tests {
             word_index,
             syllable_index,
             expected: S,
-            actual: ScannedStress::Unstressed,
         }
     }
 

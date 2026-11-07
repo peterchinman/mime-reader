@@ -688,7 +688,6 @@ pub enum MeterDeviationDto {
         word_index: usize,
         syllable_index: usize,
         expected: StressDto,
-        actual: ScannedStressDto,
     },
     ExtraSyllable {
         word_index: usize,
@@ -711,12 +710,10 @@ impl From<&MeterDeviation> for MeterDeviationDto {
                 word_index,
                 syllable_index,
                 expected,
-                actual,
             } => Self::StressMismatch {
                 word_index: *word_index,
                 syllable_index: *syllable_index,
                 expected: (*expected).into(),
-                actual: (*actual).into(),
             },
             MeterDeviation::ExtraSyllable {
                 word_index,
