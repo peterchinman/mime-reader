@@ -4,6 +4,7 @@
 /// engine can produce under its config).
 pub const NORMALIZED_DISTANCE_MAX: u32 = 1000;
 
+pub mod align;
 pub mod analyzer;
 pub mod consonant_distance;
 pub mod dictionary;
