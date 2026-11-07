@@ -67,7 +67,8 @@ mod native {
         }
         let mut poems = Vec::new();
         for dir in &args.corpora {
-            let source = if dir.ends_with("private") {
+            // Anything under a `private` directory is private.
+            let source = if dir.components().any(|c| c.as_os_str() == "private") {
                 "private"
             } else {
                 "public"
