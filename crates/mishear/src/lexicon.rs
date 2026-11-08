@@ -56,9 +56,15 @@ struct Bigrams {
     prior: f32,
     /// `count(v)`: how often `v` is followed by any word.
     totals: Vec<f32>,
-    pairs: HashMap<(WordId, WordId), f32>,
+    /// Keyed by `pair(v, w)`, hashed fast: pass 2 looks pairs up a lot.
+    pairs: rustc_hash::FxHashMap<u64, f32>,
     /// The cheapest `−ln P(w | ·)` over every context, the start included.
     best: Vec<f32>,
+}
+
+/// A word pair's key in [`Bigrams::pairs`].
+fn pair(v: WordId, w: WordId) -> u64 {
+    (u64::from(v) << 32) | u64::from(w)
 }
 
 /// The default smoothing strength `μ`.
@@ -301,7 +307,7 @@ impl Lexicon {
     /// [`Self::load_bigrams`] from the counts' text.
     pub fn parse_bigrams(&mut self, text: &str, prior: f32) -> Result<(), String> {
         let mut totals = vec![0.0f32; self.len()];
-        let mut pairs = HashMap::new();
+        let mut pairs = rustc_hash::FxHashMap::default();
         for line in text.lines() {
             let mut fields = line.split('\t');
             let (Some(left), Some(right), Some(count)) =
@@ -314,11 +320,12 @@ impl Lexicon {
             if right == "*" {
                 totals[v as usize] = count;
             } else if let Some(w) = self.id(right) {
-                pairs.insert((v, w), count);
+                pairs.insert(pair(v, w), count);
             }
         }
         let mut best: Vec<f32> = self.surprisal.clone();
-        for (&(v, w), &count) in &pairs {
+        for (&key, &count) in &pairs {
+            let (v, w) = ((key >> 32) as WordId, key as WordId);
             let p = (count + prior * (-self.surprisal[w as usize]).exp())
                 / (totals[v as usize] + prior);
             best[w as usize] = best[w as usize].min(-p.ln());
@@ -342,7 +349,7 @@ impl Lexicon {
         let unigram = self.surprisal[word as usize];
         match (&self.bigrams, previous) {
             (Some(b), Some(v)) => {
-                let count = b.pairs.get(&(v, word)).copied().unwrap_or(0.0);
+                let count = b.pairs.get(&pair(v, word)).copied().unwrap_or(0.0);
                 let p = (count + b.prior * (-unigram).exp()) / (b.totals[v as usize] + b.prior);
                 -p.ln()
             }

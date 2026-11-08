@@ -71,6 +71,8 @@ pub struct SearchDto {
     pub word_penalty: f32,
     pub bigrams: bool,
     pub shortlist: usize,
+    /// With bigrams, partial matches kept per position.
+    pub beam: usize,
     pub distinct_sounds: bool,
     pub novelty: f32,
     pub function_share: f32,
@@ -358,6 +360,7 @@ impl MishearApp {
             word_penalty: s.word_penalty,
             bigrams: s.bigrams,
             shortlist: s.shortlist,
+            beam: s.beam.max(1),
             distinct_sounds: s.distinct_sounds,
             ..SearchConfig::default()
         };
@@ -541,6 +544,7 @@ pub fn defaults() -> DefaultsDto {
             word_penalty: search.word_penalty,
             bigrams: search.bigrams,
             shortlist: search.shortlist,
+            beam: search.beam,
             distinct_sounds: search.distinct_sounds,
             novelty: mishear.novelty,
             function_share: mishear.function_word_share,

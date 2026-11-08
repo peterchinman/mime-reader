@@ -71,6 +71,15 @@ const SEARCH_KNOBS: Knob[] = [
   },
   { type: 'number', key: 'shortlist', label: 'bigram shortlist', hint: 'Words kept per input span when bigrams are on.', min: 5, max: 200, step: 1 },
   {
+    type: 'number',
+    key: 'beam',
+    label: 'bigram beam',
+    hint: 'With bigrams, partial hearings kept per position. Wider is closer to exact and slower. At a small word-prior weight, narrow costs nothing; at 0.1, 50 makes a few hearings slightly worse than 400.',
+    min: 10,
+    max: 400,
+    step: 10,
+  },
+  {
     type: 'bool',
     key: 'distinct_sounds',
     label: 'merge same-sound hearings',

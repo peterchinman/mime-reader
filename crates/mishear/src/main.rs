@@ -74,6 +74,8 @@ SEARCH OPTIONS
                      subtitles (data/bigrams-en.tsv; see scripts/bigrams.py),
                      or alone if that file is missing.
   --bigrams          require the word-pair counts (an error without them)
+  --beam N           with bigrams, partial hearings kept per position: wider
+                     is closer to exact, and slower (default 100)
   --bigram-file PATH other word-pair counts (implies --bigrams)
   --all-words        keep names and brands (by default the lexicon keeps only
                      words in the ENABLE word list, data/ENABLE, and
@@ -125,6 +127,7 @@ struct Options {
     /// The word-pair counts were asked for, so their absence is an error.
     bigrams_required: bool,
     bigram_file: Option<PathBuf>,
+    beam: usize,
     public_only: bool,
     word_penalty: f32,
     all_pronunciations: bool,
@@ -167,6 +170,7 @@ fn parse(args: Vec<String>) -> Result<Options, String> {
         bigrams: d.search.bigrams,
         bigrams_required: false,
         bigram_file: None,
+        beam: d.search.beam,
         public_only: false,
         word_penalty: d.search.word_penalty,
         all_pronunciations: true,
@@ -253,6 +257,11 @@ fn parse(args: Vec<String>) -> Result<Options, String> {
                 o.bigrams_required = true;
             }
             "--unigram" => o.bigrams = false,
+            "--beam" => {
+                o.beam = value("--beam")?
+                    .parse()
+                    .map_err(|e| format!("--beam: {e}"))?
+            }
             "--bigram-file" => {
                 o.bigram_file = Some(PathBuf::from(value("--bigram-file")?));
                 o.bigrams = true;
@@ -357,6 +366,7 @@ fn search_config(o: &Options) -> SearchConfig {
         lm_weight: o.lm,
         word_penalty: o.word_penalty,
         bigrams: o.bigrams,
+        beam: o.beam,
         distinct_sounds: !o.all_spellings,
         ..SearchConfig::default()
     }

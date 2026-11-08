@@ -171,6 +171,7 @@ example names its own.
 | `--pronunciations first\|all` | all | more ways to hear a word, against more chance matches |
 | `--bigram-prior` | 1000 | with bigrams: trusting word pairs (small) against unigram frequency (large) |
 | `--unigram` | off (bigrams on) | exactness and speed, against fluency |
+| `--beam` | 100 | with bigrams: closer to exact (wider) against speed |
 | `--vocab`, `--all-words` | 50k, filtered | coverage against obscure words, names and brands |
 | `--novelty`, `--function-share` | 0.9, 0.2 | departing from the original's words |
 | `--root` | 0.2 | departing from the original's roots too ("flying" for "fly in") |
@@ -242,8 +243,8 @@ scores another counts file on the same pairs.
 - **At the default weight they matter little.** At `--lm 0.005` the
   language model adds only about 0.01–0.03 per word, so with or without
   bigrams the top hearing is the same for 7 of the 10 lines in "Examples",
-  while bigrams make the search about 4× slower (see "Cost" below). Their
-  effect grows with `--lm`: at 0.1, "sisters of a lot more than".
+  while bigrams make the search about 1.6× slower (see "Speed" below).
+  Their effect grows with `--lm`: at 0.1, "sisters of a lot more than".
 - OPUS distributes the subtitles without owning them. The counts are
   generated locally and gitignored, like the wordfreq list.
 
@@ -342,9 +343,9 @@ provably the best overall: it costs no more than the pool's last member
 did, and everything outside the pool cost at least that before the new
 penalties. A test checks the result against a full search per hearing.
 
-**Cost.** Over 12 public lines, 228 ms per line on average, against 129 ms
-for the plain list (1.8×). With `--bigrams`, whose pass 2 is much dearer,
-0.75–1.2 s on long lines, against about 0.2 s (4–6×).
+**Cost.** Over 12 public lines with the current defaults, 128 ms per line
+on average, against 62 ms for the plain list (2×); with `--unigram`, 79 ms
+against 53 ms (1.5×).
 
 ### Rhythm and swaps
 
@@ -383,9 +384,13 @@ it against brute force. The argument:
 `best_matches` raises the bound geometrically until it holds N matches, which
 gives the exact top N.
 
-With bigrams (the default), the best word for a span depends on the word before it. Pruning
-still uses an admissible lower bound, so it is safe. But the per-span
-shortlist (30 words) makes the result approximate.
+With bigrams (the default), the best word for a span depends on the word
+before it. Pruning still uses an admissible lower bound, so it is safe. But
+the per-span shortlist (30 words) and pass 2's beam (`--beam`, 100 partial
+hearings per position) make the result approximate. At the default
+`--lm 0.005` a beam of 100 finds the same hearings as one of 400 on 30
+public lines (but for one tie broken the other way); at `--lm 0.1` it
+makes 3 of 120 hearings slightly worse, and a beam of 50 makes 7.
 
 **Cost.** Corpus lines of 10–33 phonemes (mean 24), on one core, unigram
 model:
@@ -400,11 +405,35 @@ Finding the exact best is barely more expensive than the top 10. Both cost
 about one bounded trie walk per input position, which grows linearly with
 the vocabulary and the line's length. The bounded search ("N within X") is
 about 1.5× cheaper, because it skips the bound-raising rounds. An
-approximate search isn't needed. With the current defaults, mishearings
-over 12 public lines take 721 ms on average (median 469 ms, up to 1.7 s),
-and 168 ms with `--unigram`. The penalties on shared words, the line's and
-earlier hearings', push the bound out. Accents that lengthen the line take
-longer; Japanese epenthesis, for example, takes about 1 s.
+approximate search isn't needed. The penalties on shared words, the line's
+and earlier hearings', push the bound out. Accents that lengthen the line
+take longer.
+
+**Speed.** With the current defaults, mishearings over 12 public lines take
+130 ms on average (median 94 ms, up to 277 ms), and 80 ms with
+`--unigram`; the web page takes about twice that (150–430 ms a line). They
+took 721 and 168 ms before these changes, which leave the results as they
+were:
+
+- **The bound jumps to where the hearings are.** The search starts with a
+  bound of 2 and raises it until enough hearings fit, rebuilding pass 1
+  each round. After each round, the cheapest complete hearing through the
+  lattice (a shortest path, by pass 1's costs) tells where the bound needs
+  to go: past it by 30%, rather than 1.5× at a time. If it already lies
+  beyond the bound, pass 2 is skipped, since it can't find anything. Lines
+  took 5.6 rounds on average, now about 2.
+- **Pass 1 skips what the line's start rules out.** Every hearing with a
+  word starting at position `s` has already paid the cheapest way to cover
+  the input before `s`, which the walks from earlier positions have found.
+  The walk from `s` gets only what the bound leaves after that, and
+  positions nothing cheap enough reaches aren't walked at all.
+- **Pass 2 looks each word pair up once.** Partial hearings ending at a
+  position often share their last word, so each word's cost after it is
+  looked up once per edge, in a pair table with a fast hash (FxHash).
+  Partials are kept cheapest first, so an edge stops once even its cheapest
+  context can't fit the bound.
+- **The bigram beam narrowed from 400 to 100** (see "Exactness"), the only
+  change here that can alter a result.
 
 ## Deformations
 

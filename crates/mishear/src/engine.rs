@@ -17,7 +17,8 @@ use crate::deform::Deformation;
 use crate::lexicon::{CommonWords, Frequency, Lexicon, WordId, read_frequencies};
 use crate::phone::Ph;
 use crate::search::{
-    Lattice, Match, SearchConfig, SearchStats, best_matches, lattice, paths, shortlist,
+    Lattice, Match, SearchConfig, SearchStats, best_matches, beyond, cheapest, lattice, next_bound,
+    paths, shortlist,
 };
 
 /// Words this frequent (by rank) count as function words: sharing "the"
@@ -315,15 +316,8 @@ impl Engine {
                 .is_none_or(|l| l.bound < bound || l.keep < keep)
             {
                 // Room, too, for the words the hearings still to come will
-                // penalize (not with bigrams: their pass 2 grows with the
-                // lattice faster than a rebuild costs).
-                let per_hearing = if search.bigrams && self.lexicon.has_bigrams() {
-                    0
-                } else if variety.root > 0.0 {
-                    24
-                } else {
-                    12
-                };
+                // penalize, so they needn't rebuild it.
+                let per_hearing = if variety.root > 0.0 { 24 } else { 12 };
                 search.bound = bound;
                 let l = lattice(
                     input,
@@ -340,6 +334,16 @@ impl Engine {
             }
             let l = built.as_ref().expect("built above");
             search.bound = l.bound;
+            // Nothing left within the bound: skip pass 2, and raise the
+            // bound to where the cheapest hearing lies.
+            let floor = cheapest(l, &search, &at_call);
+            if beyond(floor, l.bound) {
+                if bound >= max_bound {
+                    break 'hearings;
+                }
+                bound = next_bound(l.bound, floor, 1.5, max_bound);
+                continue;
+            }
             let pool = paths(l, &self.lexicon, &search, &at_call);
             // Every hearing outside the pool costs at least as much as its
             // last member did (or, when the pool holds everything within
@@ -397,7 +401,7 @@ impl Engine {
                         if bound >= max_bound {
                             break 'hearings;
                         }
-                        bound = (bound * 1.5).min(max_bound);
+                        bound = next_bound(bound, floor, 1.5, max_bound);
                         break;
                     }
                 }

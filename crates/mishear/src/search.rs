@@ -59,11 +59,13 @@ pub struct SearchConfig {
     pub boundary_cost: Vec<f32>,
     /// Score words by the previous word too, when the lexicon has bigrams
     /// (on by default). The search is then exact only up to its per-span
-    /// shortlist of
-    /// `shortlist` words (the best word for a span depends on its
-    /// predecessor) and its cap of 400 partial matches per position.
+    /// shortlist of `shortlist` words (the best word for a span depends on
+    /// its predecessor) and its `beam` of partial matches per position.
     pub bigrams: bool,
     pub shortlist: usize,
+    /// With bigrams, how many partial matches pass 2 keeps per position:
+    /// wider is closer to exact, and slower.
+    pub beam: usize,
     /// Treat hearings that sound the same (homophones spelled differently:
     /// "there" / "their") as one, keeping the cheapest spelling.
     pub distinct_sounds: bool,
@@ -80,6 +82,7 @@ impl Default for SearchConfig {
             boundary_cost: Vec::new(),
             bigrams: true,
             shortlist: 30,
+            beam: 100,
             distinct_sounds: true,
         }
     }
@@ -215,14 +218,26 @@ pub fn lattice(
     let extra_span = (config.bound / cost.min_indel()).floor() as usize;
     let mut present = vec![0u64; lexicon.len()];
     let mut touched: Vec<WordId> = Vec::new();
+    // `reach[p]`: the cheapest way to cover input[..p] with the words found
+    // so far. Every hearing with a word starting at `s` has paid at least
+    // `reach[s]` before it (with bigrams, pass 1's costs are lower bounds),
+    // so the walk from `s` needs only what the bound leaves after that;
+    // positions nothing within the bound reaches need no walk.
+    let mut reach = vec![f32::INFINITY; n + 1];
+    reach[0] = 0.0;
     for s in 0..n {
         let span_max = (n - s).min(lexicon.max_depth() + extra_span);
+        // Every word starting here pays for the boundary before it.
+        let before = reach[s] + boundary_cost(config, s);
+        if before > config.bound {
+            lattice.edges.push(Vec::new());
+            continue;
+        }
         let mut walk = Walk {
             input: &input[s..s + span_max],
             lexicon,
             cost,
-            // Every word starting here pays for the boundary before it.
-            bound: config.bound - boundary_cost(config, s),
+            bound: config.bound - before,
             keep,
             word_cost: &word_cost,
             subtree_min: &subtree_min,
@@ -247,6 +262,13 @@ pub fn lattice(
         walk.descend(0, 0, None, root_min);
         lattice.nodes += walk.nodes;
         lattice.edge_count += walk.best.iter().map(Vec::len).sum::<usize>();
+        // Spans keep their words cheapest first.
+        for (k, span) in walk.best.iter().enumerate() {
+            if let Some(cheapest) = span.first() {
+                let e = s + k + 1;
+                reach[e] = reach[e].min(before + cheapest.total);
+            }
+        }
         lattice.edges.push(walk.best);
         for w in touched.drain(..) {
             present[w as usize] = 0;
@@ -292,6 +314,30 @@ pub fn paths(
     }];
     let mut at: Vec<Vec<u32>> = vec![Vec::new(); n + 1];
     at[0].push(0);
+    // With bigrams, the distinct last words of the partials ending at each
+    // position, and each partial's index among them: a word's cost after
+    // each of them is looked up once per edge, not once per partial.
+    let mut last_words: Vec<Vec<WordId>> = vec![Vec::new(); n + 1];
+    let mut last_slot: Vec<Vec<u32>> = vec![Vec::new(); n + 1];
+    let index_last_words = |at: &[u32], arena: &[Partial]| {
+        let mut words: Vec<WordId> = Vec::new();
+        let slots = at
+            .iter()
+            .map(|&p| {
+                let word = arena[p as usize].word;
+                match words.iter().position(|&w| w == word) {
+                    Some(k) => k as u32,
+                    None => {
+                        words.push(word);
+                        (words.len() - 1) as u32
+                    }
+                }
+            })
+            .collect();
+        (words, slots)
+    };
+    (last_words[0], last_slot[0]) = index_last_words(&at[0], &arena);
+    let mut after: Vec<f32> = Vec::new();
     for e in 1..=n {
         let mut candidates: Vec<Partial> = Vec::new();
         for s in 0..e {
@@ -301,18 +347,34 @@ pub fn paths(
             let boundary = boundary_cost(config, s);
             for edge in span_edges {
                 let penalty = penalty(edge.word);
-                for &p in &at[s] {
+                // Every extension by this edge costs at least this: with
+                // bigrams, pass 1 charged the word's cheapest context.
+                let least = edge.total + boundary + penalty;
+                let fixed =
+                    edge.phonetic + config.word_penalty + extra(edge.word) + boundary + penalty;
+                if bigrams {
+                    after.clear();
+                    after.resize(last_words[s].len(), f32::NAN);
+                }
+                for (i, &p) in at[s].iter().enumerate() {
                     let prev = &arena[p as usize];
+                    // Partials are cheapest first.
+                    if prev.cost + least > bound {
+                        break;
+                    }
                     let edge_cost = if bigrams {
-                        let previous = (prev.word != WordId::MAX).then_some(prev.word);
-                        edge.phonetic
-                            + config.lm_weight * lexicon.surprisal_after(previous, edge.word)
-                            + config.word_penalty
-                            + extra(edge.word)
+                        let slot = last_slot[s][i] as usize;
+                        if after[slot].is_nan() {
+                            let previous = last_words[s][slot];
+                            let previous = (previous != WordId::MAX).then_some(previous);
+                            after[slot] = fixed
+                                + config.lm_weight * lexicon.surprisal_after(previous, edge.word);
+                        }
+                        after[slot]
                     } else {
-                        edge.total
+                        least
                     };
-                    let total = prev.cost + edge_cost + boundary + penalty;
+                    let total = prev.cost + edge_cost;
                     if total > bound {
                         continue;
                     }
@@ -339,7 +401,7 @@ pub fn paths(
         // last word, so the right state is (position, last word): keep the
         // best `keep` for each last word. Without, the best `keep` overall.
         let mut per_last: HashMap<WordId, usize> = HashMap::new();
-        let cap = if bigrams { PARTIALS_PER_POSITION } else { keep };
+        let cap = if bigrams { config.beam.max(keep) } else { keep };
         // Only the cheapest are needed: sort those first, and the rest only
         // if duplicates use them up.
         let by_cost = |a: &Partial, b: &Partial| a.cost.total_cmp(&b.cost);
@@ -376,6 +438,9 @@ pub fn paths(
             seen.push(candidate.hash);
             at[e].push(arena.len() as u32);
             arena.push(candidate);
+        }
+        if bigrams {
+            (last_words[e], last_slot[e]) = index_last_words(&at[e], &arena);
         }
     }
 
@@ -421,22 +486,76 @@ pub fn best_matches(
     let start = Stopwatch::start();
     let mut config = config.clone();
     let mut total = SearchStats::default();
+    let none = HashMap::new();
     loop {
-        let (matches, stats) = search(input, lexicon, cost, &config);
-        total.nodes += stats.nodes;
-        total.edges = stats.edges;
+        let lattice = lattice(
+            input,
+            lexicon,
+            cost,
+            &config,
+            shortlist(lexicon, &config, 0),
+        );
+        total.nodes += lattice.nodes;
+        total.edges = lattice.edge_count;
         total.rounds += 1;
         total.bound = config.bound;
+        let floor = cheapest(&lattice, &config, &none);
+        let matches = if beyond(floor, config.bound) {
+            Vec::new()
+        } else {
+            paths(&lattice, lexicon, &config, &none)
+        };
         if matches.len() >= config.results || config.bound >= max_bound {
             total.elapsed = start.elapsed();
             return (matches, total);
         }
-        config.bound = (config.bound * growth).min(max_bound);
+        config.bound = next_bound(config.bound, floor, growth, max_bound);
     }
 }
 
-/// With bigrams, at most this many partial matches end at each position.
-const PARTIALS_PER_POSITION: usize = 400;
+/// The cheapest complete hearing through `lattice`, by pass 1's word costs
+/// plus `penalty` and the boundary costs, whatever the bound: infinite when
+/// no path covers the input. With bigrams, pass 1's costs take each word's
+/// cheapest context, so this is a lower bound on what pass 2 finds.
+pub fn cheapest(lattice: &Lattice, config: &SearchConfig, penalty: &HashMap<WordId, f32>) -> f32 {
+    let n = lattice.edges.len();
+    let mut best = vec![f32::INFINITY; n + 1];
+    best[0] = 0.0;
+    for s in 0..n {
+        if best[s].is_infinite() {
+            continue;
+        }
+        let from = best[s] + boundary_cost(config, s);
+        for (k, span) in lattice.edges[s].iter().enumerate() {
+            let word = span
+                .iter()
+                .map(|edge| edge.total + penalty.get(&edge.word).copied().unwrap_or(0.0))
+                .fold(f32::INFINITY, f32::min);
+            let e = s + k + 1;
+            best[e] = best[e].min(from + word);
+        }
+    }
+    best[n]
+}
+
+/// Whether nothing can cost as little as `bound`, when the cheapest
+/// hearing costs `floor` (with room for rounding).
+pub fn beyond(floor: f32, bound: f32) -> bool {
+    floor > bound + 1e-4
+}
+
+/// The bound to try after `bound` held too few hearings, when the
+/// cheapest one in its lattice cost `floor`: past it, with room for the
+/// dearer hearings after it; or, with no complete hearing yet, `growth`
+/// times further.
+pub fn next_bound(bound: f32, floor: f32, growth: f32, max_bound: f32) -> f32 {
+    let next = if floor.is_finite() {
+        (floor * 1.3).max(bound * 1.2)
+    } else {
+        bound * growth
+    };
+    next.min(max_bound)
+}
 
 #[derive(Clone, Copy)]
 struct Partial {
