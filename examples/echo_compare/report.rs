@@ -32,10 +32,8 @@ pub fn config(kind: AlignerKind, config: &EchoConfig, detector: &EchoDetector) {
         t.move_cost, t.run_open, t.min_run, t.max_runs
     );
     println!(
-        "normalization {:?}  variants ≤{}/line, ≤{} pairs  unit = {}",
+        "normalization {:?}  unit = {}",
         config.normalization,
-        config.max_variants_per_line,
-        config.max_variant_pairs,
         detector.unit()
     );
     println!();

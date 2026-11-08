@@ -8,7 +8,9 @@
 > was never better on real poems, and its reuse inflated scores. The
 > default consonant zero point is tuned (300), not the CMUdict-calibrated
 > 789, and both aligners normalize by the mean self-similarity, so a
-> truncation is no longer exactly 1. `RepetitionScheme` became
+> truncation is no longer exactly 1. Lines are compared under first
+> pronunciations only: searching every combination raised unrelated lines'
+> scores as much as echoes' and cost 45–65× the time. `RepetitionScheme` became
 > `EchoScheme`, and the aligner lives only in `EchoConfig`. The plan below
 > is kept as written.
 

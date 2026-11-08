@@ -117,7 +117,8 @@ configs it chooses among were screened on fold 0, and refinement picked
 its parents with the objective on every fold, held-out ones included. The
 harness now computes the estimate from random trials only, on the folds
 other than the screen fold. Re-running semi-global's search that way (run
-4) shows the full search buys nothing out of sample: its pick, chosen
+4, with pronunciation variants, the setting then) shows the full search
+buys nothing out of sample: its pick, chosen
 without each fold and scored on it, averages 0.9945 on folds 1–4, against
 0.9948 for the shipped config on the same folds. Its in-sample optimum
 (0.9938 vs 0.9920) is fitted noise. The per-fold winners disagree widely
@@ -133,19 +134,47 @@ configs fold by fold (`--search 0`, no selection involved):
 | old defaults (zero point 789, shorter-line) | 0.9800 | 0.9905 | 0.9940 | 0.9879 | 0.9938 |
 | zero point 300, shorter-line | 0.9850 | 0.9953 | 0.9950 | 0.9917 | 0.9961 |
 | zero point 789, mean | 0.9819 | 0.9930 | 0.9950 | 0.9869 | 0.9952 |
-| **zero point 300, mean (shipped)** | **0.9857** | **0.9962** | **0.9955** | **0.9914** | **0.9960** |
+| zero point 300, mean | 0.9857 | 0.9962 | 0.9955 | 0.9914 | 0.9960 |
+| **…and first pronunciations only (shipped)** | **0.9868** | **0.9967** | **0.9966** | **0.9916** | **0.9966** |
 
 Each change helps on its own, and together they beat the old defaults on
-every fold. The zero point is on a plateau, not at an edge: 200, 250 and
+every fold. (The first four rows compare lines over pronunciation
+variants, as echo did until the last change; see Pronunciations below.) The zero point is on a plateau, not at an edge: 200, 250 and
 300 all score 0.9920 overall, and 150 and 100 slightly less (the search's
 range had started at 300; it now starts at 100). Waterman–Eggert's preset
 is run 3's search optimum, tuned on the whole corpus — in-sample. If
 anything relies on its exact values, retune it with the fixed estimator.
 
 **Thresholds.** For loose poems, each aligner's best balanced accuracy,
-which moved little when resampling poems (semi-global's 90% range:
-0.21–0.26). Strict poems separate almost perfectly anywhere in 0.34–0.60,
-so the strict mark sits above the optimum, for margin.
+which moved little when resampling poems (semi-global's best is 0.204,
+90% range 0.20–0.23; 0.21 is shipped, inside it). Strict poems separate
+almost perfectly anywhere in 0.38–0.55, so the strict mark sits above the
+optimum, for margin.
+
+**Pronunciations.** Each word is compared under its first pronunciation
+only. Echo used to compare every combination of the words' pronunciations
+(up to 64 per line and 256 pairs per comparison, both hand-set) and keep
+the best-scoring pair. Measured on this corpus, that searching gave
+unrelated lines more chances to match by accident: it raised 87% of
+non-echo scores (by +0.025 on average) but only 41% of echo scores
+(+0.023), since most echoes repeat the same words, which already share a
+first pronunciation.
+
+| semi-global | objective | loose false positives, missing 3% / 5.3% / 8.5% | time per pair (one thread) |
+|---|---|---|---|
+| every combination, capped at 64 / 256 | 0.9920 | 12.8% / 6.9% / 3.7% | 197 µs |
+| every combination, capped at 4096 / 65,536 | 0.9918 | 13.4% / 6.9% / 3.5% | — |
+| **first pronunciations only** | **0.9927** | **11.1% / 5.7% / 3.6%** | **4.3 µs** |
+
+First pronunciations were better on every fold for semi-global and made
+no difference for Waterman–Eggert (0.9923 either way), at 45–65× less
+time. The cap was also inconsistent: about 8% of lines, mostly long ones,
+had more combinations than it allowed and silently fell back to first
+pronunciations, so they were scored by different rules from short lines.
+What this gives up: an echo that only matches under an alternative
+pronunciation ("live" as L AY1 V, against "alive") scores lower. If real
+poems need that, it calls for choosing a word's pronunciation in a
+targeted way, not a search over every combination.
 
 **Normalization.** Both aligners divide by the mean of the two lines'
 self-similarities. Dividing by the shorter line's instead makes any line
@@ -155,33 +184,35 @@ out of 920; on strict poems none) with fewer false positives: 751 → 655 on
 loose poems and 31 → 11 on strict ones, where the ones it removed were
 mostly very short lines found inside long ones. The cost is that a
 truncated or extended repeat scores below 1 — about ⅔ for a half-length
-truncation, which still passes either threshold.
+truncation, which still passes either threshold. (Measured with
+pronunciation variants.)
 
 ## What ships
 
 | | semi-global (default) | Waterman–Eggert (opt-in) |
 |---|---|---|
 | config | hand-set; consonant zero point 300, mean normalization | run 3's search optimum (mean normalization) |
+| pronunciations | first only | first only |
 | strict threshold | 0.50: 99.1% of echoes, 0.1% false positives | 0.45: 99.1%, 0.2% |
-| loose threshold | 0.25: 92.4% of echoes, 4.4% false positives | 0.24: 94.9%, 6.1% |
-| speed (corpus, one thread) | ~0.33 ms per pair | ~3.2 ms per pair |
+| loose threshold | 0.21: 94.3% of echoes, 5.4% false positives | 0.24: 94.1%, 5.0% |
+| speed (corpus, one thread) | ~4 µs per pair | ~31 µs per pair |
 
 False-positive rates on loose poems at equal recall (each configuration's
 threshold set to miss the same share of loose echoes):
 
 | configuration | missing 3% | missing 5.3% | missing 8.5% |
 |---|---|---|---|
-| semi-global, old defaults | 22.5% | 9.9% | 5.5% |
-| semi-global, zero point 300, shorter-line | 12.4% | 7.8% | 4.0% |
-| **semi-global, shipped** | **12.8%** | **6.9%** | **3.7%** |
-| **Waterman–Eggert, shipped** | **13.0%** | **6.0%** | **3.4%** |
+| semi-global, old defaults (with variants) | 22.5% | 9.9% | 5.5% |
+| semi-global, zero point 300, shorter-line (with variants) | 12.4% | 7.8% | 4.0% |
+| semi-global, zero point 300, mean (with variants) | 12.8% | 6.9% | 3.7% |
+| **semi-global, shipped** | **11.1%** | **5.7%** | **3.6%** |
+| **Waterman–Eggert, shipped** | **11.4%** | **6.1%** | **3.5%** |
 
-Shipped against shipped, the two are close: Waterman–Eggert has slightly
-fewer false positives at moderate recall, and they tie when nearly every
-echo must be caught. (Semi-global's run-3 search optimum looked a little better
+Shipped against shipped, the two are within a few tenths of a point,
+semi-global slightly ahead when nearly every echo must be caught. (Semi-global's run-3 search optimum looked a little better
 than either — 6.0% and 3.2% at the last two columns — but that is
 in-sample, and run 4 found no out-of-sample gain from the full search.) Averaging or
-taking the max or min of the two aligners didn't help. So semi-global, ten
+taking the max or min of the two aligners didn't help. So semi-global, seven
 times faster and with one tuned value rather than thirteen, is the
 default, and Waterman–Eggert is an alternative mode. It catches loose
 echoes semi-global misses — mostly a fragment of an otherwise different
@@ -199,9 +230,10 @@ pass as loose but not as strict; Waterman–Eggert scores them 0.50–0.85.
 
 ## What the errors are
 
-From an analysis of semi-global before the switch to mean normalization
-(zero point 300, shorter-line, threshold 0.276); the shipped config misses
-77 loose echoes and makes 845 loose false positives at 0.25.
+From an analysis of semi-global before the switches to mean
+normalization and first pronunciations (zero point 300, shorter-line,
+threshold 0.276); the shipped config misses 58 loose echoes and makes
+1,041 loose false positives at 0.21.
 
 Misses (86 of 1,011 loose echoes):
 
@@ -230,7 +262,7 @@ phrasing.
 - **Waterman–Eggert's preset** was tuned in-sample, before a fix to how it
   assembles runs (which barely moved its scores). Semi-global's run 4
   suggests a full search's exact values don't generalize; run the same
-  check for Waterman–Eggert (~30 min) before relying on them.
+  check for Waterman–Eggert (about a minute now) before relying on them.
 
 ## Reproducing
 
@@ -244,7 +276,8 @@ ECHO_CONFIG='{"consonant_zero_point":789,"normalization":"shorter"}' \
   cargo run --release --example echo_compare -- --search 0 --aligner semi_global \
   --corpus data/echo/public --corpus data/echo/private \
   --forms pantoum,duplex,villanelle
-# the search (~3 min for semi-global, ~30 for Waterman–Eggert, 12 threads)
+# the search (seconds for semi-global, about a minute for Waterman–Eggert,
+# 12 threads)
 cargo run --release --example echo_compare -- --search 120 \
   --corpus data/echo/public --corpus data/echo/private \
   --forms pantoum,duplex,villanelle

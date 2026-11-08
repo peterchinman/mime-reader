@@ -3,6 +3,20 @@
 //! Echo is boundary-blind: a line is aligned as one run of phonemes, so
 //! "demands I" can echo "demand sigh". Word starts are kept only to map
 //! results back to the text.
+//!
+//! Each word takes its **first pronunciation** (CMUdict's primary one).
+//! Echo deliberately doesn't search over pronunciation variants. Taking the
+//! best of every combination gives unrelated lines more chances to match
+//! by accident: on the labeled corpus (`data/echo/README.md`) variants
+//! raised 87% of non-echo scores (by +0.025 on average) but only 41% of
+//! echo scores (+0.023) — most echoes repeat the same words, which already
+//! share a first pronunciation. So they bought no accuracy (semi-global was
+//! slightly worse with them on every fold; Waterman–Eggert unchanged),
+//! cost 45–65× the time, and needed a cap that scored long lines by
+//! different rules from short ones. An echo that only matches under an
+//! alternative pronunciation ("live" as L AY1 V, against "alive") scores
+//! lower; if real poems turn out to need that, it calls for a targeted
+//! choice of pronunciation, not a search over all of them.
 
 use std::ops::Range;
 
@@ -10,19 +24,17 @@ use crate::error::{EchoError, UnknownWordError};
 use crate::line::{Line, WordData};
 use crate::phoneme::Phoneme;
 
-/// A line flattened to one phoneme sequence, under one choice of
-/// pronunciation per word.
+/// A line flattened to one phoneme sequence, each word under its first
+/// pronunciation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FlatLine {
     pub phonemes: Vec<Phoneme>,
     /// `word_starts[k]`: the index in `phonemes` where word `k` begins.
     pub word_starts: Vec<usize>,
-    /// `pronunciation_choice[k]`: which of word `k`'s pronunciations was used.
-    pub pronunciation_choice: Vec<usize>,
 }
 
 impl FlatLine {
-    /// Concatenates `words`' pronunciations (each word's first choice).
+    /// Concatenates `words`' phonemes.
     pub fn from_words(words: &[&[Phoneme]]) -> Self {
         let mut phonemes = Vec::new();
         let mut word_starts = Vec::with_capacity(words.len());
@@ -33,7 +45,6 @@ impl FlatLine {
         Self {
             phonemes,
             word_starts,
-            pronunciation_choice: vec![0; words.len()],
         }
     }
 
@@ -59,70 +70,28 @@ impl FlatLine {
     }
 }
 
-/// Every word's pronunciations, or the first unknown word as an error.
-fn pronunciations(line: &Line) -> Result<Vec<Vec<&[Phoneme]>>, EchoError> {
+/// `line` with each word's first pronunciation (see the module docs), or
+/// the first unknown word as an error.
+pub(crate) fn flatten(line: &Line) -> Result<FlatLine, EchoError> {
     if line.words.is_empty() {
         return Err(EchoError::EmptyLine);
     }
-    line.words
+    let words = line
+        .words
         .iter()
         .map(|entry| match &entry.data {
-            WordData::Known { pronunciations, .. } => Ok(pronunciations
-                .iter()
-                .map(|pronunciation| &*pronunciation.phonemes)
-                .collect()),
+            WordData::Known { pronunciations, .. } => Ok(&*pronunciations[0].phonemes),
             WordData::Unknown => Err(EchoError::UnknownWord(UnknownWordError {
                 word: entry.word.clone(),
             })),
         })
-        .collect()
-}
-
-/// `line` with each word's first (primary) pronunciation.
-#[cfg(test)]
-fn flatten(line: &Line) -> Result<FlatLine, EchoError> {
-    Ok(first_pronunciations(&pronunciations(line)?))
-}
-
-fn first_pronunciations(words: &[Vec<&[Phoneme]>]) -> FlatLine {
-    let first: Vec<&[Phoneme]> = words.iter().map(|choices| choices[0]).collect();
-    FlatLine::from_words(&first)
-}
-
-/// Every combination of the words' pronunciations, word 0 varying fastest.
-/// When there would be more than `cap`, just the first-pronunciation
-/// flattening.
-pub(crate) fn flatten_variants(line: &Line, cap: usize) -> Result<Vec<FlatLine>, EchoError> {
-    let words = pronunciations(line)?;
-    let total = words
-        .iter()
-        .try_fold(1usize, |total, choices| total.checked_mul(choices.len()));
-    let Some(total) = total.filter(|&total| total <= cap.max(1)) else {
-        return Ok(vec![first_pronunciations(&words)]);
-    };
-    let mut variants = Vec::with_capacity(total);
-    for mut index in 0..total {
-        let mut choice = Vec::with_capacity(words.len());
-        for choices in &words {
-            choice.push(index % choices.len());
-            index /= choices.len();
-        }
-        let selected: Vec<&[Phoneme]> = words
-            .iter()
-            .zip(&choice)
-            .map(|(choices, &k)| choices[k])
-            .collect();
-        let mut flat = FlatLine::from_words(&selected);
-        flat.pronunciation_choice = choice;
-        variants.push(flat);
-    }
-    Ok(variants)
+        .collect::<Result<Vec<&[Phoneme]>, EchoError>>()?;
+    Ok(FlatLine::from_words(&words))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dictionary::{PronouncingDictionary, Pronunciations};
     use crate::echo::test_support::{dict, parse};
 
     #[test]
@@ -144,49 +113,20 @@ mod tests {
         let flat = flatten(&line).unwrap();
         assert_eq!(flat.phonemes, parse("K AO1 L M AY1 OW1 N"));
         assert_eq!(flat.word_starts, [0, 3, 5]);
-        assert_eq!(flat.pronunciation_choice, [0, 0, 0]);
     }
 
     #[test]
-    fn variants_enumerate_pronunciation_combinations() {
-        // FIRE has two pronunciations in CMUdict; TRUCK one.
-        let line = Line::new("fire truck", dict());
-        let variants = flatten_variants(&line, 64).unwrap();
-        assert_eq!(variants.len(), 2);
-        assert_eq!(variants[0].pronunciation_choice, [0, 0]);
-        assert_eq!(variants[1].pronunciation_choice, [1, 0]);
-        assert_ne!(variants[0].phonemes, variants[1].phonemes);
-    }
-
-    struct FivefoldDictionary {
-        pronunciations: Pronunciations,
-    }
-
-    impl PronouncingDictionary for FivefoldDictionary {
-        fn lookup(&self, word: &str) -> Option<&[Box<[Phoneme]>]> {
-            ["ka", "ke", "ki", "ko"]
-                .contains(&word)
-                .then_some(self.pronunciations.as_slice())
-        }
-        fn entries(&self) -> impl Iterator<Item = (&str, &[Box<[Phoneme]>])> {
-            std::iter::empty()
-        }
-    }
-
-    #[test]
-    fn too_many_variants_fall_back_to_first_pronunciations() {
-        let dict = FivefoldDictionary {
-            pronunciations: ["K AA1", "K AE1", "K IY1", "K OW1", "K UW1"]
-                .iter()
-                .map(|p| parse(p).into_boxed_slice())
-                .collect(),
+    fn only_first_pronunciations_are_used() {
+        // FIRE has two pronunciations in CMUdict.
+        let fire = Line::new("fire", dict());
+        let WordData::Known { pronunciations, .. } = &fire.words[0].data else {
+            panic!("fire is in CMUdict");
         };
-        // 5^4 = 625 combinations > 64.
-        let line = Line::new("ka ke ki ko", &dict);
-        let variants = flatten_variants(&line, 64).unwrap();
-        assert_eq!(variants.len(), 1);
-        assert_eq!(variants[0], flatten(&line).unwrap());
-        assert_eq!(flatten_variants(&line, 625).unwrap().len(), 625);
+        assert!(pronunciations.len() > 1);
+        assert_eq!(
+            flatten(&fire).unwrap().phonemes,
+            &*pronunciations[0].phonemes
+        );
     }
 
     #[test]
@@ -201,9 +141,6 @@ mod tests {
             flatten(&Line::new("  — ", dict())),
             Err(EchoError::EmptyLine)
         );
-        assert_eq!(
-            flatten_variants(&Line::new("", dict()), 8),
-            Err(EchoError::EmptyLine)
-        );
+        assert_eq!(flatten(&Line::new("", dict())), Err(EchoError::EmptyLine));
     }
 }

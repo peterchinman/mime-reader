@@ -33,19 +33,19 @@ impl EchoStrictness {
     /// tuned config ([`super::EchoConfig::for_aligner`]); with another config
     /// these don't apply. Loose marks are each aligner's best balanced
     /// accuracy on loose poems. Strict poems separate almost perfectly over
-    /// a wide range (semi-global 0.34–0.60 across resamples), so strict
+    /// a wide range (semi-global 0.38–0.55 across resamples), so strict
     /// marks sit above the best point, for margin. On the corpus:
     ///
     /// | aligner | strictness | threshold | echoes caught | false positives |
     /// |---|---|---|---|---|
     /// | semi-global | strict | 0.50 | 99.1% | 0.1% |
-    /// | semi-global | loose | 0.25 | 92.4% | 4.4% |
+    /// | semi-global | loose | 0.21 | 94.3% | 5.4% |
     /// | Waterman–Eggert | strict | 0.45 | 99.1% | 0.2% |
-    /// | Waterman–Eggert | loose | 0.24 | 94.9% | 6.1% |
+    /// | Waterman–Eggert | loose | 0.24 | 94.1% | 5.0% |
     pub fn threshold(self, aligner: AlignerKind) -> f32 {
         match (aligner, self) {
             (AlignerKind::SemiGlobal, Self::Strict) => 0.50,
-            (AlignerKind::SemiGlobal, Self::Loose) => 0.25,
+            (AlignerKind::SemiGlobal, Self::Loose) => 0.21,
             (AlignerKind::WatermanEggert, Self::Strict) => 0.45,
             (AlignerKind::WatermanEggert, Self::Loose) => 0.24,
         }

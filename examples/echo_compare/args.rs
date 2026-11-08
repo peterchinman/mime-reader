@@ -230,10 +230,6 @@ pub struct ConfigOverride {
     /// "shorter" or "mean".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub normalization: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_variants_per_line: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_variant_pairs: Option<usize>,
 }
 
 impl ConfigOverride {
@@ -267,11 +263,6 @@ impl ConfigOverride {
         set(&mut t.run_open, self.run_open);
         set(&mut t.min_run, self.min_run);
         set(&mut t.max_runs, self.max_runs);
-        set(
-            &mut config.max_variants_per_line,
-            self.max_variants_per_line,
-        );
-        set(&mut config.max_variant_pairs, self.max_variant_pairs);
         if let Some(normalization) = &self.normalization {
             config.normalization = match normalization.as_str() {
                 "shorter" => EchoNormalization::ShorterSelfSimilarity,

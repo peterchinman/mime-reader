@@ -247,8 +247,6 @@ pub struct EchoConfigDto {
     max_runs: u32,
     normalization: EchoNormalizationDto,
     aligner: AlignerKindDto,
-    max_variants_per_line: u32,
-    max_variant_pairs: u32,
 }
 
 fn to_u32(n: usize) -> u32 {
@@ -275,8 +273,6 @@ impl From<EchoConfig> for EchoConfigDto {
             max_runs: to_u32(c.structure.max_runs),
             normalization: c.normalization.into(),
             aligner: c.aligner.into(),
-            max_variants_per_line: to_u32(c.max_variants_per_line),
-            max_variant_pairs: to_u32(c.max_variant_pairs),
         }
     }
 }
@@ -308,8 +304,6 @@ impl From<EchoConfigDto> for EchoConfig {
             },
             normalization: c.normalization.into(),
             aligner: c.aligner.into(),
-            max_variants_per_line: c.max_variants_per_line as usize,
-            max_variant_pairs: c.max_variant_pairs as usize,
         }
     }
 }
@@ -345,7 +339,7 @@ pub struct EchoSegmentDto {
 }
 
 /// A scored echo comparison, with everything needed to draw it: both lines'
-/// words and phonemes (under the pronunciation variants that scored best),
+/// words and phonemes (each word under its first pronunciation),
 /// where each word starts, the steps, segments and which phonemes are
 /// paired.
 #[derive(Serialize, Debug, Tsify)]
@@ -367,7 +361,6 @@ pub struct EchoAlignmentDto {
     segments: Vec<EchoSegmentDto>,
     a_aligned: Vec<bool>,
     b_aligned: Vec<bool>,
-    variant_pairs_tried: usize,
 }
 
 impl EchoAlignmentDto {
@@ -422,7 +415,6 @@ impl EchoAlignmentDto {
                 .collect(),
             a_aligned: alignment.a_aligned.clone(),
             b_aligned: alignment.b_aligned.clone(),
-            variant_pairs_tried: echo.variant_pairs_tried,
         }
     }
 }

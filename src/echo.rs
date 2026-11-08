@@ -2,8 +2,10 @@
 //!
 //! Villanelles, pantoums, duplexes and blues stanzas repeat lines — but
 //! loosely: a word changes, a phrase is inserted, the line is cut short, or
-//! its blocks are re-ordered. Echo flattens each
-//! line to one phoneme sequence and aligns the two on the shared engine in
+//! its blocks are re-ordered. Echo flattens each line to one phoneme
+//! sequence, each word under its first pronunciation (why not every
+//! pronunciation: [`FlatLine`]'s module), and aligns the two on the shared
+//! engine in
 //! [`crate::align`], in a *similarity* profile: alike phonemes score
 //! positive, unrelated ones negative, relative to zero points
 //! ([`similarity`]). Alignment can then choose which regions to compare,
@@ -43,7 +45,7 @@ pub use similarity::{
 pub use template::{EchoTemplate, MAX_TEMPLATE_LINES};
 
 use alignment::{EchoAligner, EchoCosts, RawAlignment};
-use flatten::flatten_variants;
+use flatten::flatten;
 use semi_global::SemiGlobalAligner;
 use similarity::similarity_table;
 use waterman_eggert::WatermanEggertAligner;
@@ -123,7 +125,7 @@ pub enum EchoNormalization {
 /// Everything that shapes an echo score.
 ///
 /// The default is semi-global's tuned config; see [`Self::for_aligner`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct EchoConfig {
     pub similarity: SimilarityConfig,
     pub gaps: GapConfig,
@@ -132,25 +134,6 @@ pub struct EchoConfig {
     /// The aligner that scores every comparison. Its tuned config is
     /// [`EchoConfig::for_aligner`].
     pub aligner: AlignerKind,
-    /// A line with more pronunciation combinations than this is compared
-    /// under its first pronunciations only.
-    pub max_variants_per_line: usize,
-    /// At most this many (variant, variant) pairs are compared per line pair.
-    pub max_variant_pairs: usize,
-}
-
-impl Default for EchoConfig {
-    fn default() -> Self {
-        Self {
-            similarity: SimilarityConfig::default(),
-            gaps: GapConfig::default(),
-            structure: StructureConfig::default(),
-            normalization: EchoNormalization::default(),
-            aligner: AlignerKind::default(),
-            max_variants_per_line: 64,
-            max_variant_pairs: 256,
-        }
-    }
 }
 
 /// The largest value [`EchoConfig::validate`] accepts for each kind of
@@ -161,18 +144,16 @@ const MAX_ZERO_POINT: u32 = 10_000;
 const MAX_STRESS_WEIGHT: u32 = 100;
 const MAX_COST: u32 = 1_000_000;
 const MAX_RUNS: usize = 1000;
-const MAX_VARIANTS_PER_LINE: usize = 4096;
-const MAX_VARIANT_PAIRS: usize = 65_536;
 
 impl EchoConfig {
     /// Checks every field against its limit, so that untrusted input (the
-    /// wasm bindings) can't overflow a score or blow up the variant search.
+    /// wasm bindings) can't overflow a score or run away.
     pub fn validate(&self) -> Result<(), InvalidEchoConfigError> {
         let s = &self.similarity;
         let w = &s.stress_weights;
         let g = &self.gaps;
         let t = &self.structure;
-        let fields: [(&'static str, u64, u64); 15] = [
+        let fields: [(&'static str, u64, u64); 14] = [
             (
                 "vowel_coefficient",
                 s.vowel_coefficient.into(),
@@ -215,18 +196,8 @@ impl EchoConfig {
             ("run_open", t.run_open.into(), MAX_COST.into()),
             ("min_run", t.min_run.into(), MAX_COST.into()),
             ("max_runs", t.max_runs as u64, MAX_RUNS as u64),
-            (
-                "max_variants_per_line",
-                self.max_variants_per_line as u64,
-                MAX_VARIANTS_PER_LINE as u64,
-            ),
         ];
-        let pairs = (
-            "max_variant_pairs",
-            self.max_variant_pairs as u64,
-            MAX_VARIANT_PAIRS as u64,
-        );
-        for (field, value, max) in fields.into_iter().chain([pairs]) {
+        for (field, value, max) in fields {
             if value > max {
                 return Err(InvalidEchoConfigError { field, value, max });
             }
@@ -276,22 +247,20 @@ impl EchoConfig {
                 },
                 normalization: EchoNormalization::MeanSelfSimilarity,
                 aligner: AlignerKind::WatermanEggert,
-                ..Self::default()
             },
         }
     }
 }
 
-/// The best-scoring comparison of two lines over their pronunciation
-/// variants.
+/// A comparison of two lines: the alignment and the phoneme sequences it
+/// indexes into.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EchoMatch {
     pub alignment: EchoAlignment,
-    /// The variant of the first line that scored best.
+    /// The first line, flattened.
     pub a: FlatLine,
-    /// The variant of the second line that scored best.
+    /// The second line, flattened.
     pub b: FlatLine,
-    pub variant_pairs_tried: usize,
 }
 
 /// Scores echoes: a similarity table built from the phoneme engines, the
@@ -450,40 +419,15 @@ impl EchoDetector {
         }
     }
 
-    /// Compares two lines with the configured aligner, over their
-    /// pronunciation variants (capped per line and per pair), keeping the
-    /// most similar. Ties keep the earliest pair, so first pronunciations
-    /// win.
+    /// Compares two lines with the configured aligner, each word under its
+    /// first pronunciation (see [`FlatLine`]'s module for why not every
+    /// pronunciation).
     pub fn compare_lines(&self, a: &Line, b: &Line) -> Result<EchoMatch, EchoError> {
-        let mut a_variants = flatten_variants(a, self.config.max_variants_per_line)?;
-        let mut b_variants = flatten_variants(b, self.config.max_variants_per_line)?;
-        let cap = self.config.max_variant_pairs.max(1);
-        while a_variants.len() * b_variants.len() > cap {
-            // Keep as many of the larger side's first variants as fit.
-            if a_variants.len() >= b_variants.len() {
-                a_variants.truncate((cap / b_variants.len()).max(1));
-            } else {
-                b_variants.truncate((cap / a_variants.len()).max(1));
-            }
-        }
-        let mut best: Option<(EchoAlignment, usize, usize)> = None;
-        for (x, a_flat) in a_variants.iter().enumerate() {
-            for (y, b_flat) in b_variants.iter().enumerate() {
-                let alignment = self.compare_phonemes(&a_flat.phonemes, &b_flat.phonemes);
-                if best
-                    .as_ref()
-                    .is_none_or(|(known, ..)| alignment.similarity > known.similarity)
-                {
-                    best = Some((alignment, x, y));
-                }
-            }
-        }
-        let (alignment, x, y) = best.expect("each line has at least one variant");
+        let (a, b) = (flatten(a)?, flatten(b)?);
         Ok(EchoMatch {
-            alignment,
-            variant_pairs_tried: a_variants.len() * b_variants.len(),
-            a: a_variants.swap_remove(x),
-            b: b_variants.swap_remove(y),
+            alignment: self.compare_phonemes(&a.phonemes, &b.phonemes),
+            a,
+            b,
         })
     }
 }
@@ -820,20 +764,18 @@ mod tests {
                 max: u64::from(MAX_COEFFICIENT),
             })
         );
-        let config = EchoConfig {
-            max_variant_pairs: usize::MAX,
-            ..EchoConfig::default()
-        };
-        assert_eq!(config.validate().unwrap_err().field, "max_variant_pairs");
+        let mut config = EchoConfig::for_aligner(AlignerKind::WatermanEggert);
+        config.structure.max_runs = usize::MAX;
+        assert_eq!(config.validate().unwrap_err().field, "max_runs");
     }
 
     #[test]
-    fn lines_compare_over_pronunciation_variants() {
+    fn lines_compare_under_first_pronunciations() {
         let fire_truck = Line::new("fire truck", dict());
         let echo = detector().compare_lines(&fire_truck, &fire_truck).unwrap();
         assert_eq!(echo.alignment.similarity, 1.0);
-        assert_eq!(echo.variant_pairs_tried, 4);
         assert_eq!(echo.a.word_count(), 2);
+        assert_eq!(echo.a, flatten(&fire_truck).unwrap());
 
         // Resegmentation is invisible: the flattened phonemes are compared.
         let a = Line::new("dark demands I call my own", dict());
@@ -848,27 +790,6 @@ mod tests {
         );
         let strict = detector().compare_lines(&a, &b).unwrap();
         assert!(strict.alignment.similarity < 0.7);
-    }
-
-    #[test]
-    fn variant_pairs_are_capped() {
-        let capped = |max_variant_pairs| {
-            EchoDetector::with_config(EchoConfig {
-                max_variant_pairs,
-                ..EchoConfig::default()
-            })
-        };
-        // "fire truck" has two pronunciations.
-        let fire_truck = Line::new("fire truck", dict());
-        let fire = Line::new("fire", dict());
-        let echo = capped(2).compare_lines(&fire_truck, &fire_truck).unwrap();
-        assert_eq!(echo.variant_pairs_tried, 2);
-        assert_eq!(echo.alignment.similarity, 1.0);
-        // The larger side keeps as many variants as fit beside the other.
-        let echo = capped(3).compare_lines(&fire_truck, &fire).unwrap();
-        assert_eq!(echo.variant_pairs_tried, 2);
-        let echo = capped(256).compare_lines(&fire_truck, &fire).unwrap();
-        assert_eq!(echo.variant_pairs_tried, 4);
     }
 
     #[test]

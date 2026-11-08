@@ -46,8 +46,6 @@ const ECHO_CONFIG_FIELDS: NumericField[] = [
 	"run_open",
 	"min_run",
 	"max_runs",
-	"max_variants_per_line",
-	"max_variant_pairs",
 ];
 
 // From the doc comments on `EchoConfig` and its parts (src/echo.rs,
@@ -74,10 +72,7 @@ const ECHO_CONFIG_DOCS: Record<NumericField, string> = {
 	run_open: "Thousandths of a unit. Each local run after the first (Waterman–Eggert).",
 	min_run:
 		"Thousandths of a unit. After the first, local runs scoring less end the search (Waterman–Eggert).",
-	max_runs: "At most this many local runs (Waterman–Eggert).",
-	max_variants_per_line:
-		"A line with more pronunciation combinations is compared under its first pronunciations only.",
-	max_variant_pairs: "At most this many (variant, variant) pairs per line pair.",
+	max_runs: "At most this many local alignments, each split into runs (Waterman–Eggert).",
 };
 
 type Expected = "echo" | "not" | "unlabeled";
@@ -587,8 +582,7 @@ function alignmentEl(dto: EchoAlignmentDto): HTMLElement {
 	title.className = "echo-title";
 	title.textContent =
 		`${dto.aligner} · similarity ${dto.similarity.toFixed(3)} · raw ${dto.raw} ` +
-		`(self ${dto.self_a} / ${dto.self_b}) · ${dto.segments.length} segment(s), ${moved} moved` +
-		` · ${dto.variant_pairs_tried} variant pair(s)`;
+		`(self ${dto.self_a} / ${dto.self_b}) · ${dto.segments.length} segment(s), ${moved} moved`;
 	box.append(title);
 
 	const segmentOf = (side: "a" | "b"): Map<number, number> => {
