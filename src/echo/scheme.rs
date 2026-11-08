@@ -39,9 +39,9 @@ impl EchoStrictness {
     /// | aligner | strictness | threshold | echoes caught | false positives |
     /// |---|---|---|---|---|
     /// | semi-global | strict | 0.50 | 99.1% | 0.3% |
-    /// | semi-global | loose | 0.28 | 91.5% | 4.0% |
+    /// | semi-global | loose | 0.28 | 91.0% | 3.9% |
     /// | Waterman–Eggert | strict | 0.45 | 99.1% | 0.2% |
-    /// | Waterman–Eggert | loose | 0.24 | 94.7% | 5.8% |
+    /// | Waterman–Eggert | loose | 0.24 | 94.7% | 5.9% |
     pub fn threshold(self, aligner: AlignerKind) -> f32 {
         match (aligner, self) {
             (AlignerKind::SemiGlobal, Self::Strict) => 0.50,
@@ -350,40 +350,48 @@ mod tests {
         pairs
     }
 
-    /// A loose regression floor for every aligner, to be tightened once the
-    /// comparison harness picks an aligner and threshold: verbatim pairs
-    /// score ~1, and echoes outscore non-echoes on average.
+    /// The fixture under each aligner's tuned config, at its shipped
+    /// thresholds: verbatim repeats score 1; every echo passes as loose
+    /// and every non-echo fails as strict; unrelated lines fail even as
+    /// loose. Only semi-global's known weakness is exempt from passing as
+    /// strict: three-block permutations, which strict order can't follow.
+    /// (Same-skeleton non-echoes may pass as loose.)
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn fixture_pairs_separate_for_every_aligner() {
+    fn fixture_pairs_pass_at_the_shipped_thresholds() {
         let pairs = fixture_pairs();
         assert!(pairs.len() >= 40);
         for kind in AlignerKind::ALL {
-            let (mut positives, mut negatives) = (Vec::new(), Vec::new());
+            let detector = EchoDetector::with_config(EchoConfig::for_aligner(kind));
+            let (strict, loose) = (
+                EchoStrictness::Strict.threshold(kind),
+                EchoStrictness::Loose.threshold(kind),
+            );
             for (group, class, expected, a, b) in &pairs {
-                let echo = detector()
+                let similarity = detector
                     .compare_lines_with(kind, &Line::new(a, dict()), &Line::new(b, dict()))
-                    .unwrap_or_else(|e| panic!("{group}: {a:?} / {b:?}: {e}"));
-                let similarity = echo.alignment.similarity;
+                    .unwrap_or_else(|e| panic!("{group}: {a:?} / {b:?}: {e}"))
+                    .alignment
+                    .similarity;
+                let context = format!("{kind} {group}: {a:?} / {b:?} = {similarity:.3}");
                 if *class == 1 {
-                    assert!(
-                        similarity >= 0.99,
-                        "{kind} {group}: {a:?} / {b:?} = {similarity}"
-                    );
+                    assert!((similarity - 1.0).abs() < 1e-6, "{context}");
                 }
                 match expected.as_str() {
-                    "echo" => positives.push(similarity),
-                    "not" => negatives.push(similarity),
+                    "echo" => {
+                        assert!(similarity >= loose, "loose: {context}");
+                        let exempt = kind == AlignerKind::SemiGlobal && *class == 6;
+                        assert!(exempt || similarity >= strict, "strict: {context}");
+                    }
+                    "not" => {
+                        assert!(similarity < strict, "strict: {context}");
+                        if group == "unrelated" {
+                            assert!(similarity < loose, "loose: {context}");
+                        }
+                    }
                     _ => {}
                 }
             }
-            let mean = |xs: &[f32]| xs.iter().sum::<f32>() / xs.len() as f32;
-            assert!(
-                mean(&positives) > mean(&negatives),
-                "{kind}: mean echo {} ≤ mean non-echo {}",
-                mean(&positives),
-                mean(&negatives)
-            );
         }
     }
 }

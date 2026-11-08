@@ -15,8 +15,8 @@ use super::EchoNormalization;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum AlignerKind {
     /// One semi-global alignment: free end gaps, strict order. The default:
-    /// on real poems it is as accurate as Waterman–Eggert with fewer false
-    /// positives at high recall, and several times faster.
+    /// on real poems, tuned, it is as accurate as Waterman–Eggert (more so
+    /// at high recall), and several times faster.
     #[default]
     SemiGlobal,
     /// Repeated local alignment with masking: disjoint shared runs,

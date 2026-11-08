@@ -21,6 +21,8 @@ year: 1896
 source: https://www.gutenberg.org/ebooks/8497
 notes: optional, one line
 template: optional — see below
+strictness: optional — strict or loose
+exclude: optional — why the poem is left out of scoring
 
 Come back to me, Sweet! ...
 <line 2>
@@ -30,6 +32,10 @@ Come back to me, Sweet! ...
 ```
 
 `form`, `title` and `author` are required. One blank line ends the header.
+`strictness` says how closely the poem's repeats match: `strict`
+(near-verbatim) or `loose` (reworded). It defaults to `loose` for duplexes
+and `strict` otherwise, and the harness pools and tunes by it. `exclude`
+keeps a poem in the inventory but out of scoring, with the reason printed.
 In the body, blank lines separate stanzas and are **not** counted: line
 indices (0-based) run over non-blank lines only.
 
@@ -84,41 +90,130 @@ See Rider" and "Backwater Blues" (no printed lyric source found), Hughes
 "Lonesome Place" (publication year unconfirmed), Poe's "The Raven" (its
 refrains drift too much for a clean template).
 
-## First comparison run (defaults, before any decision)
+## How the defaults were chosen
 
-`cargo run --release --example echo_compare` with the default config
-(aligner choice and threshold still open). 12,494 pairs scored; 4,666
-corpus pairs were dropped for words CMUdict lacks (*aweary*, *faery*,
-*villanelle*, *st*, *vexation*, *gwine*, *ev'ry*, …).
+The shipped settings (`EchoConfig::for_aligner`, `EchoStrictness::threshold`)
+come from the pantoums, duplexes and villanelles, public and private: 133
+poems after excluding one duplex whose echoes are by meaning only. By
+strictness, that is 50 strict poems (37 villanelles, 13 pantoums) and 83
+loose ones (42 villanelles, 27 pantoums, 14 duplexes). Template pairs give
+572 strict and 1,011 loose echoes, and every other line pair in the same
+poem a non-echo (10,219 strict, 19,376 loose).
 
-| set | aligner | AUC | best threshold | balanced acc. | margin |
-|---|---|---|---|---|---|
-| fixture (36 / 8) | semi_global | 0.972 | 0.558 | 0.931 | −0.152 |
-| | waterman_eggert | 1.000 | 0.567 | 1.000 | 0.078 |
-| | jump | 1.000 | 0.707 | 1.000 | 0.215 |
-| corpus (463 / 11,641) | semi_global | 0.998 | 0.613 | 0.981 | −0.699 |
-| | waterman_eggert | 0.998 | 0.613 | 0.980 | −0.628 |
-| | jump | 0.993 | 0.735 | 0.973 | −0.956 |
+**Search.** `--search 120` per aligner: random configs over every parameter
+that aligner uses, screened on one fold, then refined around the best.
+Poems are split into 5 folds stratified by form × strictness, and the
+objective is the mean of the strict pool's AUC and the loose pool's, so
+strict and loose poems count equally. A nested estimate (best config
+picked without each fold, scored on it) checks that tuning generalizes:
 
-Per poem (precision@k / MRR / perfectly separated): semi_global 0.962 /
-0.990 / 44 of 52; waterman_eggert 0.963 / 0.990 / 44; jump 0.915 / 0.963 /
-42. Every villanelle and both pantoums rank perfectly under semi_global and
-waterman_eggert.
+| aligner | defaults | nested CV estimate |
+|---|---|---|
+| semi-global | 0.9896 | 0.9934 |
+| Waterman–Eggert | 0.9899 | 0.9931 |
+| jump (since removed) | 0.9826 | 0.9917 |
 
-Observations to weigh before choosing:
+The three were effectively tied once tuned. Two findings held for all of
+them:
 
-- **Jump reuse inflates scores.** With `reuse_penalty = 0`, consuming the
-  longer line lets jump re-use the shorter one instead of gapping, so
-  insertions and extensions score above 1 (fixture class 3 mean 1.23) and
-  non-echoes score higher (corpus non-echo mean ≈ 0.46 vs ≈ 0.27).
-  `ECHO_CONFIG='{"reuse_penalty":500}'` removes the inflation and gives jump
-  corpus AUC 0.996, fixture margin 0.282, per-poem precision@k 0.949.
-- **Moves.** semi_global can't see re-ordering (two-block swaps ≈ 0.64,
-  three-block permutations ≈ 0.43); waterman_eggert recovers most of it
-  (0.93 / 0.77); jump all of it (0.97 / 0.95). Greedy local runs can
-  overextend across a block junction when the neighbors happen to sound
-  alike, which costs waterman_eggert on some reversals.
-- **Shorter-line normalization** scores a short line contained in a longer
-  one as a full echo (some blues non-echo pairs reach 1.0).
-- Fixture → corpus threshold transfer: Δ −0.055 (semi_global), −0.047
-  (waterman_eggert), −0.028 (jump).
+- **The consonant zero point belongs well below chance.** CMUdict
+  calibration puts it at 789, the mean distance between random
+  consonants. Every search preferred 300–540. Lowering it alone to 300
+  took semi-global from 0.9883 to 0.9918 (the full optimum: 0.9931), and
+  jump from 0.9819 to 0.9905. Waterman–Eggert barely moved (0.9891): it
+  also needs its structural costs tuned.
+- **Mean normalization was always chosen.** It stops short lines that
+  happen to sit inside longer ones from scoring as full echoes. Vowel-side
+  values (coefficients, vowel zero point, stress weights) did not agree
+  across folds.
+
+**Thresholds.** For loose poems, each aligner's best balanced accuracy,
+which moved little when resampling poems (semi-global's 90% range:
+0.22–0.30). Strict poems separate almost perfectly anywhere in
+0.41–0.68, so the strict mark sits above the optimum, for margin.
+
+## What ships
+
+| | semi-global (default) | Waterman–Eggert (opt-in) |
+|---|---|---|
+| config | defaults; consonant zero point 300 | the search's optimum (mean normalization) |
+| strict threshold | 0.50: 99.1% of echoes, 0.3% false positives | 0.45: 99.1%, 0.2% |
+| loose threshold | 0.28: 91.0% of echoes, 3.9% false positives | 0.24: 94.7%, 5.9% |
+| speed (corpus, one thread) | ~0.33 ms per pair | ~3.2 ms per pair |
+
+False-positive rates at equal recall (each configuration's threshold set
+to miss the same share of loose echoes):
+
+| configuration | missing 5.3% | missing 8.5% |
+|---|---|---|
+| semi-global, shipped (zero point 300, shorter-line normalization) | 7.8% | 4.0% |
+| semi-global, zero point 300 + mean normalization | 6.5% | 3.6% |
+| semi-global, search optimum | 6.0% | 3.2% |
+| Waterman–Eggert, zero point 300 + mean normalization | 8.1% | 4.2% |
+| Waterman–Eggert, shipped (search optimum) | 5.8% | 3.4% |
+
+With matched settings semi-global is slightly better; tuned, the two are
+tied, and semi-global has far fewer false positives when nearly every echo
+must be caught (missing 3%: 9.3% vs 12.5%). Averaging or taking the max or
+min of the two didn't help. So semi-global is the default and
+Waterman–Eggert is an alternative mode. The shipped semi-global gives up
+some false positives by keeping shorter-line normalization (see Open
+questions). It catches about 35 loose echoes
+semi-global misses, mostly fragments of an otherwise different line and
+reordered phrases, at the cost of more chance fragments in unrelated
+lines.
+
+**Jump was removed.** It was never better than the other two on real
+poems. Its strength, reordering, is mostly covered by Waterman–Eggert, and
+its reuse of material inflated scores above 1 unless penalized.
+
+Fixture behavior under the shipped settings is pinned by
+`fixture_pairs_pass_at_the_shipped_thresholds` (`src/echo/scheme.rs`).
+Semi-global's one known gap is three-block permutations (≈0.36–0.40), which
+pass as loose but not as strict; Waterman–Eggert scores them 0.50–0.85.
+
+## What the errors are (semi-global, loose)
+
+Misses (91 of 1,011 loose echoes at 0.28; counts below are from an
+analysis at 0.276, 86 misses):
+
+- 42: the refrain slot keeps only its end word. By the form's slots these
+  are echoes; to the ear they're closer to rhyme.
+- 15: one shared word elsewhere, often carried from the end of one line to
+  the start of the next.
+- 11: a partial phrase inside a longer line.
+- 10: nothing shared in the sounds (by meaning, or spelled out).
+- 8: shared words, reordered — what Waterman–Eggert is for.
+
+False positives (773 of 19,376 at 0.276): 46% come from one long pantoum
+built on anaphora, whose formula lines really do sound alike. The rest are
+real echoes the template can't label (a line belongs to one group only),
+very short lines, and shared phrasing.
+
+## Open questions
+
+- **Normalization.** Semi-global ships with shorter-line normalization,
+  so a truncated repeat scores 1. Mean normalization gives about 15% fewer
+  false positives (table above), but a truncation then scores ≈0.77, an
+  insertion ≈0.62 instead of ≈0.94, and the thresholds drop (best: strict
+  ≈0.39, loose ≈0.22).
+- **End-word refrains.** Relabel them, or accept a refrain slot on
+  "echo, or the same end word" through the rhyme scorer.
+- **Labels the template can't express** (a line echoing two groups), and
+  whether one long poem should weigh as much as it does in a pooled AUC.
+
+## Reproducing
+
+```sh
+# the report, with pass rates at the shipped thresholds
+cargo run --release --example echo_compare -- \
+  --corpus data/echo/public --corpus data/echo/private \
+  --forms pantoum,duplex,villanelle
+# the search (~3 min for semi-global, ~30 for Waterman–Eggert, 12 threads)
+cargo run --release --example echo_compare -- --search 120 \
+  --corpus data/echo/public --corpus data/echo/private \
+  --forms pantoum,duplex,villanelle
+```
+
+Results without the private corpus will differ: public poems are almost
+all strict.

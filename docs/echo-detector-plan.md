@@ -1,5 +1,14 @@
 # Echo Detector on a shared alignment engine (rhyme ported first)
 
+> **Outcome.** Implemented as planned, then decided on data (step D; numbers
+> in `data/echo/README.md`). Semi-global is the default aligner and
+> Waterman–Eggert an opt-in alternative, each with a tuned config
+> (`EchoConfig::for_aligner`) and strict/loose thresholds
+> (`EchoStrictness::threshold`). The jump DP (aligner 5) was removed: it
+> was never better on real poems, and its reuse inflated scores. The
+> default consonant zero point is tuned (300), not the CMUdict-calibrated
+> 789. The plan below is kept as written.
+
 ## Context
 
 `mime-reader` scores rhyme by aligning the *rhyming parts* of two lines with a cost-minimizing optimal-string-alignment DP (`RhymeDistanceScorer::run_dp`, `src/rhyme_distance.rs`). We now want **line-level phonetic similarity** ("echo") to verify repeating forms — duplex, villanelle, pantoum, blues — where repeated lines are relaxed in practice: words substituted, phrases inserted ("I saw a bird—it was yellow and gold—in the forest"), lines truncated, blocks re-ordered ("dark demands I call my own" ↔ "call my own dark demand sigh", which also moves a word boundary). Three candidate aligners will be built behind one interface and chosen **empirically** on a labeled corpus.
