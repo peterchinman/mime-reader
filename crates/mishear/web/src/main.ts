@@ -251,10 +251,14 @@ function stepDto(step: Step): StepDto {
 // ---------------------------------------------------------------- state ----
 
 interface State {
+  /** The saved format: 3 marks settings saved as changes from the defaults. */
+  v?: number;
   mode: Mode;
   text: string;
   phonemes: string;
   steps: Step[];
+  /** Whether the steps apply: off keeps them, unapplied. */
+  deform: boolean;
   deformation: { intensity: number; seed: number };
   search: SearchDto;
   cost: CostDto;
@@ -262,11 +266,13 @@ interface State {
   autoRun: boolean;
   sweepKnob: string;
   sweepValues: string;
+  soundsOpen: boolean;
 }
 
-// Only knobs changed from their defaults are saved, so a change of default
-// reaches everyone who hadn't touched that knob.
-const STORAGE_KEY = 'mishear-web-state-v2';
+// Only settings changed from their defaults are saved, so a change of default
+// reaches everyone who hadn't touched that setting.
+const STORAGE_KEY = 'mishear-web-state-v3';
+const OLD_STORAGE_KEY = 'mishear-web-state-v2';
 const FIRST_LINE = 'Since Persia fell at Marathon';
 let defaults: DefaultsDto;
 let catalog: CatalogDto;
@@ -278,7 +284,8 @@ function defaultState(): State {
     mode: 'mishear',
     text: FIRST_LINE,
     phonemes: 'K IH1 S DH AH0 S K AY1',
-    steps: [{ kind: 'accent', name: 'irish' }],
+    steps: [],
+    deform: false,
     deformation: { intensity: 1, seed: 0 },
     search: { ...defaults.search },
     cost: { ...defaults.cost },
@@ -286,18 +293,35 @@ function defaultState(): State {
     autoRun: true,
     sweepKnob: 'search.lm_weight',
     sweepValues: '0, 0.02, 0.05, 0.1, 0.2',
+    soundsOpen: true,
   };
+}
+
+/** The settings in the link, or else the saved ones, in the current format. */
+function readSaved(): Partial<State> | null {
+  try {
+    const hash = location.hash.slice(1);
+    if (hash) return upgrade(JSON.parse(decodeURIComponent(hash)));
+    const current = localStorage.getItem(STORAGE_KEY);
+    if (current) return upgrade(JSON.parse(current));
+    return upgrade(JSON.parse(localStorage.getItem(OLD_STORAGE_KEY) ?? 'null'));
+  } catch {
+    return null;
+  }
+}
+
+/** Earlier formats always applied their steps, and defaulted to an Irish
+ * accent: drop that default, and keep anything else switched on. */
+function upgrade(saved: Partial<State> | null): Partial<State> | null {
+  if (!saved || saved.v === 3) return saved;
+  const steps = saved.steps ?? [];
+  const oldDefault = steps.length === 1 && steps[0].kind === 'accent' && steps[0].name === 'irish';
+  return { ...saved, v: 3, steps: oldDefault ? [] : steps, deform: !oldDefault && steps.length > 0 };
 }
 
 function loadState(): State {
   const base = defaultState();
-  let saved: Partial<State> | null = null;
-  try {
-    const hash = location.hash.slice(1);
-    saved = hash ? JSON.parse(decodeURIComponent(hash)) : JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null');
-  } catch {
-    saved = null;
-  }
+  const saved = readSaved();
   if (!saved) return base;
   // Merge over the defaults, so knobs added since are filled in.
   return {
@@ -326,8 +350,12 @@ function savedState(): Partial<State> {
         .filter(([k, v]) => v !== (defaults as Record<string, unknown>)[k])
         .map(([k, v]) => [k, v ?? null]),
     );
+  const top = Object.fromEntries(
+    Object.entries(state).filter(([k, v]) => JSON.stringify(v) !== JSON.stringify(base[k as keyof State])),
+  );
   return {
-    ...state,
+    ...top,
+    v: 3,
     deformation: changed(state.deformation, base.deformation) as State['deformation'],
     search: changed(state.search, base.search) as unknown as SearchDto,
     cost: changed(state.cost, base.cost) as unknown as CostDto,
@@ -352,8 +380,14 @@ function groupDefaults(group: Group): Record<string, unknown> {
   return defaults[group] as unknown as Record<string, unknown>;
 }
 
-function deformationDto(): DeformationDto {
+/** The steps as built, applied or not (for the chart). */
+function stepsDto(): DeformationDto {
   return { steps: state.steps.map(stepDto), intensity: state.deformation.intensity, seed: state.deformation.seed };
+}
+
+/** What the line is deformed by: nothing while deformation is off. */
+function deformationDto(): DeformationDto {
+  return state.deform ? stepsDto() : { ...stepsDto(), steps: [] };
 }
 
 function request(): RequestDto {
@@ -566,6 +600,8 @@ function renderAddStep(): void {
   add.onchange = () => {
     if (!add.value) return;
     state.steps.push(newStep(add.value));
+    state.deform = true;
+    renderDeformToggle();
     add.value = '';
     renderSteps();
     deformationChanged();
@@ -655,6 +691,7 @@ function renderSteps(): void {
     }),
   );
   if (!state.steps.length) list.append(el('li', { className: 'hint', textContent: 'No steps: the line is heard as spoken.' }));
+  renderDeformToggle();
 }
 
 function paramControl(step: Extract<Step, { kind: 'vowels' }>, p: Param, k: number): HTMLElement {
@@ -1020,7 +1057,7 @@ function deformationChanged(): void {
 }
 
 async function updatePreview(): Promise<void> {
-  const reply = await call({ type: 'preview', id: nextId++, deformation: deformationDto() });
+  const reply = await call({ type: 'preview', id: nextId++, deformation: stepsDto() });
   if (reply.type === 'preview') {
     preview = reply.preview;
     renderChart();
@@ -1077,8 +1114,16 @@ function renderInput(): void {
   $<HTMLInputElement>('auto-run').checked = state.autoRun;
 }
 
+function renderDeformToggle(): void {
+  $<HTMLInputElement>('deform').checked = state.deform;
+  $('deformation-body').classList.toggle('off', !state.deform);
+  $('deform-state').textContent = state.deform ? (state.steps.length ? '(on)' : '(on, no steps)') : '(off)';
+}
+
 function renderAll(): void {
   renderInput();
+  renderDeformToggle();
+  ($('sounds-section') as HTMLDetailsElement).open = state.soundsOpen;
   renderSteps();
   $('deformation-knobs').replaceChildren(...DEFORMATION_KNOBS.map((k) => knobControl('deformation', k, deformationChanged)));
   renderKnobs('search', SEARCH_KNOBS, $('search-knobs'));
@@ -1155,6 +1200,15 @@ function onReady(m: Extract<FromWorker, { type: 'ready' }>): void {
     setStatus('Link copied.');
   };
   $('vowel-chart').addEventListener('click', onChartClick as EventListener);
+  $<HTMLInputElement>('deform').addEventListener('change', (e) => {
+    state.deform = (e.target as HTMLInputElement).checked;
+    renderDeformToggle();
+    deformationChanged();
+  });
+  $('sounds-section').addEventListener('toggle', () => {
+    state.soundsOpen = ($('sounds-section') as HTMLDetailsElement).open;
+    saveState();
+  });
   updatePreview();
   run();
 }
@@ -1163,9 +1217,7 @@ setStatus('Starting the engine…', true);
 // Build the saved lexicon from the start, so the first run needn't rebuild it.
 let savedLexicon: Partial<LexiconOptions> = {};
 try {
-  const hash = location.hash.slice(1);
-  const saved = (hash ? JSON.parse(decodeURIComponent(hash)) : JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null')) as Partial<State> | null;
-  savedLexicon = saved?.lexicon ?? {};
+  savedLexicon = (unsaved(readSaved()?.lexicon) as Partial<LexiconOptions>) ?? {};
 } catch {
   /* the defaults, then */
 }

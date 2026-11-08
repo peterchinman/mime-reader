@@ -15,11 +15,15 @@
     <main>
       <aside id="controls">
         <details open id="deformation-panel">
-          <summary>Deformation</summary>
+          <summary>Deformation <span id="deform-state" class="summary-note"></span></summary>
           <div class="panel-body">
+            <label class="row deform-toggle"
+              ><input id="deform" type="checkbox" /> Deform the line before hearing it</label
+            >
+            <div id="deformation-body">
             <p class="hint">
               Steps apply in order. Accents bundle consonant rules and vowel moves; you can also add
-              the pieces one at a time.
+              the pieces one at a time. Adding a step turns deformation on.
             </p>
             <ol id="steps" class="steps"></ol>
             <select id="add-step" aria-label="Add a step"></select>
@@ -34,6 +38,7 @@
                 >
               </figcaption>
             </figure>
+            </div>
           </div>
         </details>
         <details open>
@@ -81,11 +86,6 @@
           </div>
         </div>
         <div id="error" class="error" hidden></div>
-        <section id="sounds-section" hidden>
-          <h2>Sounds</h2>
-          <p id="deformation-name" class="hint"></p>
-          <table id="sounds" class="sounds"></table>
-        </section>
         <section id="heard-section" hidden>
           <h2>Heard</h2>
           <ol id="hearings" class="hearings"></ol>
@@ -94,6 +94,11 @@
           <p class="hint">Each heard word over the (deformed) phonemes it covers.</p>
           <div class="alignment-scroll"><div id="alignment" class="alignment"></div></div>
         </section>
+        <details id="sounds-section" class="section" open hidden>
+          <summary><h2>Sounds</h2></summary>
+          <p id="deformation-name" class="hint"></p>
+          <table id="sounds" class="sounds"></table>
+        </details>
         <section id="sweep-section" hidden>
           <h2 id="sweep-title">Sweep</h2>
           <div id="sweep" class="sweep"></div>

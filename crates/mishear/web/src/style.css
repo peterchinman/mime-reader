@@ -124,6 +124,27 @@ aside summary {
 .panel-body {
   padding: 0 0.7rem 0.7rem;
 }
+.summary-note {
+  font-weight: 400;
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin-left: 0.3rem;
+}
+.deform-toggle {
+  font-weight: 500;
+  margin: 0.1rem 0 0.5rem;
+}
+#deformation-body.off {
+  opacity: 0.5;
+}
+details.section > summary {
+  cursor: pointer;
+  margin: 1.5rem 0 0.5rem;
+}
+details.section > summary h2 {
+  display: inline;
+  margin: 0;
+}
 details.disabled .panel-body {
   opacity: 0.45;
   pointer-events: none;

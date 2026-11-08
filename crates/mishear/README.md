@@ -95,13 +95,16 @@ What the page has:
   deformation, no novelty).
 - **Random line:** picks from the public-domain poems in `data/echo/public`.
   The private corpus is never bundled.
-- **Deformation:** an ordered list of steps (accent presets, consonant knobs,
+- **Deformation:** off by default. A switch applies the steps or bypasses
+  them, so you can compare without deleting anything; adding a step switches
+  it on. The steps form an ordered list (accent presets, consonant knobs,
   vowel moves with masks and Labov's tendencies), plus intensity and seed.
   For a pull step, you can click the chart to choose its target.
 - **Vowel chart:** a preview of the vowel-space moves.
-- **Results:** each word's spoken and deformed phonemes, with the deformation's
-  edits marked; the hearings, with their cost breakdown; and a grid aligning
-  each heard word with the phonemes it covers.
+- **Results:** the hearings, with their cost breakdown; a grid aligning each
+  heard word with the phonemes it covers; and, in a collapsible "Sounds"
+  section, each word's spoken and deformed phonemes, with the deformation's
+  edits marked.
 - **Search, cost and lexicon panels:** every field of `SearchConfig`,
   `CostConfig` and the lexicon options. Defaults come from the Rust side.
   Changing the lexicon rebuilds it in the worker.
