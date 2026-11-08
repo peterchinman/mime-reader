@@ -641,8 +641,10 @@ pub fn run(
             }
         }
 
+        // Named by trial count too, so a quick `--search 0` can't overwrite
+        // a real search's log.
         let path = repo_path(&format!(
-            "target/echo/search-{kind}-seed{}.jsonl",
+            "target/echo/search-{kind}-seed{}-n{trials}.jsonl",
             args.search_seed
         ));
         let mut file =

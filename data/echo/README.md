@@ -116,10 +116,17 @@ vs 0.9896 for the defaults). **That number is optimistic**: the random
 configs it chooses among were screened on fold 0, and refinement picked
 its parents with the objective on every fold, held-out ones included. The
 harness now computes the estimate from random trials only, on the folds
-other than the screen fold. The search was not re-run, because nothing
-shipped rests on that number. Semi-global ships the hand-set config with
-two changes, checked as fixed configs fold by fold (`--search 0`, no
-selection involved):
+other than the screen fold. Re-running semi-global's search that way (run
+4) shows the full search buys nothing out of sample: its pick, chosen
+without each fold and scored on it, averages 0.9945 on folds 1–4, against
+0.9948 for the shipped config on the same folds. Its in-sample optimum
+(0.9938 vs 0.9920) is fitted noise. The per-fold winners disagree widely
+(vowel coefficient 2–6, consonant coefficient 4–6, vowel zero point
+227–429, consonant zero point 171–436, gap open 589–1306, one preferring
+shorter-line normalization), and run 3's optimum differed again: the
+objective is flat over a wide region. So semi-global ships the hand-set
+config with the two changes every search agreed on, checked as fixed
+configs fold by fold (`--search 0`, no selection involved):
 
 | semi-global config | fold 0 | fold 1 | fold 2 | fold 3 | fold 4 |
 |---|---|---|---|---|---|
@@ -171,9 +178,9 @@ threshold set to miss the same share of loose echoes):
 
 Shipped against shipped, the two are close: Waterman–Eggert has slightly
 fewer false positives at moderate recall, and they tie when nearly every
-echo must be caught. (Semi-global's own search optimum was a little better
-than either — 6.0% and 3.2% at the last two columns — but its vowel-side
-values didn't agree across folds, so it isn't shipped.) Averaging or
+echo must be caught. (Semi-global's run-3 search optimum looked a little better
+than either — 6.0% and 3.2% at the last two columns — but that is
+in-sample, and run 4 found no out-of-sample gain from the full search.) Averaging or
 taking the max or min of the two aligners didn't help. So semi-global, ten
 times faster and with one tuned value rather than thirteen, is the
 default, and Waterman–Eggert is an alternative mode. It catches loose
@@ -221,8 +228,9 @@ phrasing.
 - **Words CMUdict lacks** drop whole refrains from the evaluation (152
   echoes); a small supplementary pronunciation list would recover them.
 - **Waterman–Eggert's preset** was tuned in-sample, before a fix to how it
-  assembles runs (which barely moved its scores); retune it with the fixed
-  estimator before relying on its exact values.
+  assembles runs (which barely moved its scores). Semi-global's run 4
+  suggests a full search's exact values don't generalize; run the same
+  check for Waterman–Eggert (~30 min) before relying on them.
 
 ## Reproducing
 
