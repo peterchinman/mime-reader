@@ -8,19 +8,21 @@ const post = (message: FromWorker) => self.postMessage(message);
 let app: MishearApp | null = null;
 let lexicon: LexiconOptions | null = null;
 let data = '';
-let bigramsLoaded = false;
+let bigrams: 'unloaded' | 'loaded' | 'missing' = 'unloaded';
 
-/** Word-pair counts are big and off by default: fetched on first use. */
+/** Word-pair counts are big: fetched when first needed. Without them the
+ * engine scores words alone. */
 async function ensureBigrams(): Promise<void> {
-  if (bigramsLoaded || !app) return;
-  post({ type: 'status', message: 'Fetching word-pair counts…' });
+  if (bigrams !== 'unloaded' || !app) return;
+  post({ type: 'status', message: 'Fetching word-pair counts (35 MB, once)…' });
   const text = await fetchText(data + 'bigrams-en.tsv', false);
   if (text === undefined) {
-    throw new Error('No word-pair counts at data/bigrams-en.tsv: run crates/mishear/scripts/bigrams.py, then `npm run data`.');
+    bigrams = 'missing';
+    return;
   }
   post({ type: 'status', message: 'Loading word-pair counts…' });
   app.loadBigrams(text);
-  bigramsLoaded = true;
+  bigrams = 'loaded';
 }
 
 async function fetchText(url: string, required: boolean): Promise<string | undefined> {
@@ -84,6 +86,10 @@ self.onmessage = async (event: MessageEvent<ToWorker>) => {
         ms: performance.now() - t,
         info: app.lexiconInfo(),
         rebuildMs,
+        notice:
+          message.request.search.bigrams && bigrams === 'missing'
+            ? 'No word-pair counts (run crates/mishear/scripts/bigrams.py, then npm run data): scoring words alone.'
+            : undefined,
       });
     } else if (message.type === 'preview') {
       post({ type: 'preview', id: message.id, preview: app.preview(message.deformation) });

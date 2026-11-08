@@ -32,15 +32,15 @@ USAGE: cargo run --release -p mishear -- COMMAND [OPTIONS]
   list               accents and knobs
 
 SEARCH OPTIONS
-  -n N               how many results (default 8)
+  -n N               how many results (default 4)
   --within X         every match costing at most X (otherwise the exact top N)
   --novelty F        mishear/hear/examples: cost per word shared with the line
-                     (default 1.0; function words a fifth of that)
+                     (default 0.9; function words a fifth of that)
   --lm F             cost per nat of word surprisal, −ln P(word | previous):
-                     how much common words are preferred (default 0.05; 0
+                     how much common words are preferred (default 0.005; 0
                      ignores frequency)
   --word-penalty F   cost per word: higher prefers fewer, longer words
-                     (default 0.1)
+                     (default 0.4)
   --pronunciations first|all
                      match words under every CMUdict pronunciation or only
                      the first (default all)
@@ -51,13 +51,13 @@ SEARCH OPTIONS
                      word costs (default 0.2)
   --root F           mishear/examples: cost per heard word sharing a stem
                      with a word of the line ('flying' for 'fly in'; the
-                     same word included, on top of --novelty) (default 0)
+                     same word included, on top of --novelty) (default 0.2)
   --variety F        mishear/examples: cost per word an earlier hearing used
                      (or a homophone of one), so each hearing differs from
                      those above it; 0 lists the plain top N (default 1.0)
   --crossing F       mishear/examples: reward per word boundary of the line
                      a hearing cuts across ('this guy' cuts 'the|sky'),
-                     charged as a cost on each boundary kept (default 0)
+                     charged as a cost on each boundary kept (default 0.2)
   --stress-mismatch F  extra cost for pairing a stressed vowel with an
                      unstressed one: how much hearings keep the rhythm
                      (default 0)
@@ -68,10 +68,12 @@ SEARCH OPTIONS
                      sound the same are merged, keeping the cheapest
                      spelling
   --vocab N          lexicon size: most frequent words (default 50000)
-  --bigrams          score each word by the previous word too, with word-pair
-                     counts from contemporary subtitles (data/bigrams-en.tsv;
-                     see scripts/bigrams.py). More fluent; no longer exact
-                     (see search.rs), and slower. Off by default.
+  --unigram          score each word alone, not by the previous word too:
+                     exact and faster, less fluent. By default words are
+                     scored with word-pair counts from contemporary
+                     subtitles (data/bigrams-en.tsv; see scripts/bigrams.py),
+                     or alone if that file is missing.
+  --bigrams          require the word-pair counts (an error without them)
   --bigram-file PATH other word-pair counts (implies --bigrams)
   --all-words        keep names and brands (by default the lexicon keeps only
                      words in the ENABLE word list, data/ENABLE, and
@@ -120,6 +122,8 @@ struct Options {
     line_seed: u64,
     all_words: bool,
     bigrams: bool,
+    /// The word-pair counts were asked for, so their absence is an error.
+    bigrams_required: bool,
     bigram_file: Option<PathBuf>,
     public_only: bool,
     word_penalty: f32,
@@ -146,25 +150,28 @@ struct Options {
 fn parse(args: Vec<String>) -> Result<Options, String> {
     let mut args = args.into_iter();
     let command = args.next().unwrap_or_else(|| "help".into());
+    // The engine's defaults.
+    let d = MishearConfig::default();
     let mut o = Options {
         command,
         positional: Vec::new(),
-        results: 8,
+        results: d.search.results,
         within: None,
-        novelty: 1.0,
-        lm: 0.05,
+        novelty: d.novelty,
+        lm: d.search.lm_weight,
         vocab: 50_000,
         deformation: Deformation::new(""),
         lines: 6,
         line_seed: 1,
         all_words: false,
-        bigrams: false,
+        bigrams: d.search.bigrams,
+        bigrams_required: false,
         bigram_file: None,
         public_only: false,
-        word_penalty: 0.1,
+        word_penalty: d.search.word_penalty,
         all_pronunciations: true,
         bigram_prior: mishear::lexicon::BIGRAM_PRIOR,
-        function_share: 0.2,
+        function_share: d.function_word_share,
         lm_values: None,
         penalty_values: None,
         pron_values: None,
@@ -174,11 +181,11 @@ fn parse(args: Vec<String>) -> Result<Options, String> {
         stress_values: None,
         swap_values: None,
         novelty_values: None,
-        root: 0.0,
-        crossing: 0.0,
+        root: d.root,
+        crossing: d.crossing,
         root_values: None,
         crossing_values: None,
-        variety: MishearConfig::default().variety,
+        variety: d.variety,
         variety_values: None,
     };
     let mut intensity = 1.0;
@@ -241,10 +248,15 @@ fn parse(args: Vec<String>) -> Result<Options, String> {
             "--vowels" => steps.push(StepSpec::Vowels(value("--vowels")?)),
             "--intensity" => intensity = number(value("--intensity")?)?,
             "--all-words" => o.all_words = true,
-            "--bigrams" => o.bigrams = true,
+            "--bigrams" => {
+                o.bigrams = true;
+                o.bigrams_required = true;
+            }
+            "--unigram" => o.bigrams = false,
             "--bigram-file" => {
                 o.bigram_file = Some(PathBuf::from(value("--bigram-file")?));
                 o.bigrams = true;
+                o.bigrams_required = true;
             }
             "--seed" => {
                 seed = value("--seed")?
@@ -312,13 +324,19 @@ fn engine_with(o: &Options, vocab: usize, all_pronunciations: bool) -> Result<En
             .bigram_file
             .clone()
             .unwrap_or_else(|| crate_path("data/bigrams-en.tsv"));
-        if !path.exists() {
+        if path.exists() {
+            engine.lexicon.load_bigrams(&path, o.bigram_prior)?;
+        } else if o.bigrams_required {
             return Err(format!(
                 "{}: no word-pair counts (run scripts/bigrams.py)",
                 path.display()
             ));
+        } else {
+            eprintln!(
+                "note: no word-pair counts at {}: scoring words alone (see scripts/bigrams.py)",
+                path.display()
+            );
         }
-        engine.lexicon.load_bigrams(&path, o.bigram_prior)?;
     }
     engine.cost = cost_model(o);
     Ok(engine)

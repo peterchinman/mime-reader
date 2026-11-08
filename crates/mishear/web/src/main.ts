@@ -282,7 +282,7 @@ interface State {
 // reaches everyone who hadn't touched that setting.
 const STORAGE_KEY = 'mishear-web-state-v3';
 const OLD_STORAGE_KEY = 'mishear-web-state-v2';
-const FIRST_LINE = 'Since Persia fell at Marathon';
+const FIRST_LINE = 'The large room was full of people.';
 let defaults: DefaultsDto;
 let catalog: CatalogDto;
 let state: State;
@@ -1094,7 +1094,7 @@ async function run(): Promise<void> {
       lexiconInfo = reply.info;
       renderLexiconInfo();
       renderResult(reply.result, reply.ms, reply.rebuildMs);
-      setStatus(`Heard in ${thousands(reply.ms)} ms`);
+      setStatus(reply.notice ? `Heard in ${thousands(reply.ms)} ms. ${reply.notice}` : `Heard in ${thousands(reply.ms)} ms`);
     } else if (reply.type === 'error') {
       lastLexicon = lexicon;
       setStatus('');
@@ -1108,7 +1108,7 @@ function renderLexiconInfo(): void {
   if (!lexiconInfo) return;
   const i = lexiconInfo;
   $('lexicon-info').textContent =
-    `${thousands(i.words)} words, ${thousands(i.trie_nodes)} trie nodes; word-pair counts ${i.bigrams ? 'loaded' : 'not loaded (fetched when bigrams are turned on)'}; ` +
+    `${thousands(i.words)} words, ${thousands(i.trie_nodes)} trie nodes; word-pair counts ${i.bigrams ? 'loaded' : 'not loaded'}; ` +
     `ENABLE word list ${i.common_words_available ? 'loaded' : 'not found'}.`;
 }
 

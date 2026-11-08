@@ -48,7 +48,8 @@ pub struct MishearConfig {
     pub crossing: f32,
     /// Extra cost per output word that an earlier hearing used, or a
     /// homophone of one ("cents" after "sense"), with function words at
-    /// `function_word_share`; with `root`, words sharing their stems too.
+    /// `function_word_share`; with `root`, words sharing their stems (and
+    /// those words' homophones) too.
     /// Each hearing is then the best one given those before it, so the list
     /// varies. 0: the plain top `results`, from one search.
     pub variety: f32,
@@ -69,14 +70,14 @@ impl Default for MishearConfig {
     fn default() -> Self {
         Self {
             search: SearchConfig {
-                results: 8,
+                results: 4,
                 bound: 2.0,
                 ..SearchConfig::default()
             },
-            novelty: 1.0,
+            novelty: 0.9,
             function_word_share: 0.2,
-            root: 0.0,
-            crossing: 0.0,
+            root: 0.2,
+            crossing: 0.2,
             variety: 1.0,
             max_bound: 30.0,
         }
@@ -238,7 +239,8 @@ impl Engine {
     ///
     /// With `variety.variety` > 0, each is the best hearing given the ones
     /// before it: their words and homophones cost `variety` more, and words
-    /// sharing their stems `root` more, with function words at
+    /// sharing their stems (and those words' homophones) `root` more, with
+    /// function words at
     /// `function_word_share`. Penalties only add cost, so one pass-1
     /// lattice serves every hearing, as long as it keeps, per span, enough
     /// words to cover the penalized ones; it is rebuilt when a hearing
@@ -372,9 +374,15 @@ impl Engine {
                                 *entry = entry.max(variety.variety * share);
                             }
                             if variety.root > 0.0 {
+                                // Their homophones too, so every spelling of a
+                                // sound pays alike: pass 2 keeps one spelling
+                                // per sound, and the pool's rescoring relies on
+                                // that one staying the cheapest.
                                 for &s in self.lexicon.same_stem(self.lexicon.word(w)) {
-                                    let entry = stem_penalty.entry(s).or_default();
-                                    *entry = entry.max(variety.root * share);
+                                    for &h in self.lexicon.homophones(s) {
+                                        let entry = stem_penalty.entry(h).or_default();
+                                        *entry = entry.max(variety.root * share);
+                                    }
                                 }
                             }
                         }
@@ -626,8 +634,10 @@ mod tests {
                     *e = e.max(variety.variety * share);
                 }
                 for &s in engine.lexicon.same_stem(engine.lexicon.word(w)) {
-                    let e = stems.entry(s).or_default();
-                    *e = e.max(variety.root * share);
+                    for &h in engine.lexicon.homophones(s) {
+                        let e = stems.entry(h).or_default();
+                        *e = e.max(variety.root * share);
+                    }
                 }
             }
             seen.push(sounds(&m.words));
@@ -645,7 +655,12 @@ mod tests {
             "L AY1 N F L IY1 IH1 N",
         ] {
             let input = Ph::parse_all(text).unwrap();
-            for (v, root) in [(0.3, 0.0), (1.0, 0.0), (1.0, 0.5), (3.0, 0.0)] {
+            let settings = [(0.3, 0.0), (1.0, 0.0), (1.0, 0.5), (3.0, 0.0), (0.5, 1.0)];
+            let weights = [(0.05, 0.1), (0.005, 0.4), (0.0, 0.0)];
+            for ((v, root), (lm_weight, word_penalty)) in settings
+                .iter()
+                .flat_map(|s| weights.iter().map(move |w| (*s, *w)))
+            {
                 let variety = Variety {
                     variety: v,
                     root,
@@ -655,6 +670,8 @@ mod tests {
                     results: 6,
                     bound: 0.5,
                     bigrams: false,
+                    lm_weight,
+                    word_penalty,
                     ..SearchConfig::default()
                 };
                 let (fast, _) = engine.hear_varied(&input, &config, variety, 60.0, |_| false);

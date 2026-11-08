@@ -27,7 +27,16 @@ export type FromWorker =
       lexicon: LexiconOptions;
       loadMs: number;
     }
-  | { type: 'result'; id: number; result: ResultDto; ms: number; info: LexiconInfoDto; rebuildMs: number }
+  | {
+      type: 'result';
+      id: number;
+      result: ResultDto;
+      ms: number;
+      info: LexiconInfoDto;
+      rebuildMs: number;
+      /** Something the page should say, such as missing word-pair counts. */
+      notice?: string;
+    }
   | { type: 'preview'; id: number; preview: PreviewDto }
   | { type: 'error'; id?: number; message: string };
 
