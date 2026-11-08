@@ -7,7 +7,10 @@
 > (`EchoStrictness::threshold`). The jump DP (aligner 5) was removed: it
 > was never better on real poems, and its reuse inflated scores. The
 > default consonant zero point is tuned (300), not the CMUdict-calibrated
-> 789. The plan below is kept as written.
+> 789, and both aligners normalize by the mean self-similarity, so a
+> truncation is no longer exactly 1. `RepetitionScheme` became
+> `EchoScheme`, and the aligner lives only in `EchoConfig`. The plan below
+> is kept as written.
 
 ## Context
 

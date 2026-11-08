@@ -98,70 +98,88 @@ poems after excluding one duplex whose echoes are by meaning only. By
 strictness, that is 50 strict poems (37 villanelles, 13 pantoums) and 83
 loose ones (42 villanelles, 27 pantoums, 14 duplexes). Template pairs give
 572 strict and 1,011 loose echoes, and every other line pair in the same
-poem a non-echo (10,219 strict, 19,376 loose).
+poem a non-echo (10,219 strict, 19,376 loose). 152 of the forms' 1,735
+template echoes are dropped because a line has a word CMUdict lacks, which
+skews the corpus toward ordinary vocabulary (the harness reports this).
 
-**Search.** `--search 120` per aligner: random configs over every parameter
-that aligner uses, screened on one fold, then refined around the best.
-Poems are split into 5 folds stratified by form × strictness, and the
-objective is the mean of the strict pool's AUC and the loose pool's, so
-strict and loose poems count equally. A nested estimate (best config
-picked without each fold, scored on it) checks that tuning generalizes:
+**Search.** `--search 120` per aligner (run 3): random configs over every
+parameter that aligner uses, screened on one fold, then refined around the
+best. Poems are split into 5 folds stratified by form × strictness, and
+the objective is the mean of the strict pool's AUC and the loose pool's,
+so strict and loose poems count equally. Once tuned, the three aligners
+then under test (semi-global, Waterman–Eggert, jump) were effectively
+tied. Every search chose a much lower consonant zero point than the
+calibrated 789, and mean normalization.
 
-| aligner | defaults | nested CV estimate |
-|---|---|---|
-| semi-global | 0.9896 | 0.9934 |
-| Waterman–Eggert | 0.9899 | 0.9931 |
-| jump (since removed) | 0.9826 | 0.9917 |
+Run 3 reported a "nested CV estimate" for each search (semi-global 0.9934
+vs 0.9896 for the defaults). **That number is optimistic**: the random
+configs it chooses among were screened on fold 0, and refinement picked
+its parents with the objective on every fold, held-out ones included. The
+harness now computes the estimate from random trials only, on the folds
+other than the screen fold. The search was not re-run, because nothing
+shipped rests on that number. Semi-global ships the hand-set config with
+two changes, checked as fixed configs fold by fold (`--search 0`, no
+selection involved):
 
-The three were effectively tied once tuned. Two findings held for all of
-them:
+| semi-global config | fold 0 | fold 1 | fold 2 | fold 3 | fold 4 |
+|---|---|---|---|---|---|
+| old defaults (zero point 789, shorter-line) | 0.9800 | 0.9905 | 0.9940 | 0.9879 | 0.9938 |
+| zero point 300, shorter-line | 0.9850 | 0.9953 | 0.9950 | 0.9917 | 0.9961 |
+| zero point 789, mean | 0.9819 | 0.9930 | 0.9950 | 0.9869 | 0.9952 |
+| **zero point 300, mean (shipped)** | **0.9857** | **0.9962** | **0.9955** | **0.9914** | **0.9960** |
 
-- **The consonant zero point belongs well below chance.** CMUdict
-  calibration puts it at 789, the mean distance between random
-  consonants. Every search preferred 300–540. Lowering it alone to 300
-  took semi-global from 0.9883 to 0.9918 (the full optimum: 0.9931), and
-  jump from 0.9819 to 0.9905. Waterman–Eggert barely moved (0.9891): it
-  also needs its structural costs tuned.
-- **Mean normalization was always chosen.** It stops short lines that
-  happen to sit inside longer ones from scoring as full echoes. Vowel-side
-  values (coefficients, vowel zero point, stress weights) did not agree
-  across folds.
+Each change helps on its own, and together they beat the old defaults on
+every fold. The zero point is on a plateau, not at an edge: 200, 250 and
+300 all score 0.9920 overall, and 150 and 100 slightly less (the search's
+range had started at 300; it now starts at 100). Waterman–Eggert's preset
+is run 3's search optimum, tuned on the whole corpus — in-sample. If
+anything relies on its exact values, retune it with the fixed estimator.
 
 **Thresholds.** For loose poems, each aligner's best balanced accuracy,
 which moved little when resampling poems (semi-global's 90% range:
-0.22–0.30). Strict poems separate almost perfectly anywhere in
-0.41–0.68, so the strict mark sits above the optimum, for margin.
+0.21–0.26). Strict poems separate almost perfectly anywhere in 0.34–0.60,
+so the strict mark sits above the optimum, for margin.
+
+**Normalization.** Both aligners divide by the mean of the two lines'
+self-similarities. Dividing by the shorter line's instead makes any line
+contained in another a perfect echo, however short. At equal recall, mean
+normalization caught the same echoes (on loose poems 3 differed each way
+out of 920; on strict poems none) with fewer false positives: 751 → 655 on
+loose poems and 31 → 11 on strict ones, where the ones it removed were
+mostly very short lines found inside long ones. The cost is that a
+truncated or extended repeat scores below 1 — about ⅔ for a half-length
+truncation, which still passes either threshold.
 
 ## What ships
 
 | | semi-global (default) | Waterman–Eggert (opt-in) |
 |---|---|---|
-| config | defaults; consonant zero point 300 | the search's optimum (mean normalization) |
-| strict threshold | 0.50: 99.1% of echoes, 0.3% false positives | 0.45: 99.1%, 0.2% |
-| loose threshold | 0.28: 91.0% of echoes, 3.9% false positives | 0.24: 94.7%, 5.9% |
+| config | hand-set; consonant zero point 300, mean normalization | run 3's search optimum (mean normalization) |
+| strict threshold | 0.50: 99.1% of echoes, 0.1% false positives | 0.45: 99.1%, 0.2% |
+| loose threshold | 0.25: 92.4% of echoes, 4.4% false positives | 0.24: 94.9%, 6.1% |
 | speed (corpus, one thread) | ~0.33 ms per pair | ~3.2 ms per pair |
 
-False-positive rates at equal recall (each configuration's threshold set
-to miss the same share of loose echoes):
+False-positive rates on loose poems at equal recall (each configuration's
+threshold set to miss the same share of loose echoes):
 
-| configuration | missing 5.3% | missing 8.5% |
-|---|---|---|
-| semi-global, shipped (zero point 300, shorter-line normalization) | 7.8% | 4.0% |
-| semi-global, zero point 300 + mean normalization | 6.5% | 3.6% |
-| semi-global, search optimum | 6.0% | 3.2% |
-| Waterman–Eggert, zero point 300 + mean normalization | 8.1% | 4.2% |
-| Waterman–Eggert, shipped (search optimum) | 5.8% | 3.4% |
+| configuration | missing 3% | missing 5.3% | missing 8.5% |
+|---|---|---|---|
+| semi-global, old defaults | 22.5% | 9.9% | 5.5% |
+| semi-global, zero point 300, shorter-line | 12.4% | 7.8% | 4.0% |
+| **semi-global, shipped** | **12.8%** | **6.9%** | **3.7%** |
+| **Waterman–Eggert, shipped** | **13.0%** | **6.0%** | **3.4%** |
 
-With matched settings semi-global is slightly better; tuned, the two are
-tied, and semi-global has far fewer false positives when nearly every echo
-must be caught (missing 3%: 9.3% vs 12.5%). Averaging or taking the max or
-min of the two didn't help. So semi-global is the default and
-Waterman–Eggert is an alternative mode. The shipped semi-global gives up
-some false positives by keeping shorter-line normalization (see Open
-questions). It catches about 35 loose echoes
-semi-global misses, mostly fragments of an otherwise different line and
-reordered phrases, at the cost of more chance fragments in unrelated
-lines.
+Shipped against shipped, the two are close: Waterman–Eggert has slightly
+fewer false positives at moderate recall, and they tie when nearly every
+echo must be caught. (Semi-global's own search optimum was a little better
+than either — 6.0% and 3.2% at the last two columns — but its vowel-side
+values didn't agree across folds, so it isn't shipped.) Averaging or
+taking the max or min of the two aligners didn't help. So semi-global, ten
+times faster and with one tuned value rather than thirteen, is the
+default, and Waterman–Eggert is an alternative mode. It catches loose
+echoes semi-global misses — mostly a fragment of an otherwise different
+line, or a reordered phrase — at the cost of more chance fragments in
+unrelated lines.
 
 **Jump was removed.** It was never better than the other two on real
 poems. Its strength, reordering, is mostly covered by Waterman–Eggert, and
@@ -172,10 +190,13 @@ Fixture behavior under the shipped settings is pinned by
 Semi-global's one known gap is three-block permutations (≈0.36–0.40), which
 pass as loose but not as strict; Waterman–Eggert scores them 0.50–0.85.
 
-## What the errors are (semi-global, loose)
+## What the errors are
 
-Misses (91 of 1,011 loose echoes at 0.28; counts below are from an
-analysis at 0.276, 86 misses):
+From an analysis of semi-global before the switch to mean normalization
+(zero point 300, shorter-line, threshold 0.276); the shipped config misses
+77 loose echoes and makes 845 loose false positives at 0.25.
+
+Misses (86 of 1,011 loose echoes):
 
 - 42: the refrain slot keeps only its end word. By the form's slots these
   are echoes; to the ear they're closer to rhyme.
@@ -185,28 +206,34 @@ analysis at 0.276, 86 misses):
 - 10: nothing shared in the sounds (by meaning, or spelled out).
 - 8: shared words, reordered — what Waterman–Eggert is for.
 
-False positives (773 of 19,376 at 0.276): 46% come from one long pantoum
-built on anaphora, whose formula lines really do sound alike. The rest are
-real echoes the template can't label (a line belongs to one group only),
-very short lines, and shared phrasing.
+False positives (773 of 19,376): 46% come from one long pantoum built on
+anaphora, whose formula lines really do sound alike. The rest are real
+echoes the template can't label (a line belongs to one group only), very
+short lines (which mean normalization now mostly rejects), and shared
+phrasing.
 
 ## Open questions
 
-- **Normalization.** Semi-global ships with shorter-line normalization,
-  so a truncated repeat scores 1. Mean normalization gives about 15% fewer
-  false positives (table above), but a truncation then scores ≈0.77, an
-  insertion ≈0.62 instead of ≈0.94, and the thresholds drop (best: strict
-  ≈0.39, loose ≈0.22).
 - **End-word refrains.** Relabel them, or accept a refrain slot on
   "echo, or the same end word" through the rhyme scorer.
 - **Labels the template can't express** (a line echoing two groups), and
   whether one long poem should weigh as much as it does in a pooled AUC.
+- **Words CMUdict lacks** drop whole refrains from the evaluation (152
+  echoes); a small supplementary pronunciation list would recover them.
+- **Waterman–Eggert's preset** was tuned in-sample, before a fix to how it
+  assembles runs (which barely moved its scores); retune it with the fixed
+  estimator before relying on its exact values.
 
 ## Reproducing
 
 ```sh
 # the report, with pass rates at the shipped thresholds
 cargo run --release --example echo_compare -- \
+  --corpus data/echo/public --corpus data/echo/private \
+  --forms pantoum,duplex,villanelle
+# a fixed config, fold by fold (no search)
+ECHO_CONFIG='{"consonant_zero_point":789,"normalization":"shorter"}' \
+  cargo run --release --example echo_compare -- --search 0 --aligner semi_global \
   --corpus data/echo/public --corpus data/echo/private \
   --forms pantoum,duplex,villanelle
 # the search (~3 min for semi-global, ~30 for Waterman–Eggert, 12 threads)
