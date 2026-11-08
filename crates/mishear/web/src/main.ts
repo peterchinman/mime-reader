@@ -87,11 +87,29 @@ const SEARCH_KNOBS: Knob[] = [
   },
   {
     type: 'number',
+    key: 'root',
+    label: 'same-root penalty',
+    hint: 'Extra cost per heard word sharing a stem with a word of the line: “flying” for “fly in”, “flies” for “fly” (Snowball English stemmer). The same word counts too, on top of novelty. Irregular forms (“flew”) aren’t caught.',
+    min: 0,
+    max: 5,
+    step: 0.05,
+  },
+  {
+    type: 'number',
     key: 'function_share',
     label: 'function-word share',
-    hint: 'The share of the novelty cost charged for a shared function word (the 150 most frequent).',
+    hint: 'The share of the novelty and same-root costs charged when the line’s word is a function word (the 150 most frequent).',
     min: 0,
     max: 1,
+    step: 0.05,
+  },
+  {
+    type: 'number',
+    key: 'crossing',
+    label: 'cross word boundaries',
+    hint: 'Reward per word boundary of the line that a hearing cuts across (“this guy” for “the sky” cuts the|sky). Charged instead as a cost on each boundary a hearing keeps: that ranks hearings the same way and keeps the search exact, so the costs shown include it.',
+    min: 0,
+    max: 3,
     step: 0.05,
   },
   { type: 'number', key: 'max_bound', label: 'max bound', hint: 'How far the top-N search may raise its bound before it settles for fewer.', min: 2, max: 60, step: 0.5 },
@@ -788,8 +806,14 @@ function renderResult(result: ResultDto, ms: number, rebuildMs: number): void {
         el('span', { className: 'text', textContent: h.text }),
         el('span', {
           className: 'meta',
-          textContent: `cost ${fmt(h.cost)} · sound ${fmt(h.phonetic)}${mishear ? ` · ${h.shared} shared` : ''}`,
-          title: 'cost: sound + word prior + word penalty + novelty. sound: the phonetic part alone.',
+          textContent: [
+            `cost ${fmt(h.cost)}`,
+            `sound ${fmt(h.phonetic)}`,
+            ...(mishear ? [`${h.shared} same word`, `${h.related} same root`] : []),
+            ...(result.boundaries.length ? [`crosses ${result.boundaries.length - h.kept} of ${result.boundaries.length} boundaries`] : []),
+          ].join(' · '),
+          title:
+            'cost: sound + word prior + word penalty + novelty + same-root + kept boundaries. sound: the phonetic part alone. same root: words other than the line’s own that share a stem with one of them.',
         }),
       );
       li.onclick = () => {
@@ -845,6 +869,7 @@ function renderAlignment(result: ResultDto, changedInput: boolean[]): void {
   result.input.forEach((ph, k) => place(el('div', { className: `input ph${changedInput[k] ? ' changed' : ''}`, textContent: ph }), row, k, k + 1));
   row++;
   const lineWords = new Set(result.words.map((w) => w.text));
+  const firstHearingRow = row;
   result.hearings.forEach((h, i) => {
     label(`${i + 1}`, row);
     for (const w of h.words) {
@@ -858,6 +883,14 @@ function renderAlignment(result: ResultDto, changedInput: boolean[]): void {
     }
     row++;
   });
+  // The line's word boundaries, drawn over the hearings: a heard word they
+  // pass through cuts across one.
+  for (const b of result.boundaries) {
+    const line = el('div', { className: 'boundary' });
+    line.style.gridRow = `1 / ${Math.max(row, firstHearingRow + 1)}`;
+    line.style.gridColumn = String(b + 2);
+    cells.push(line);
+  }
   grid.replaceChildren(...cells);
 }
 

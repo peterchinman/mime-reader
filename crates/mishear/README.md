@@ -127,7 +127,10 @@ of the input. Its cost adds up three things:
   per word. The bigram model is Dirichlet-smoothed toward wordfreq's
   unigram frequencies.
 - **Extra costs.** The mishearing engine charges 1.0 for each word the
-  original line contains, and a fifth of that for function words.
+  original line contains, and a fifth of that for function words. Two more
+  are off by default: a charge for words sharing a stem with the line's
+  (`--root`), and one for each of the line's word boundaries a hearing
+  keeps (`--crossing`).
 
 There are two passes:
 
@@ -152,6 +155,8 @@ and runs a grid of them.
 | `--unigram` | off | exactness and speed, against fluency |
 | `--vocab`, `--all-words` | 50k, filtered | coverage against obscure words, names and brands |
 | `--novelty`, `--function-share` | 1.0, 0.2 | departing from the original's words |
+| `--root` | 0 | departing from the original's roots too ("flying" for "fly in") |
+| `--crossing` | 0 | hearings that cut across the original's word boundaries |
 | `--stress-mismatch` | 0 | keeping the line's rhythm (extra cost when a stressed vowel pairs with an unstressed one) |
 | `--swap` | off | adjacent consonants exchanged as one edit ("ask" ↔ "aks") |
 | `--all-spellings` | off | listing homophone spellings separately, rather than merging hearings that sound the same |
@@ -205,6 +210,32 @@ Many classic mondegreens differ from the original only in spelling
 keeps one spelling per sound: the cheapest, after novelty. So with novelty
 on, "hark the harold angels sing" can come out as "…angels singh". Use
 `--all-spellings` to see every spelling.
+
+### Roots and boundaries
+
+- **`--root F` charges F for each heard word that shares a stem with a word
+  of the line.** Stems come from Snowball's English stemmer (Porter2):
+  "fly", "flies" and "flying" all give "fli". The same word counts too, so
+  `--root` adds to `--novelty` for it. `--function-share` applies when the
+  line's word is a function word. Irregular forms ("flew") aren't caught.
+  - In "the swallows fly in", the top hearings at 0 all end in "flying"
+    ("thus willows flying"). From `--root 1` they end in "frying".
+  - In "Since Persia fell at Marathon", "marathons" gets past `--novelty`,
+    which only catches the identical word. `--root` catches it.
+- **`--crossing F` rewards each of the line's word boundaries that a
+  hearing cuts across** ("this guy" for "the sky" cuts "the|sky"). A
+  negative cost would break the search's pruning, so it's charged instead
+  as F for each boundary a hearing keeps: a word starting exactly there.
+  Every hearing keeps or cuts each boundary, so the ranking is the same as
+  for a reward, and the search stays exact. The costs shown include it.
+  - In "Since Persia fell at Marathon", the top four at 0 all keep
+    "at|marathon" ("…of a rat marathons"). From 0.6 they all cut across it
+    ("sin spurs of era telethon").
+  - Raising costs means the bound has to grow further: that line took
+    220 ms at 0, and 410–440 ms from 0.3 to 1.
+- `mishear` prints each hearing's counts: `shared` (same word), `root`
+  (another word with the same stem) and `kept` (boundaries kept, out of
+  the line's).
 
 ### Rhythm and swaps
 

@@ -7,7 +7,8 @@
 //!   ([`CostModel`]);
 //! - `lm_weight × −ln P(word)` (common words are cheap) plus
 //!   `word_penalty`;
-//! - any extra cost the caller puts on particular words.
+//! - any extra cost the caller puts on particular words;
+//! - any cost the caller puts on a word boundary at particular positions.
 //!
 //! Any alignment of the input with a concatenation of words splits into
 //! per-word alignments of contiguous spans, so minimizing span by span is
@@ -51,6 +52,11 @@ pub struct SearchConfig {
     pub word_penalty: f32,
     /// Extra cost per word, e.g. for words the input already contains.
     pub extra: HashMap<WordId, f32>,
+    /// `boundary_cost[p]`: extra cost for a word boundary at input position
+    /// `p` (a word starting there, `0 < p < n`). Missing positions cost
+    /// nothing. Depending only on where a word starts, it leaves the search
+    /// exact.
+    pub boundary_cost: Vec<f32>,
     /// Score words by the previous word too, when the lexicon has bigrams.
     /// The search is then exact only up to its per-span shortlist of
     /// `shortlist` words (the best word for a span depends on its
@@ -70,6 +76,7 @@ impl Default for SearchConfig {
             lm_weight: 0.05,
             word_penalty: 0.1,
             extra: HashMap::new(),
+            boundary_cost: Vec::new(),
             bigrams: true,
             shortlist: 30,
             distinct_sounds: true,
@@ -151,6 +158,13 @@ pub fn search(
         })
         .collect();
     let subtree_min = subtree_min_cost(lexicon, &word_cost);
+    let boundary = |p: usize| {
+        if p == 0 {
+            0.0
+        } else {
+            config.boundary_cost.get(p).copied().unwrap_or(0.0)
+        }
+    };
 
     // Pass 1: edges[s][e - s - 1] holds the best words for input[s..e].
     let mut stats = SearchStats {
@@ -168,7 +182,8 @@ pub fn search(
             input: &input[s..s + span_max],
             lexicon,
             cost,
-            bound: config.bound,
+            // Every word starting here pays for the boundary before it.
+            bound: config.bound - boundary(s),
             keep: shortlist,
             word_cost: &word_cost,
             subtree_min: &subtree_min,
@@ -212,6 +227,7 @@ pub fn search(
             let Some(span_edges) = edges[s].get(e - s - 1) else {
                 continue;
             };
+            let boundary = boundary(s);
             for edge in span_edges {
                 for &p in &at[s] {
                     let prev = &arena[p as usize];
@@ -224,7 +240,7 @@ pub fn search(
                     } else {
                         edge.total
                     };
-                    let total = prev.cost + edge_cost;
+                    let total = prev.cost + edge_cost + boundary;
                     if total > config.bound {
                         continue;
                     }
@@ -550,6 +566,13 @@ mod tests {
                 }
             }
         }
+        let boundary = |p: usize| {
+            if p == 0 {
+                0.0
+            } else {
+                config.boundary_cost.get(p).copied().unwrap_or(0.0)
+            }
+        };
         let mut best: HashMap<Vec<WordId>, f32> = HashMap::new();
         // Every way to cut the input into spans, and every word per span.
         for cuts in 0u32..(1 << (n - 1)) {
@@ -571,7 +594,7 @@ mod tests {
                 for span in &spans {
                     let w = (c % words) as WordId;
                     c /= words;
-                    total += span_cost[&(span.start, span.end, w)];
+                    total += span_cost[&(span.start, span.end, w)] + boundary(span.start);
                     seq.push(w);
                 }
                 let entry = best.entry(seq).or_insert(f32::INFINITY);
@@ -591,7 +614,8 @@ mod tests {
         let lexicon = tiny();
         // The default edits, and with rhythm and swaps: "K S AY1" is "sky"
         // with S K swapped, which the walk reaches only through the swap's
-        // two-level step (and its pruning bound).
+        // two-level step (and its pruning bound). Each also with uneven
+        // boundary costs.
         let costs = [
             CostModel::default(),
             CostModel::new(crate::cost::CostConfig {
@@ -611,31 +635,34 @@ mod tests {
             ]
             .map(|case| (c, case))
         }) {
-            let input = Ph::parse_all(input).unwrap();
-            let config = SearchConfig {
-                results: 5,
-                bound,
-                bigrams: false,
-                ..SearchConfig::default()
-            };
-            let expected = brute_force(&input, &lexicon, cost, &config);
-            let (found, _) = search(&input, &lexicon, cost, &config);
-            let want: Vec<f32> = expected.iter().take(5).map(|e| e.1).collect();
-            let got: Vec<f32> = found.iter().map(|m| m.cost).collect();
-            assert_eq!(
-                got.len(),
-                want.len(),
-                "{} : {got:?} vs {want:?}",
-                crate::phone::spell(&input)
-            );
-            for (g, w) in got.iter().zip(&want) {
-                assert!(
-                    (g - w).abs() < 1e-4,
+            for boundary_cost in [vec![], vec![0.0, 0.7, 0.0, 0.4, 1.1, 0.2, 0.9, 0.3, 0.5]] {
+                let input = Ph::parse_all(input).unwrap();
+                let config = SearchConfig {
+                    results: 5,
+                    bound,
+                    bigrams: false,
+                    boundary_cost,
+                    ..SearchConfig::default()
+                };
+                let expected = brute_force(&input, &lexicon, cost, &config);
+                let (found, _) = search(&input, &lexicon, cost, &config);
+                let want: Vec<f32> = expected.iter().take(5).map(|e| e.1).collect();
+                let got: Vec<f32> = found.iter().map(|m| m.cost).collect();
+                assert_eq!(
+                    got.len(),
+                    want.len(),
                     "{} : {got:?} vs {want:?}",
                     crate::phone::spell(&input)
                 );
+                for (g, w) in got.iter().zip(&want) {
+                    assert!(
+                        (g - w).abs() < 1e-4,
+                        "{} : {got:?} vs {want:?}",
+                        crate::phone::spell(&input)
+                    );
+                }
+                assert!(found.iter().all(|m| m.cost <= bound));
             }
-            assert!(found.iter().all(|m| m.cost <= bound));
         }
     }
 

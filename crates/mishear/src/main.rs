@@ -47,8 +47,14 @@ SEARCH OPTIONS
   --bigram-prior F   bigram smoothing μ: how many words of evidence the
                      unigram frequencies are worth (default 100; larger
                      trusts word pairs less)
-  --function-share F the share of --novelty a shared function word costs
-                     (default 0.2)
+  --function-share F the share of --novelty (and --root) a shared function
+                     word costs (default 0.2)
+  --root F           mishear/examples: cost per heard word sharing a stem
+                     with a word of the line ('flying' for 'fly in'; the
+                     same word included, on top of --novelty) (default 0)
+  --crossing F       mishear/examples: reward per word boundary of the line
+                     a hearing cuts across ('this guy' cuts 'the|sky'),
+                     charged as a cost on each boundary kept (default 0)
   --stress-mismatch F  extra cost for pairing a stressed vowel with an
                      unstressed one: how much hearings keep the rhythm
                      (default 0)
@@ -86,12 +92,15 @@ SWEEP AND EVAL OPTIONS
   --stress-values A,B,…    (default: --stress-mismatch)
   --swap-values A,B,…      (0 = off; default: --swap)
   --novelty-values A,B,…   (default: --novelty)
+  --root-values A,B,…      (default: --root)
+  --crossing-values A,B,…  (default: --crossing)
 
 EXAMPLES OPTIONS
   --lines K          how many corpus lines (default 6)
   --public           only the public-domain poems (data/echo/public)
   --line-seed N      which lines (default 1)";
 
+#[derive(Clone)]
 struct Options {
     command: String,
     positional: Vec<String>,
@@ -119,6 +128,10 @@ struct Options {
     stress_values: Option<Vec<f32>>,
     swap_values: Option<Vec<f32>>,
     novelty_values: Option<Vec<f32>>,
+    root: f32,
+    crossing: f32,
+    root_values: Option<Vec<f32>>,
+    crossing_values: Option<Vec<f32>>,
 }
 
 fn parse(args: Vec<String>) -> Result<Options, String> {
@@ -151,6 +164,10 @@ fn parse(args: Vec<String>) -> Result<Options, String> {
         stress_values: None,
         swap_values: None,
         novelty_values: None,
+        root: 0.0,
+        crossing: 0.0,
+        root_values: None,
+        crossing_values: None,
     };
     let mut intensity = 1.0;
     let mut seed = 0;
@@ -176,6 +193,10 @@ fn parse(args: Vec<String>) -> Result<Options, String> {
             "--stress-values" => o.stress_values = Some(numbers(&value("--stress-values")?)?),
             "--swap-values" => o.swap_values = Some(numbers(&value("--swap-values")?)?),
             "--novelty-values" => o.novelty_values = Some(numbers(&value("--novelty-values")?)?),
+            "--root" => o.root = number(value("--root")?)?,
+            "--crossing" => o.crossing = number(value("--crossing")?)?,
+            "--root-values" => o.root_values = Some(numbers(&value("--root-values")?)?),
+            "--crossing-values" => o.crossing_values = Some(numbers(&value("--crossing-values")?)?),
             "--penalty-values" => o.penalty_values = Some(numbers(&value("--penalty-values")?)?),
             "--pron-values" => {
                 o.pron_values = Some(
@@ -301,6 +322,8 @@ fn mishear_config(o: &Options) -> MishearConfig {
         search: search_config(o),
         novelty: o.novelty,
         function_word_share: o.function_share,
+        root: o.root,
+        crossing: o.crossing,
         // `--within X` fixes the bound; otherwise it grows to the top N.
         max_bound: o.within.unwrap_or(30.0),
     }
@@ -321,8 +344,14 @@ fn print_mishearing(engine: &Engine, text: &str, o: &Options) -> Result<(), Stri
     }
     for h in &m.heard {
         println!(
-            "  {:>5.2}  phonetic {:>4.2}  shared {}  {}",
-            h.cost, h.phonetic, h.shared, h.text
+            "  {:>5.2}  phonetic {:>4.2}  shared {} root {} kept {}/{}  {}",
+            h.cost,
+            h.phonetic,
+            h.shared,
+            h.related,
+            h.kept,
+            m.boundaries.len(),
+            h.text
         );
     }
     if m.heard.is_empty() {
@@ -490,55 +519,58 @@ fn run(o: Options) -> Result<(), String> {
 
 /// Every combination of the `*-values` options, as option sets.
 fn grid(o: &Options) -> Vec<Options> {
-    let or =
-        |values: &Option<Vec<f32>>, default: f32| values.clone().unwrap_or_else(|| vec![default]);
-    let mut out = Vec::new();
-    for &all in &o
+    let mut base = o.clone();
+    base.command.clear();
+    base.positional.clear();
+    base.pron_values = None;
+    let mut out: Vec<Options> = o
         .pron_values
         .clone()
         .unwrap_or_else(|| vec![o.all_pronunciations])
-    {
-        for &lm in &or(&o.lm_values, o.lm) {
-            for &penalty in &or(&o.penalty_values, o.word_penalty) {
-                for &stress in &or(&o.stress_values, o.stress_mismatch) {
-                    for &swap in &or(&o.swap_values, o.swap) {
-                        for &novelty in &or(&o.novelty_values, o.novelty) {
-                            out.push(Options {
-                                command: String::new(),
-                                positional: Vec::new(),
-                                deformation: o.deformation.clone(),
-                                lm_values: None,
-                                penalty_values: None,
-                                pron_values: None,
-                                stress_values: None,
-                                swap_values: None,
-                                novelty_values: None,
-                                lm,
-                                word_penalty: penalty,
-                                all_pronunciations: all,
-                                stress_mismatch: stress,
-                                swap,
-                                novelty,
-                                ..*o
-                            });
-                        }
-                    }
-                }
-            }
-        }
+        .into_iter()
+        .map(|all| Options {
+            all_pronunciations: all,
+            ..base.clone()
+        })
+        .collect();
+    // Each axis multiplies the grid, the first outermost.
+    type Axis = (Option<Vec<f32>>, fn(&mut Options, f32));
+    let axes: [Axis; 7] = [
+        (o.lm_values.clone(), |o, v| o.lm = v),
+        (o.penalty_values.clone(), |o, v| o.word_penalty = v),
+        (o.stress_values.clone(), |o, v| o.stress_mismatch = v),
+        (o.swap_values.clone(), |o, v| o.swap = v),
+        (o.novelty_values.clone(), |o, v| o.novelty = v),
+        (o.root_values.clone(), |o, v| o.root = v),
+        (o.crossing_values.clone(), |o, v| o.crossing = v),
+    ];
+    for (values, set) in axes {
+        let Some(values) = values else { continue };
+        out = out
+            .iter()
+            .flat_map(|o| {
+                values.iter().map(move |&v| {
+                    let mut o = o.clone();
+                    set(&mut o, v);
+                    o
+                })
+            })
+            .collect();
     }
     out
 }
 
 fn label(o: &Options) -> String {
     format!(
-        "lm {:<4} pen {:<4} {:<5} stress {:<3} swap {:<3} nov {:<3}",
+        "lm {:<4} pen {:<4} {:<5} stress {:<3} swap {:<3} nov {:<3} root {:<3} cross {:<3}",
         o.lm,
         o.word_penalty,
         if o.all_pronunciations { "all" } else { "first" },
         o.stress_mismatch,
         o.swap,
-        o.novelty
+        o.novelty,
+        o.root,
+        o.crossing
     )
 }
 

@@ -74,6 +74,11 @@ pub struct SearchDto {
     pub distinct_sounds: bool,
     pub novelty: f32,
     pub function_share: f32,
+    /// Cost per heard word sharing a stem with a word of the line.
+    pub root: f32,
+    /// Reward per word boundary of the line a hearing cuts across (charged
+    /// on each one it keeps).
+    pub crossing: f32,
     /// How far the top-N search may raise its bound.
     pub max_bound: f32,
 }
@@ -119,6 +124,10 @@ pub struct HearingDto {
     pub cost: f32,
     pub phonetic: f32,
     pub shared: usize,
+    /// Its other words sharing a stem with one of the line's.
+    pub related: usize,
+    /// The line's word boundaries it keeps.
+    pub kept: usize,
     pub words: Vec<HeardWordDto>,
 }
 
@@ -137,6 +146,8 @@ pub struct ResultDto {
     pub words: Vec<WordDto>,
     /// What was heard: the deformed phonemes, flattened.
     pub input: Vec<String>,
+    /// The line's word boundaries, as positions in `input`.
+    pub boundaries: Vec<usize>,
     pub hearings: Vec<HearingDto>,
     pub stats: StatsDto,
     pub deformation: String,
@@ -365,6 +376,7 @@ impl MishearApp {
                 Ok(ResultDto {
                     words: Vec::new(),
                     input: spelled(&input),
+                    boundaries: Vec::new(),
                     hearings: matches
                         .iter()
                         .map(|m| HearingDto {
@@ -372,6 +384,8 @@ impl MishearApp {
                             cost: m.cost,
                             phonetic: m.phonetic,
                             shared: 0,
+                            related: 0,
+                            kept: 0,
                             words: hearing(&m.words, &m.spans),
                         })
                         .collect(),
@@ -395,6 +409,8 @@ impl MishearApp {
                     search: search_config,
                     novelty: s.novelty,
                     function_word_share: s.function_share,
+                    root: s.root,
+                    crossing: s.crossing,
                     max_bound,
                 };
                 let m = self
@@ -415,6 +431,7 @@ impl MishearApp {
                         })
                         .collect(),
                     input: spelled(&m.deformed.concat()),
+                    boundaries: m.boundaries.clone(),
                     hearings: m
                         .heard
                         .iter()
@@ -423,6 +440,8 @@ impl MishearApp {
                             cost: h.cost,
                             phonetic: h.phonetic,
                             shared: h.shared,
+                            related: h.related,
+                            kept: h.kept,
                             words: h
                                 .words
                                 .iter()
@@ -508,6 +527,8 @@ pub fn defaults() -> DefaultsDto {
             distinct_sounds: search.distinct_sounds,
             novelty: mishear.novelty,
             function_share: mishear.function_word_share,
+            root: mishear.root,
+            crossing: mishear.crossing,
             max_bound: mishear.max_bound,
         },
         cost: CostConfig::default().into(),

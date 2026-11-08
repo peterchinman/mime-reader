@@ -32,6 +32,17 @@ pub struct Lexicon {
     /// the same ("there", "their", "they're").
     sound: Vec<u32>,
     first: Vec<Vec<Ph>>,
+    /// The words sharing each [`stem`].
+    by_stem: HashMap<String, Vec<WordId>>,
+}
+
+/// A word's stem, by Snowball's English stemmer (Porter2): "fly", "flies"
+/// and "flying" all give "fli". Irregular forms keep their own ("flew").
+pub fn stem(word: &str) -> String {
+    use rust_stemmers::{Algorithm, Stemmer};
+    Stemmer::create(Algorithm::English)
+        .stem(&word.to_lowercase())
+        .into_owned()
 }
 
 /// Word-pair counts, smoothed toward the unigram frequencies:
@@ -156,6 +167,7 @@ impl Lexicon {
             bigrams: None,
             sound: Vec::new(),
             first: Vec::new(),
+            by_stem: HashMap::new(),
         };
         let mut sounds: HashMap<Vec<Ph>, u32> = HashMap::new();
         for frequency in frequencies {
@@ -178,6 +190,7 @@ impl Lexicon {
                 .surprisal
                 .push((9.0 - frequency.zipf) * std::f32::consts::LN_10);
             lexicon.index.insert(word.to_string(), id);
+            lexicon.by_stem.entry(stem(word)).or_default().push(id);
             let first: Vec<Ph> = pronunciations[0].iter().map(Ph::from_phoneme).collect();
             let next = sounds.len() as u32;
             lexicon
@@ -244,6 +257,11 @@ impl Lexicon {
 
     pub fn id(&self, word: &str) -> Option<WordId> {
         self.index.get(&word.to_lowercase()).copied()
+    }
+
+    /// Every word with `word`'s [`stem`], `word` itself included.
+    pub fn same_stem(&self, word: &str) -> &[WordId] {
+        self.by_stem.get(&stem(word)).map_or(&[], Vec::as_slice)
     }
 
     /// `−ln P(word)`: about 3 for "the", 8 for "nice", 15 for "aardvark".

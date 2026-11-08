@@ -3,7 +3,7 @@
 //! words with the original, so the output is a mishearing rather than the
 //! line itself.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use mime_reader::line::WordData;
@@ -26,8 +26,19 @@ pub struct MishearConfig {
     pub search: SearchConfig,
     /// Extra cost per output word that the original line contains.
     pub novelty: f32,
-    /// The share of `novelty` charged for a shared function word.
+    /// The share of `novelty` (and of `root`) charged for a shared function
+    /// word.
     pub function_word_share: f32,
+    /// Extra cost per output word sharing a stem with a word of the line
+    /// ("flying" for "fly", "flies" for "fly"): the same word included, so
+    /// it adds to `novelty` there.
+    pub root: f32,
+    /// Reward per word boundary of the line that a hearing cuts across
+    /// ("this guy" for "the sky" cuts "the|sky"). Charged instead as a cost
+    /// on each boundary a hearing keeps: every hearing keeps or cuts each
+    /// boundary, so the ranking is the same, costs stay non-negative, and
+    /// the search stays exact.
+    pub crossing: f32,
     /// How far [`best_matches`] may raise the bound.
     pub max_bound: f32,
 }
@@ -42,6 +53,8 @@ impl Default for MishearConfig {
             },
             novelty: 1.0,
             function_word_share: 0.2,
+            root: 0.0,
+            crossing: 0.0,
             max_bound: 30.0,
         }
     }
@@ -66,12 +79,19 @@ pub struct Heard {
     pub phonetic: f32,
     /// How many of its words the original contains.
     pub shared: usize,
+    /// How many of its other words share a stem with one of the line's.
+    pub related: usize,
+    /// How many of the line's word boundaries it keeps.
+    pub kept: usize,
 }
 
 #[derive(Debug, Clone)]
 pub struct Mishearing {
     pub reading: Reading,
     pub deformed: Vec<Vec<Ph>>,
+    /// The line's word boundaries, as positions in the deformed input
+    /// (between words, so neither 0 nor its length).
+    pub boundaries: Vec<usize>,
     pub heard: Vec<Heard>,
     pub stats: SearchStats,
 }
@@ -203,16 +223,45 @@ impl Engine {
             .iter()
             .filter_map(|w| self.lexicon.id(w))
             .collect();
+        let share = |w: Option<WordId>| match w {
+            Some(w) if w < FUNCTION_WORDS => config.function_word_share,
+            _ => 1.0,
+        };
         let mut extra: HashMap<WordId, f32> = search.extra.clone();
         for &w in &originals {
-            let share = if w < FUNCTION_WORDS {
-                config.function_word_share
-            } else {
-                1.0
-            };
-            *extra.entry(w).or_default() += config.novelty * share;
+            *extra.entry(w).or_default() += config.novelty * share(Some(w));
+        }
+        // Words sharing a stem with the line's, charged once each, at the
+        // largest share among the line words they relate to.
+        let mut root: HashMap<WordId, f32> = HashMap::new();
+        for word in &reading.words {
+            let charge = config.root * share(self.lexicon.id(word));
+            for &w in self.lexicon.same_stem(word) {
+                let entry = root.entry(w).or_default();
+                *entry = entry.max(charge);
+            }
+        }
+        let related: HashSet<WordId> = root.keys().copied().collect();
+        for (w, charge) in root {
+            *extra.entry(w).or_default() += charge;
         }
         search.extra = extra;
+        let mut boundaries: Vec<usize> = deformed
+            .iter()
+            .scan(0, |at, word| {
+                *at += word.len();
+                Some(*at)
+            })
+            .filter(|&p| p > 0 && p < input.len())
+            .collect();
+        boundaries.dedup();
+        if config.crossing > 0.0 {
+            let mut cost = vec![0.0; input.len()];
+            for &p in &boundaries {
+                cost[p] += config.crossing;
+            }
+            search.boundary_cost = cost;
+        }
         let (matches, stats) = self.hear(&input, &search, config.max_bound);
         // The line itself is not a mishearing (its homophone respellings,
         // "hark the harold angels", may well be).
@@ -238,13 +287,116 @@ impl Engine {
                 cost: m.cost,
                 phonetic: m.phonetic,
                 shared: m.words.iter().filter(|w| originals.contains(w)).count(),
+                related: m
+                    .words
+                    .iter()
+                    .filter(|w| !originals.contains(w) && related.contains(w))
+                    .count(),
+                kept: m
+                    .spans
+                    .iter()
+                    .filter(|span| boundaries.contains(&span.start))
+                    .count(),
             })
             .collect();
         Ok(Mishearing {
             reading,
             deformed,
+            boundaries,
             heard,
             stats,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// "fly in", over a lexicon where "flying" sounds nearly the same.
+    fn fly_in() -> Engine {
+        let dict = CmuDictionary::from_bytes(
+            b"FLY  F L AY1\nIN  IH1 N\nFLYING  F L AY1 IH0 NG\nFLEW  F L UW1\nLINE  L AY1 N\nFLEA  F L IY1\nINN  IH1 N\n",
+        )
+        .unwrap();
+        let frequencies: Vec<Frequency> = [
+            ("in", 7.0),
+            ("fly", 4.5),
+            ("flying", 4.5),
+            ("line", 4.5),
+            ("flew", 4.0),
+            ("flea", 3.0),
+            ("inn", 3.0),
+        ]
+        .iter()
+        .map(|&(word, zipf)| Frequency {
+            word: word.into(),
+            zipf,
+        })
+        .collect();
+        Engine::new(dict, &frequencies, 100, true, None)
+    }
+
+    fn heard(engine: &Engine, config: &MishearConfig) -> Vec<Heard> {
+        engine
+            .mishear("fly in", &Deformation::new(""), config)
+            .unwrap()
+            .heard
+    }
+
+    fn config(root: f32, crossing: f32) -> MishearConfig {
+        let mut config = MishearConfig {
+            root,
+            crossing,
+            function_word_share: 1.0,
+            novelty: 0.0,
+            ..MishearConfig::default()
+        };
+        config.search.bigrams = false;
+        config.search.distinct_sounds = false;
+        config.search.results = 20;
+        config
+    }
+
+    fn cost_of(heard: &[Heard], text: &str) -> f32 {
+        heard.iter().find(|h| h.text == text).unwrap().cost
+    }
+
+    #[test]
+    fn the_root_penalty_charges_words_sharing_a_stem() {
+        let engine = fly_in();
+        let plain = heard(&engine, &config(0.0, 0.0));
+        let rooted = heard(&engine, &config(1.5, 0.0));
+        // "flying" shares "fly"'s stem; "flew" is irregular, so it doesn't.
+        let flying = plain.iter().find(|h| h.text == "flying").unwrap();
+        assert_eq!((flying.shared, flying.related), (0, 1));
+        let diff = |t: &str| cost_of(&rooted, t) - cost_of(&plain, t);
+        assert!((diff("flying") - 1.5).abs() < 1e-5);
+        assert!(diff("flew inn").abs() < 1e-5);
+        // Each "fly" or "in" is charged: the same word shares its own stem.
+        assert!((diff("fly inn") - 1.5).abs() < 1e-5);
+        assert!((diff("fly line") - 1.5).abs() < 1e-5);
+        // Once the charge outweighs the sound, "flying" gives way to the
+        // nearest hearing sharing no stem with the line.
+        assert_eq!(plain[0].text, "flying");
+        assert_eq!(rooted[0].text, "flea inn");
+    }
+
+    #[test]
+    fn the_crossing_reward_charges_kept_boundaries() {
+        let engine = fly_in();
+        let plain = heard(&engine, &config(0.0, 0.0));
+        let crossing = heard(&engine, &config(0.0, 0.5));
+        let mishearing = engine
+            .mishear("fly in", &Deformation::new(""), &config(0.0, 0.5))
+            .unwrap();
+        assert_eq!(mishearing.boundaries, vec![3]);
+        // "flea inn" keeps "fly|in"; "flying" and "flea line" ("F L IY1 |
+        // L AY1 N" against "F L AY1 | IH1 N") cut across it.
+        let kept = |t: &str| crossing.iter().find(|h| h.text == t).unwrap().kept;
+        assert_eq!((kept("flea inn"), kept("flying")), (1, 0));
+        let diff = |t: &str| cost_of(&crossing, t) - cost_of(&plain, t);
+        assert!((diff("flea inn") - 0.5).abs() < 1e-5);
+        assert!(diff("flying").abs() < 1e-5);
     }
 }
