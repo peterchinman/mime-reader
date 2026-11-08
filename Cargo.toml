@@ -6,6 +6,11 @@ edition = "2024"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+# The library is the root package; add-ons built on its public API live in
+# crates/.
+[workspace]
+members = ["crates/mishear"]
+
 [dependencies]
 thiserror = "2"
 

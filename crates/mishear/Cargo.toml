@@ -1,0 +1,9 @@
+[package]
+name = "mishear"
+version = "0.1.0"
+edition = "2024"
+description = "Fuzzy phonetic search, accent deformations and a mishearing engine, on mime-reader"
+publish = false
+
+[dependencies]
+mime-reader = { path = "../.." }
