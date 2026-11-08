@@ -50,9 +50,13 @@ python3 -m venv /tmp/wfenv && /tmp/wfenv/bin/pip install wordfreq
 python3 -I crates/mishear/scripts/bigrams.py
 ```
 
-`/usr/share/dict/words` (Webster's 2nd, present on macOS) is used when it
-exists. It keeps names and brands out of the lexicon: a word must appear
-there in lowercase, or its base form must once a regular ending is stripped.
+The ENABLE word list ([`data/ENABLE`](../../data/ENABLE), public domain,
+committed) keeps names, brands and abbreviations out of the lexicon, as in
+rhyme-golf. A word must be in it, or be a contraction or possessive of a
+word in it ("it's", "don't", "people's"; not "america's" or "o'brien").
+ENABLE lists every inflected form, so "heard", "women" and "became" are in.
+It lacks days and months ("june", "monday") and recent words ("email",
+"website", "online"). `--all-words` turns the filter off.
 
 ## Commands
 
@@ -113,8 +117,8 @@ What the page has:
 - **Saving:** settings are kept in localStorage, and "Copy link" puts them in
   the URL.
 
-`npm run data` symlinks CMUdict, the generated word lists and
-`/usr/share/dict/words` into `public/data`, which is gitignored. A build
+`npm run data` symlinks CMUdict, ENABLE and the generated word lists into
+`public/data`, which is gitignored. A build
 copies them into `dist/`. That copy includes the wordfreq list, which is CC
 BY-SA 4.0, so a hosted build has to carry that license's attribution. It
 also includes the subtitle word-pair counts (see "Bigrams"), whose source
@@ -170,8 +174,8 @@ What the sweep showed (`hear "kiss the sky"`, and two public-domain lines:
 "Sleep rounds with equal zest" in `new-zealand`, "Cried on his shoulder but"
 in `cockney`), with the unigram model:
 
-- **`--lm 0`: sound alone.** Near-exact, obscure words: "kish thus chi",
-  "slee browned swathe equals iced". The word penalty changes nothing at
+- **`--lm 0`: sound alone.** Near-exact, obscure words: "cuss thus chi",
+  "slip round swathe equals iced". The word penalty changes nothing at
   this setting.
 - **`--lm` 0.02–0.1: the useful band.**
   - At 0.05: "case this guy", "slip round's with equals east", "grow don is
@@ -217,7 +221,7 @@ scores another counts file on the same pairs.
   cost nearly twice that.
 - **What it sounds like.** "Kiss the sky": unigram "case this guy", "case
   thus guy", "case this chi"; with `--bigrams`, "case this guy", "guess this
-  guy", "does this guy", "give this guy" (Gutenberg had "kisses guy", "case
+  guy", "does this guy", "keys this guy" (Gutenberg had "kisses guy", "case
   this gay"). "Since Persia fell at Marathon" gains "…at me rough on".
 - **Cost.** Over 12 public lines, a mishearing averages 137 ms with the
   unigram model and 370 ms with bigrams (Gutenberg's took 318). Loading the
@@ -278,24 +282,22 @@ on, "hark the harold angels sing" can come out as "…angels singh". Use
   Every hearing keeps or cuts each boundary, so the ranking is the same as
   for a reward, and the search stays exact. The costs shown include it.
   - In "Since Persia fell at Marathon", the top four at 0 all keep
-    "at|marathon" ("…of a rat marathons"). From 0.6 they all cut across it
+    "at|marathon" ("…affair at marathons"). From 0.3 they all cut across it
     ("sin spurs of era telethon").
-  - Raising costs means the bound has to grow further: that line took
-    220 ms at 0, and 410–440 ms from 0.3 to 1.
+  - On that line it costs no time: about 100 ms at every setting.
 - `mishear` prints each hearing's counts: `shared` (same word), `root`
   (another word with the same stem) and `kept` (boundaries kept, out of
   the line's).
 
 ### Rhythm and swaps
 
-- **`--stress-mismatch 0.3` keeps the meter.** "Swaying to and fro on his
-  rickety stool" goes from "…on his wicked east all" to "…on his rickets
-  tool", which is also closer in sound. "Such a maid as was never seen!"
-  goes from "sesame does was never scene" to "such amid as was never
+- **`--stress-mismatch 0.3` keeps the meter.** "Such a maid as was never
+  seen!" goes from "sesame does was never scene" to "such amid as was never
   scene". It's slightly faster too: tighter costs prune more. Going to 0.6
-  changes nothing more on these lines.
+  changes nothing more. "Swaying to and fro on his rickety stool" keeps
+  its meter without it ("sway into and throw on his rickets tool").
 - **`--swap` changes nothing** on the corpus lines tried or in the eval, and
-  costs about 5% more time. Metathesis isn't how lines get misheard.
+  costs a little more time. Metathesis isn't how lines get misheard.
 
 ### Repeated work across bound rounds
 
@@ -415,12 +417,12 @@ and with `--bigrams`.
 | Thought gets dry in the brain. | irish | taught get straw into plane | taught get straw into plain |
 | Sleep rounds with equal zest | new-zealand | slip round's with equals east | slip round the sequel just |
 | Cried on his shoulder but | cockney | grow don is should a by | crew don is shut up a |
-| Don' know's I'd mind his goin' | southern | done no judgment his going | done no judgment he's going |
+| Don' know's I'd mind his goin' | southern | done knows odd monde his going | done no judgment he's going |
 | Such a maid as was never seen! | reverse-vowel-shift | such images was never sane | the tomatoes was never sign |
 | Such a maid as was never seen! | rotate:-60 | sesame days was never soon | sesame days whenever soon |
 | Sleep rounds with equal zest | mirror:front-back | sloop rinds without will just | sloop rinds without will just |
 | Sleep rounds with equal zest | spanish | asleep round swathe equals asked | asleep round swathe equals asked |
-| Sly, musical, a jewel in rhyme, | japanese | sure i music a usual on limo | sure i knew you gigolo issue a ruin limo |
+| Sly, musical, a jewel in rhyme, | japanese | sure i music a usual on lima | sure i knew you gigolo issue a ruin lima |
 | Sly, musical, a jewel in rhyme, | pull:1,1,0.5 | slow music a ritual in room | slow music a ritual in room |
 
 ## Limitations and next steps
@@ -432,7 +434,10 @@ and with `--bigrams`.
   as a trigram model or a small neural rescorer over the top 50, would go
   further. The backoff could also try Kneser–Ney's continuation counts
   rather than wordfreq's frequencies.
-- **Names still leak through the common-word filter** ("sri", "elaine").
+- **The ENABLE filter has gaps.** It drops days, months and recent words
+  ("june", "email", "online"), and admits a few names that are also
+  ordinary words ("john", "jones", "texas"). A short allow-list would cover
+  the first.
 - **Snapping chooses one vowel.** The research suggests emitting the
   near-ties as weighted alternatives, which is exactly where mishearings come
   from.

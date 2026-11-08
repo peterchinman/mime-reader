@@ -43,7 +43,7 @@ async function start(overrides: Partial<LexiconOptions>): Promise<void> {
       return r.arrayBuffer();
     }),
     fetchText(data + 'wordfreq-en.tsv', true),
-    fetchText(data + 'words', false),
+    fetchText(data + 'enable1.txt', false),
   ]);
   post({ type: 'status', message: 'Building the lexicon…' });
   app = new MishearApp(new Uint8Array(dict), frequencies ?? '', undefined, words, options);

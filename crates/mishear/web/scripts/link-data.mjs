@@ -1,7 +1,7 @@
 // Links the engine's data into public/data so the dev server and the build
-// serve it: CMUdict (committed), the generated word-frequency list and
-// bigram counts (crates/mishear/data, gitignored), and the system word list
-// when the machine has one. Missing optional files are skipped.
+// serve it: CMUdict and the ENABLE word list (committed), and the generated
+// word-frequency list and bigram counts (crates/mishear/data, gitignored).
+// Missing optional files are skipped.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +14,7 @@ const files = [
   ['cmudict-0.7b', '../../../../data/CMUdict/cmudict-0.7b', true],
   ['wordfreq-en.tsv', '../../data/wordfreq-en.tsv', true],
   ['bigrams-en.tsv', '../../data/bigrams-en.tsv', false],
-  ['words', '/usr/share/dict/words', false],
+  ['enable1.txt', '../../../../data/ENABLE/enable1.txt', true],
 ];
 for (const [name, source, required] of files) {
   const from = path.isAbsolute(source) ? source : path.resolve(here, source);

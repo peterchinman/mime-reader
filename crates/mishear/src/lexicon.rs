@@ -91,17 +91,27 @@ pub fn parse_frequencies(text: &str) -> Result<Vec<Frequency>, String> {
         .collect()
 }
 
-/// Common words: those a word list (such as `/usr/share/dict/words`) has in
-/// lowercase — so not names or brands — or whose base form it has once a
-/// regular ending (`-s`, `-es`, `-ed`, `-ing`, `-er`, `-est`, `-ly`, `'s`)
-/// is stripped.
+/// Real words: those a word list such as ENABLE has (it lists every
+/// inflected form, and no names, brands or abbreviations), and contractions
+/// and possessives of them: "it's", "don't", "people's", but not "america's"
+/// or "o'brien".
 pub struct CommonWords {
     words: std::collections::HashSet<String>,
 }
 
+/// What follows the apostrophe of a contraction or possessive: "it's",
+/// "you're", "i've", "we'll", "she'd", "i'm", "don't".
+const CLITICS: [&str; 7] = ["s", "re", "ve", "ll", "d", "m", "t"];
+
+/// Negations whose base isn't a word: "can't", "won't", "shan't", "ain't".
+const NEGATED: [&str; 4] = ["ca", "wo", "sha", "ai"];
+
+/// Contractions with parts that aren't words.
+const CONTRACTIONS: [&str; 4] = ["o'clock", "c'mon", "y'know", "y'all"];
+
 impl CommonWords {
     /// Reads a word list, one word per line; capitalized entries (proper
-    /// nouns) are ignored.
+    /// nouns, in lists that have them) are ignored.
     pub fn read(path: &Path) -> Result<Self, String> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(Self::parse(&text))
@@ -123,27 +133,22 @@ impl CommonWords {
         if word.chars().count() == 1 {
             return matches!(word, "a" | "i" | "o");
         }
-        if self.words.contains(word) {
+        if !word.contains('\'') {
+            return self.words.contains(word);
+        }
+        if CONTRACTIONS.contains(&word) {
             return true;
         }
-        let base = word.trim_end_matches("'s");
-        if base != word && self.words.contains(base) {
-            return true;
+        if let Some(base) = word.strip_suffix("n't") {
+            return self.words.contains(base) || NEGATED.contains(&base);
         }
-        for suffix in ["s", "es", "ed", "ing", "er", "est", "ly", "ies", "ied"] {
-            if let Some(stem) = word.strip_suffix(suffix) {
-                let mut stems = vec![stem.to_string(), format!("{stem}e"), format!("{stem}y")];
-                // A doubled consonant: "running" → "run".
-                let bytes = stem.as_bytes();
-                if bytes.len() > 2 && bytes[bytes.len() - 1] == bytes[bytes.len() - 2] {
-                    stems.push(stem[..stem.len() - 1].to_string());
-                }
-                if stems.iter().any(|s| s.len() > 1 && self.words.contains(s)) {
-                    return true;
-                }
-            }
-        }
-        false
+        // "it's", "people's", "i'm", "'em": a word, then clitics.
+        word.split('\'').enumerate().all(|(k, part)| {
+            part.is_empty()
+                || part == "i"
+                || self.words.contains(part)
+                || (k > 0 && CLITICS.contains(&part))
+        })
     }
 }
 
@@ -362,19 +367,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn common_words_keep_inflections_but_not_names() {
-        let common = CommonWords {
-            words: ["boy", "run", "love", "city", "a"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
-        };
+    fn common_words_keep_listed_words_and_their_contractions() {
+        let common = CommonWords::parse(
+            "boy\nboys\nrunning\nlove\ncities\nit\ndo\nis\npeople\nem\ncause\nma\nam\nTexas\n",
+        );
         for word in [
-            "boy", "boys", "running", "loved", "cities", "boy's", "a", "i",
+            "boy", "boys", "running", "cities", "a", "i", "o", "boy's", "people's", "it's", "i'm",
+            "don't", "isn't", "can't", "won't", "'em", "'cause", "ma'am", "o'clock",
         ] {
             assert!(common.contains(word), "{word}");
         }
-        for word in ["boyd", "deloitte", "b", "loveds"] {
+        // Listed forms only (no guessing at "loved"), and no names.
+        for word in [
+            "loved",
+            "boyd",
+            "b",
+            "texas",
+            "james's",
+            "o'brien",
+            "america's",
+            "doesn't",
+        ] {
             assert!(!common.contains(word), "{word}");
         }
     }

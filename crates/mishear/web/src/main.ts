@@ -148,8 +148,8 @@ const LEXICON_KNOBS: Knob[] = [
   {
     type: 'bool',
     key: 'common_words',
-    label: 'common words only',
-    hint: 'Keep only words the system word list (/usr/share/dict/words) has in lowercase. Drops most names and brands.',
+    label: 'ENABLE words only',
+    hint: 'Keep only words in the ENABLE word list (no names, brands or abbreviations; every inflected form listed), plus contractions and possessives of them: “it’s”, “don’t”, “people’s”. The same list rhyme-golf uses.',
     heavy: true,
   },
   {
@@ -563,7 +563,7 @@ function renderKnobs(group: Exclude<Group, 'deformation'>, knobs: Knob[], contai
     const box = container.querySelector<HTMLInputElement>('[data-key="common_words"] input');
     if (box) {
       box.disabled = true;
-      box.title = 'No system word list was found (see `npm run data`).';
+      box.title = 'The ENABLE word list wasn’t found (see `npm run data`).';
     }
   }
 }
@@ -1099,7 +1099,7 @@ function renderLexiconInfo(): void {
   const i = lexiconInfo;
   $('lexicon-info').textContent =
     `${thousands(i.words)} words, ${thousands(i.trie_nodes)} trie nodes; word-pair counts ${i.bigrams ? 'loaded' : 'not loaded (fetched when bigrams are turned on)'}; ` +
-    `system word list ${i.common_words_available ? 'found' : 'not found'}.`;
+    `ENABLE word list ${i.common_words_available ? 'loaded' : 'not found'}.`;
 }
 
 // ---------------------------------------------------------------- setup ----

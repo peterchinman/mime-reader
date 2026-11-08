@@ -71,8 +71,8 @@ SEARCH OPTIONS
                      (see search.rs), and slower. Off by default.
   --bigram-file PATH other word-pair counts (implies --bigrams)
   --all-words        keep names and brands (by default the lexicon keeps only
-                     words /usr/share/dict/words has in lowercase, or whose
-                     base form it has)
+                     words in the ENABLE word list, data/ENABLE, and
+                     contractions and possessives of them)
 
 DEFORMATION OPTIONS (combine freely; applied in order)
   --accent NAME      a preset (see `list`)
@@ -270,8 +270,8 @@ fn crate_path(relative: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
 }
 
-/// The system word list that keeps names and brands out of the lexicon.
-const COMMON_WORDS: &str = "/usr/share/dict/words";
+/// The word list that keeps names and brands out of the lexicon.
+const WORD_LIST: &str = "../../data/ENABLE/enable1.txt";
 
 fn engine(o: &Options) -> Result<Engine, String> {
     engine_with(o, o.vocab, o.all_pronunciations)
@@ -285,10 +285,10 @@ fn engine_with(o: &Options, vocab: usize, all_pronunciations: bool) -> Result<En
             frequencies.display()
         ));
     }
-    let common = if o.all_words || !Path::new(COMMON_WORDS).exists() {
+    let common = if o.all_words {
         None
     } else {
-        Some(CommonWords::read(Path::new(COMMON_WORDS))?)
+        Some(CommonWords::read(&crate_path(WORD_LIST))?)
     };
     let mut engine = Engine::load(
         &crate_path("../../data/CMUdict/cmudict-0.7b"),
