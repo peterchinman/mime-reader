@@ -138,14 +138,58 @@ pub fn search(
     config: &SearchConfig,
 ) -> (Vec<Match>, SearchStats) {
     let start = Stopwatch::start();
-    let n = input.len();
-    let bigrams = config.bigrams && lexicon.has_bigrams();
+    let lattice = lattice(input, lexicon, cost, config, shortlist(lexicon, config, 0));
+    let matches = paths(&lattice, lexicon, config, &HashMap::new());
+    let stats = SearchStats {
+        nodes: lattice.nodes,
+        edges: lattice.edge_count,
+        rounds: 1,
+        bound: config.bound,
+        elapsed: start.elapsed(),
+    };
+    (matches, stats)
+}
+
+/// How many words pass 1 must keep per span for [`paths`] to find the top
+/// `config.results` exactly (with bigrams, to the search's usual
+/// approximation), when up to `penalized` words may cost more there than
+/// they did in pass 1.
+pub fn shortlist(lexicon: &Lexicon, config: &SearchConfig, penalized: usize) -> usize {
     let keep = config.results.max(1);
-    let shortlist = if bigrams {
+    let base = if config.bigrams && lexicon.has_bigrams() {
         keep.max(config.shortlist)
     } else {
         keep
     };
+    base + penalized
+}
+
+/// Pass 1's result: the best words for every span of the input.
+pub struct Lattice {
+    /// `edges[s][e - s - 1]`: the best words for `input[s..e]`.
+    edges: Vec<Vec<Vec<Edge>>>,
+    /// Nothing costing more than this was kept.
+    pub bound: f32,
+    /// Words kept per span, at most.
+    pub keep: usize,
+    /// Trie nodes scored.
+    pub nodes: u64,
+    /// Edges (span, word) kept.
+    pub edge_count: usize,
+}
+
+/// Pass 1: for every span of `input`, its `keep` cheapest words within
+/// `config.bound` (word costs include `config.extra`, and a word starting
+/// after a boundary pays `config.boundary_cost` there).
+pub fn lattice(
+    input: &[Ph],
+    lexicon: &Lexicon,
+    cost: &CostModel,
+    config: &SearchConfig,
+    keep: usize,
+) -> Lattice {
+    let n = input.len();
+    let bigrams = config.bigrams && lexicon.has_bigrams();
     let extra = |w: WordId| config.extra.get(&w).copied().unwrap_or(0.0);
     // With bigrams, the best case over every predecessor: a lower bound.
     let word_cost: Vec<f32> = (0..lexicon.len() as WordId)
@@ -159,24 +203,18 @@ pub fn search(
         })
         .collect();
     let subtree_min = subtree_min_cost(lexicon, &word_cost);
-    let boundary = |p: usize| {
-        if p == 0 {
-            0.0
-        } else {
-            config.boundary_cost.get(p).copied().unwrap_or(0.0)
-        }
-    };
-
-    // Pass 1: edges[s][e - s - 1] holds the best words for input[s..e].
-    let mut stats = SearchStats {
-        rounds: 1,
+    let mut lattice = Lattice {
+        edges: Vec::with_capacity(n),
         bound: config.bound,
-        ..SearchStats::default()
+        keep,
+        nodes: 0,
+        edge_count: 0,
     };
     // A word can't cover a span longer than itself plus what the bound
     // allows in dropped input.
     let extra_span = (config.bound / cost.min_indel()).floor() as usize;
-    let mut edges: Vec<Vec<Vec<Edge>>> = Vec::with_capacity(n);
+    let mut present = vec![0u64; lexicon.len()];
+    let mut touched: Vec<WordId> = Vec::new();
     for s in 0..n {
         let span_max = (n - s).min(lexicon.max_depth() + extra_span);
         let mut walk = Walk {
@@ -184,13 +222,15 @@ pub fn search(
             lexicon,
             cost,
             // Every word starting here pays for the boundary before it.
-            bound: config.bound - boundary(s),
-            keep: shortlist,
+            bound: config.bound - boundary_cost(config, s),
+            keep,
             word_cost: &word_cost,
             subtree_min: &subtree_min,
             width: span_max + 1,
             columns: vec![f32::INFINITY; (lexicon.max_depth() + 1) * (span_max + 1)],
             best: vec![Vec::new(); span_max],
+            present: &mut present,
+            touched: &mut touched,
             nodes: 0,
         };
         // The root column: input[s..s+k] unmatched.
@@ -205,13 +245,43 @@ pub fn search(
             .copied()
             .fold(f32::INFINITY, f32::min);
         walk.descend(0, 0, None, root_min);
-        stats.nodes += walk.nodes;
-        stats.edges += walk.best.iter().map(Vec::len).sum::<usize>();
-        edges.push(walk.best);
+        lattice.nodes += walk.nodes;
+        lattice.edge_count += walk.best.iter().map(Vec::len).sum::<usize>();
+        lattice.edges.push(walk.best);
+        for w in touched.drain(..) {
+            present[w as usize] = 0;
+        }
     }
+    lattice
+}
 
-    // Pass 2: the `keep` best distinct word sequences ending at each
-    // position.
+/// The cost of a word boundary at `p` (none at the start).
+fn boundary_cost(config: &SearchConfig, p: usize) -> f32 {
+    if p == 0 {
+        0.0
+    } else {
+        config.boundary_cost.get(p).copied().unwrap_or(0.0)
+    }
+}
+
+/// Pass 2: the `config.results` best distinct word sequences through
+/// `lattice` within `config.bound` (at most the lattice's), each word
+/// costing `penalty` more on top of what pass 1 charged. `config` must be
+/// the one the lattice was built with, but for `results` and `bound`.
+pub fn paths(
+    lattice: &Lattice,
+    lexicon: &Lexicon,
+    config: &SearchConfig,
+    penalty: &HashMap<WordId, f32>,
+) -> Vec<Match> {
+    let edges = &lattice.edges;
+    let n = edges.len();
+    let bigrams = config.bigrams && lexicon.has_bigrams();
+    let keep = config.results.max(1);
+    let bound = config.bound.min(lattice.bound);
+    let extra = |w: WordId| config.extra.get(&w).copied().unwrap_or(0.0);
+    let penalty = |w: WordId| penalty.get(&w).copied().unwrap_or(0.0);
+    // The `keep` best distinct word sequences ending at each position.
     let mut arena: Vec<Partial> = vec![Partial {
         cost: 0.0,
         phonetic: 0.0,
@@ -228,8 +298,9 @@ pub fn search(
             let Some(span_edges) = edges[s].get(e - s - 1) else {
                 continue;
             };
-            let boundary = boundary(s);
+            let boundary = boundary_cost(config, s);
             for edge in span_edges {
+                let penalty = penalty(edge.word);
                 for &p in &at[s] {
                     let prev = &arena[p as usize];
                     let edge_cost = if bigrams {
@@ -241,8 +312,8 @@ pub fn search(
                     } else {
                         edge.total
                     };
-                    let total = prev.cost + edge_cost + boundary;
-                    if total > config.bound {
+                    let total = prev.cost + edge_cost + boundary + penalty;
+                    if total > bound {
                         continue;
                     }
                     candidates.push(Partial {
@@ -263,14 +334,29 @@ pub fn search(
                 }
             }
         }
-        candidates.sort_by(|a, b| a.cost.total_cmp(&b.cost));
         let mut seen: Vec<u64> = Vec::new();
         // With bigrams, what a partial match costs to extend depends on its
         // last word, so the right state is (position, last word): keep the
         // best `keep` for each last word. Without, the best `keep` overall.
         let mut per_last: HashMap<WordId, usize> = HashMap::new();
         let cap = if bigrams { PARTIALS_PER_POSITION } else { keep };
-        for candidate in candidates {
+        // Only the cheapest are needed: sort those first, and the rest only
+        // if duplicates use them up.
+        let by_cost = |a: &Partial, b: &Partial| a.cost.total_cmp(&b.cost);
+        let head = (cap * 4 + 16).min(candidates.len());
+        if head < candidates.len() {
+            candidates.select_nth_unstable_by(head, by_cost);
+        }
+        candidates[..head].sort_by(by_cost);
+        let mut sorted_tail = head == candidates.len();
+        let mut i = 0;
+        while i < candidates.len() {
+            if i == head && !sorted_tail {
+                candidates[head..].sort_by(by_cost);
+                sorted_tail = true;
+            }
+            let candidate = candidates[i];
+            i += 1;
             if at[e].len() == cap {
                 break;
             }
@@ -293,7 +379,7 @@ pub fn search(
         }
     }
 
-    let matches = at[n]
+    at[n]
         .iter()
         .take(keep)
         .map(|&p| {
@@ -317,9 +403,7 @@ pub fn search(
                 phonetic,
             }
         })
-        .collect();
-    stats.elapsed = start.elapsed();
-    (matches, stats)
+        .collect()
 }
 
 /// The true top `config.results` matches: [`search`] with the bound raised
@@ -409,6 +493,11 @@ struct Walk<'a> {
     columns: Vec<f32>,
     /// `best[k - 1]`: the cheapest words covering the first `k` phonemes.
     best: Vec<Vec<Edge>>,
+    /// `present[w]`, bit `k % 64`: `w` may be in `best[k]` (a word recurs
+    /// only through its other pronunciations, so most offers skip the
+    /// search for it). Cleared through `touched` after each walk.
+    present: &'a mut [u64],
+    touched: &'a mut Vec<WordId>,
     nodes: u64,
 }
 
@@ -462,7 +551,18 @@ impl Walk<'_> {
                 for (k, &phonetic) in below[1..w].iter().enumerate() {
                     let total = phonetic + word_cost;
                     if total <= self.bound {
-                        offer(&mut self.best[k], self.keep, word, phonetic, total);
+                        offer(
+                            &mut self.best[k],
+                            self.keep,
+                            self.present,
+                            self.touched,
+                            k,
+                            Edge {
+                                word,
+                                phonetic,
+                                total,
+                            },
+                        );
                     }
                 }
             }
@@ -473,28 +573,39 @@ impl Walk<'_> {
     }
 }
 
-/// Keeps the `keep` cheapest words for a span, one entry per word.
-fn offer(best: &mut Vec<Edge>, keep: usize, word: WordId, phonetic: f32, total: f32) {
-    if let Some(known) = best.iter_mut().find(|e| e.word == word) {
-        if total < known.total {
-            known.phonetic = phonetic;
-            known.total = total;
-            best.sort_by(|a, b| a.total.total_cmp(&b.total));
+/// Keeps the `keep` cheapest words for span `k` in `best`, one entry per
+/// word (see [`Walk::present`]).
+fn offer(
+    best: &mut Vec<Edge>,
+    keep: usize,
+    present: &mut [u64],
+    touched: &mut Vec<WordId>,
+    k: usize,
+    edge: Edge,
+) {
+    // A word already kept costs no more than the dearest kept one, so
+    // anything dearer than that, when full, changes nothing.
+    if best.len() == keep && best.last().is_some_and(|last| last.total <= edge.total) {
+        return;
+    }
+    let bit = 1u64 << (k % 64);
+    let mark = &mut present[edge.word as usize];
+    if k >= 64 || *mark & bit != 0 {
+        if let Some(known) = best.iter_mut().find(|e| e.word == edge.word) {
+            if edge.total < known.total {
+                *known = edge;
+                best.sort_by(|a, b| a.total.total_cmp(&b.total));
+            }
+            return;
         }
-        return;
+    } else {
+        if *mark == 0 {
+            touched.push(edge.word);
+        }
+        *mark |= bit;
     }
-    if best.len() == keep && best.last().is_some_and(|last| last.total <= total) {
-        return;
-    }
-    let at = best.partition_point(|e| e.total <= total);
-    best.insert(
-        at,
-        Edge {
-            word,
-            phonetic,
-            total,
-        },
-    );
+    let at = best.partition_point(|e| e.total <= edge.total);
+    best.insert(at, edge);
     best.truncate(keep);
 }
 

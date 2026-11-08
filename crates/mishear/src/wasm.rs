@@ -8,10 +8,10 @@ use wasm_bindgen::prelude::*;
 
 use crate::cost::{CostConfig, CostModel};
 use crate::deform::VowelChart;
-use crate::engine::{Engine, MishearConfig};
+use crate::engine::{Engine, MishearConfig, Variety};
 use crate::lexicon::{BIGRAM_PRIOR, CommonWords, Frequency, parse_frequencies};
 use crate::phone::Ph;
-use crate::search::{self, SearchConfig};
+use crate::search::SearchConfig;
 use crate::spec::{self, StepSpec};
 use crate::{accents, knobs};
 
@@ -79,6 +79,9 @@ pub struct SearchDto {
     /// Reward per word boundary of the line a hearing cuts across (charged
     /// on each one it keeps).
     pub crossing: f32,
+    /// Cost per word an earlier hearing used (or a homophone), so each
+    /// hearing differs from those above it; 0: the plain top `results`.
+    pub variety: f32,
     /// How far the top-N search may raise its bound.
     pub max_bound: f32,
 }
@@ -128,6 +131,8 @@ pub struct HearingDto {
     pub related: usize,
     /// The line's word boundaries it keeps.
     pub kept: usize,
+    /// Its words an earlier hearing used (or a homophone).
+    pub reused: usize,
     pub words: Vec<HeardWordDto>,
 }
 
@@ -374,27 +379,28 @@ impl MishearApp {
                 let input = Ph::parse_all(&request.text)
                     .filter(|p| !p.is_empty())
                     .ok_or_else(|| JsError::new("expected ARPAbet phonemes, e.g. K IH1 S"))?;
-                let (matches, stats) = search::best_matches(
-                    &input,
-                    lexicon,
-                    &self.engine.cost,
-                    &search_config,
-                    1.5,
-                    max_bound,
-                );
+                let variety = Variety {
+                    variety: s.variety,
+                    root: s.root,
+                    function_word_share: s.function_share,
+                };
+                let (matches, stats) =
+                    self.engine
+                        .hear_varied(&input, &search_config, variety, max_bound, |_| false);
                 Ok(ResultDto {
                     words: Vec::new(),
                     input: spelled(&input),
                     boundaries: Vec::new(),
                     hearings: matches
                         .iter()
-                        .map(|m| HearingDto {
+                        .map(|(m, reused)| HearingDto {
                             text: m.text(lexicon),
                             cost: m.cost,
                             phonetic: m.phonetic,
                             shared: 0,
                             related: 0,
                             kept: 0,
+                            reused: *reused,
                             words: hearing(&m.words, &m.spans),
                         })
                         .collect(),
@@ -420,6 +426,7 @@ impl MishearApp {
                     function_word_share: s.function_share,
                     root: s.root,
                     crossing: s.crossing,
+                    variety: s.variety,
                     max_bound,
                 };
                 let m = self
@@ -451,6 +458,7 @@ impl MishearApp {
                             shared: h.shared,
                             related: h.related,
                             kept: h.kept,
+                            reused: h.reused,
                             words: h
                                 .words
                                 .iter()
@@ -538,6 +546,7 @@ pub fn defaults() -> DefaultsDto {
             function_share: mishear.function_word_share,
             root: mishear.root,
             crossing: mishear.crossing,
+            variety: mishear.variety,
             max_bound: mishear.max_bound,
         },
         cost: CostConfig::default().into(),

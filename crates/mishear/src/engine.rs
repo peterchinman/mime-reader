@@ -11,15 +11,22 @@ use mime_reader::{
     CmuDictionary, ConfiguredDictionary, Line, PronouncingDictionary, PronunciationMode,
 };
 
+use crate::clock::Stopwatch;
 use crate::cost::CostModel;
 use crate::deform::Deformation;
 use crate::lexicon::{CommonWords, Frequency, Lexicon, WordId, read_frequencies};
 use crate::phone::Ph;
-use crate::search::{Match, SearchConfig, SearchStats, best_matches};
+use crate::search::{
+    Lattice, Match, SearchConfig, SearchStats, best_matches, lattice, paths, shortlist,
+};
 
 /// Words this frequent (by rank) count as function words: sharing "the"
 /// with the original line costs less than sharing "river".
 const FUNCTION_WORDS: WordId = 150;
+
+/// How many hearings beyond those taken each pass 2 of
+/// [`Engine::hear_varied`] returns, to pick the next ones from.
+const POOL: usize = 24;
 
 #[derive(Debug, Clone)]
 pub struct MishearConfig {
@@ -39,8 +46,23 @@ pub struct MishearConfig {
     /// boundary, so the ranking is the same, costs stay non-negative, and
     /// the search stays exact.
     pub crossing: f32,
+    /// Extra cost per output word that an earlier hearing used, or a
+    /// homophone of one ("cents" after "sense"), with function words at
+    /// `function_word_share`; with `root`, words sharing their stems too.
+    /// Each hearing is then the best one given those before it, so the list
+    /// varies. 0: the plain top `results`, from one search.
+    pub variety: f32,
     /// How far [`best_matches`] may raise the bound.
     pub max_bound: f32,
+}
+
+/// How hearings are kept apart from one another (see
+/// [`MishearConfig::variety`]).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Variety {
+    pub variety: f32,
+    pub root: f32,
+    pub function_word_share: f32,
 }
 
 impl Default for MishearConfig {
@@ -55,6 +77,7 @@ impl Default for MishearConfig {
             function_word_share: 0.2,
             root: 0.0,
             crossing: 0.0,
+            variety: 1.0,
             max_bound: 30.0,
         }
     }
@@ -83,6 +106,8 @@ pub struct Heard {
     pub related: usize,
     /// How many of the line's word boundaries it keeps.
     pub kept: usize,
+    /// How many of its words an earlier hearing used (or a homophone).
+    pub reused: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -207,6 +232,178 @@ impl Engine {
         best_matches(phonemes, &self.lexicon, &self.cost, config, 1.5, max_bound)
     }
 
+    /// The best `config.results` hearings of `input`, best first, leaving
+    /// out those `exclude` rejects, each with how many of its words an
+    /// earlier one used (homophones included).
+    ///
+    /// With `variety.variety` > 0, each is the best hearing given the ones
+    /// before it: their words and homophones cost `variety` more, and words
+    /// sharing their stems `root` more, with function words at
+    /// `function_word_share`. Penalties only add cost, so one pass-1
+    /// lattice serves every hearing, as long as it keeps, per span, enough
+    /// words to cover the penalized ones; it is rebuilt when a hearing
+    /// needs a higher bound or more words.
+    pub fn hear_varied(
+        &self,
+        input: &[Ph],
+        config: &SearchConfig,
+        variety: Variety,
+        max_bound: f32,
+        exclude: impl Fn(&Match) -> bool,
+    ) -> (Vec<(Match, usize)>, SearchStats) {
+        let start = Stopwatch::start();
+        let wanted = config.results;
+        let sounds =
+            |m: &Match| -> Vec<u32> { m.words.iter().map(|&w| self.lexicon.sound(w)).collect() };
+        let mut chosen: Vec<(Match, usize)> = Vec::new();
+        let mut seen: Vec<Vec<u32>> = Vec::new();
+        let mut used: HashSet<WordId> = HashSet::new();
+        // Keeps `m`, counting the words earlier hearings used.
+        let take = |m: Match,
+                    used: &mut HashSet<WordId>,
+                    seen: &mut Vec<Vec<u32>>,
+                    chosen: &mut Vec<(Match, usize)>| {
+            let reused = m.words.iter().filter(|w| used.contains(w)).count();
+            for &w in &m.words {
+                used.extend(self.lexicon.homophones(w));
+            }
+            seen.push(sounds(&m));
+            chosen.push((m, reused));
+        };
+
+        if variety.variety <= 0.0 {
+            let mut search = config.clone();
+            search.results = wanted + 1; // room for an excluded one
+            let (matches, stats) = self.hear(input, &search, max_bound);
+            for m in matches.into_iter().filter(|m| !exclude(m)).take(wanted) {
+                take(m, &mut used, &mut seen, &mut chosen);
+            }
+            return (chosen, stats);
+        }
+
+        let mut stats = SearchStats::default();
+        let mut penalty: HashMap<WordId, f32> = HashMap::new();
+        let mut stem_penalty: HashMap<WordId, f32> = HashMap::new();
+        let charges = |penalty: &HashMap<WordId, f32>, stems: &HashMap<WordId, f32>| {
+            let mut all = penalty.clone();
+            for (&w, &charge) in stems {
+                *all.entry(w).or_default() += charge;
+            }
+            all
+        };
+        let charge_of = |m: &Match, charges: &HashMap<WordId, f32>| -> f32 {
+            m.words
+                .iter()
+                .map(|w| charges.get(w).copied().unwrap_or(0.0))
+                .sum()
+        };
+        let mut search = config.clone();
+        let mut bound = config.bound;
+        let mut built: Option<Lattice> = None;
+        // Beyond the hearings already taken, how many more each pass 2
+        // returns: the pool later hearings are picked from.
+        let mut extra_pool = POOL;
+        'hearings: while seen.len() < wanted {
+            let at_call = charges(&penalty, &stem_penalty);
+            let ask = seen.len() + 1 + extra_pool;
+            search.results = ask;
+            let keep = shortlist(&self.lexicon, &search, at_call.len());
+            if built
+                .as_ref()
+                .is_none_or(|l| l.bound < bound || l.keep < keep)
+            {
+                // Room, too, for the words the hearings still to come will
+                // penalize (not with bigrams: their pass 2 grows with the
+                // lattice faster than a rebuild costs).
+                let per_hearing = if search.bigrams && self.lexicon.has_bigrams() {
+                    0
+                } else if variety.root > 0.0 {
+                    24
+                } else {
+                    12
+                };
+                search.bound = bound;
+                let l = lattice(
+                    input,
+                    &self.lexicon,
+                    &self.cost,
+                    &search,
+                    keep + per_hearing * (wanted - seen.len()),
+                );
+                stats.nodes += l.nodes;
+                stats.rounds += 1;
+                stats.edges = l.edge_count;
+                stats.bound = l.bound;
+                built = Some(l);
+            }
+            let l = built.as_ref().expect("built above");
+            search.bound = l.bound;
+            let pool = paths(l, &self.lexicon, &search, &at_call);
+            // Every hearing outside the pool costs at least as much as its
+            // last member did (or, when the pool holds everything within
+            // the bound, more than the bound), and penalties only add.
+            let full = pool.len() == ask;
+            let floor = if full {
+                pool.last().map_or(f32::INFINITY, |m| m.cost)
+            } else {
+                l.bound
+            };
+            let mut taken_here = 0;
+            while seen.len() < wanted {
+                let now = charges(&penalty, &stem_penalty);
+                let best = pool
+                    .iter()
+                    .filter(|m| !exclude(m) && !seen.contains(&sounds(m)))
+                    .map(|m| (m, m.cost - charge_of(m, &at_call) + charge_of(m, &now)))
+                    .min_by(|a, b| a.1.total_cmp(&b.1));
+                match best {
+                    // The best of the pool, and provably of all.
+                    Some((m, cost)) if cost <= floor => {
+                        let mut m = m.clone();
+                        m.cost = cost;
+                        for &w in &m.words {
+                            let share = if w < FUNCTION_WORDS {
+                                variety.function_word_share
+                            } else {
+                                1.0
+                            };
+                            for &h in self.lexicon.homophones(w) {
+                                let entry = penalty.entry(h).or_default();
+                                *entry = entry.max(variety.variety * share);
+                            }
+                            if variety.root > 0.0 {
+                                for &s in self.lexicon.same_stem(self.lexicon.word(w)) {
+                                    let entry = stem_penalty.entry(s).or_default();
+                                    *entry = entry.max(variety.root * share);
+                                }
+                            }
+                        }
+                        take(m, &mut used, &mut seen, &mut chosen);
+                        taken_here += 1;
+                    }
+                    // Something outside the pool may be better: search again.
+                    Some(_) => break,
+                    None if full => break,
+                    None => {
+                        // Everything within the bound is taken.
+                        if bound >= max_bound {
+                            break 'hearings;
+                        }
+                        bound = (bound * 1.5).min(max_bound);
+                        break;
+                    }
+                }
+            }
+            // A full pool that yielded nothing was all earlier hearings:
+            // ask for more next time.
+            if taken_here == 0 && full {
+                extra_pool *= 2;
+            }
+        }
+        stats.elapsed = start.elapsed();
+        (chosen, stats)
+    }
+
     /// Reads `text`, deforms it, and hears it back.
     pub fn mishear(
         &self,
@@ -262,21 +459,27 @@ impl Engine {
             }
             search.boundary_cost = cost;
         }
-        let (matches, stats) = self.hear(&input, &search, config.max_bound);
         // The line itself is not a mishearing (its homophone respellings,
         // "hark the harold angels", may well be).
         let original_words: Vec<Option<WordId>> =
             reading.words.iter().map(|w| self.lexicon.id(w)).collect();
+        let is_line = |m: &Match| {
+            m.words.len() == original_words.len()
+                && m.words
+                    .iter()
+                    .zip(&original_words)
+                    .all(|(w, o)| Some(*w) == *o)
+        };
+        let variety = Variety {
+            variety: config.variety,
+            root: config.root,
+            function_word_share: config.function_word_share,
+        };
+        let (matches, stats) =
+            self.hear_varied(&input, &search, variety, config.max_bound, is_line);
         let heard = matches
             .iter()
-            .filter(|m| {
-                m.words.len() != original_words.len()
-                    || m.words
-                        .iter()
-                        .zip(&original_words)
-                        .any(|(w, o)| Some(*w) != *o)
-            })
-            .map(|m| Heard {
+            .map(|(m, reused)| Heard {
                 text: m.text(&self.lexicon),
                 words: m
                     .words
@@ -297,6 +500,7 @@ impl Engine {
                     .iter()
                     .filter(|span| boundaries.contains(&span.start))
                     .count(),
+                reused: *reused,
             })
             .collect();
         Ok(Mishearing {
@@ -350,6 +554,7 @@ mod tests {
             crossing,
             function_word_share: 1.0,
             novelty: 0.0,
+            variety: 0.0,
             ..MishearConfig::default()
         };
         config.search.bigrams = false;
@@ -380,6 +585,112 @@ mod tests {
         // nearest hearing sharing no stem with the line.
         assert_eq!(plain[0].text, "flying");
         assert_eq!(rooted[0].text, "flea inn");
+    }
+
+    /// The definition [`Engine::hear_varied`] implements, one full search
+    /// per hearing: the best hearing given the penalties of those before.
+    fn varied_by_research(
+        engine: &Engine,
+        input: &[Ph],
+        config: &SearchConfig,
+        variety: Variety,
+    ) -> Vec<(Vec<WordId>, f32)> {
+        let mut out: Vec<(Vec<WordId>, f32)> = Vec::new();
+        let mut seen: Vec<Vec<u32>> = Vec::new();
+        let mut penalty: HashMap<WordId, f32> = HashMap::new();
+        let mut stems: HashMap<WordId, f32> = HashMap::new();
+        let sounds = |words: &[WordId]| -> Vec<u32> {
+            words.iter().map(|&w| engine.lexicon.sound(w)).collect()
+        };
+        while out.len() < config.results {
+            let mut search = config.clone();
+            for (&w, &c) in penalty.iter().chain(&stems) {
+                *search.extra.entry(w).or_default() += c;
+            }
+            search.results = out.len() + 30;
+            let (matches, _) = engine.hear(input, &search, 60.0);
+            let Some(m) = matches
+                .into_iter()
+                .find(|m| !seen.contains(&sounds(&m.words)))
+            else {
+                break;
+            };
+            for &w in &m.words {
+                let share = if w < FUNCTION_WORDS {
+                    variety.function_word_share
+                } else {
+                    1.0
+                };
+                for &h in engine.lexicon.homophones(w) {
+                    let e = penalty.entry(h).or_default();
+                    *e = e.max(variety.variety * share);
+                }
+                for &s in engine.lexicon.same_stem(engine.lexicon.word(w)) {
+                    let e = stems.entry(s).or_default();
+                    *e = e.max(variety.root * share);
+                }
+            }
+            seen.push(sounds(&m.words));
+            out.push((m.words, m.cost));
+        }
+        out
+    }
+
+    #[test]
+    fn variety_matches_a_search_per_hearing() {
+        let engine = fly_in();
+        for text in [
+            "F L AY1 IH1 N",
+            "IH1 N F L AY1 IH0 NG",
+            "L AY1 N F L IY1 IH1 N",
+        ] {
+            let input = Ph::parse_all(text).unwrap();
+            for (v, root) in [(0.3, 0.0), (1.0, 0.0), (1.0, 0.5), (3.0, 0.0)] {
+                let variety = Variety {
+                    variety: v,
+                    root,
+                    function_word_share: 0.5,
+                };
+                let config = SearchConfig {
+                    results: 6,
+                    bound: 0.5,
+                    bigrams: false,
+                    ..SearchConfig::default()
+                };
+                let (fast, _) = engine.hear_varied(&input, &config, variety, 60.0, |_| false);
+                let slow = varied_by_research(&engine, &input, &config, variety);
+                let fast: Vec<f32> = fast.iter().map(|(m, _)| m.cost).collect();
+                let slow: Vec<f32> = slow.iter().map(|(_, c)| *c).collect();
+                assert_eq!(fast.len(), slow.len(), "{text} {v} {root}");
+                for (a, b) in fast.iter().zip(&slow) {
+                    assert!(
+                        (a - b).abs() < 1e-4,
+                        "{text} {v} {root}: {fast:?} vs {slow:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn variety_keeps_hearings_apart() {
+        let engine = fly_in();
+        let mut config = config(0.0, 0.0);
+        config.search.results = 4;
+        config.variety = 0.0;
+        let plain = heard(&engine, &config);
+        config.variety = 5.0;
+        let varied = heard(&engine, &config);
+        assert_eq!(plain[0].text, varied[0].text);
+        // The plain list repeats words; the varied one doesn't, while it can.
+        assert!(plain.iter().skip(1).any(|h| h.reused > 0));
+        assert_eq!(varied[1].reused, 0);
+        assert!(
+            varied
+                .iter()
+                .zip(&plain)
+                .all(|(v, p)| v.cost >= p.cost - 1e-4)
+        );
     }
 
     #[test]

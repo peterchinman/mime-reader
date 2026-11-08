@@ -52,6 +52,9 @@ SEARCH OPTIONS
   --root F           mishear/examples: cost per heard word sharing a stem
                      with a word of the line ('flying' for 'fly in'; the
                      same word included, on top of --novelty) (default 0)
+  --variety F        mishear/examples: cost per word an earlier hearing used
+                     (or a homophone of one), so each hearing differs from
+                     those above it; 0 lists the plain top N (default 1.0)
   --crossing F       mishear/examples: reward per word boundary of the line
                      a hearing cuts across ('this guy' cuts 'the|sky'),
                      charged as a cost on each boundary kept (default 0)
@@ -96,6 +99,7 @@ SWEEP AND EVAL OPTIONS
   --novelty-values A,B,…   (default: --novelty)
   --root-values A,B,…      (default: --root)
   --crossing-values A,B,…  (default: --crossing)
+  --variety-values A,B,…   (default: --variety)
 
 EXAMPLES OPTIONS
   --lines K          how many corpus lines (default 6)
@@ -135,6 +139,8 @@ struct Options {
     crossing: f32,
     root_values: Option<Vec<f32>>,
     crossing_values: Option<Vec<f32>>,
+    variety: f32,
+    variety_values: Option<Vec<f32>>,
 }
 
 fn parse(args: Vec<String>) -> Result<Options, String> {
@@ -172,6 +178,8 @@ fn parse(args: Vec<String>) -> Result<Options, String> {
         crossing: 0.0,
         root_values: None,
         crossing_values: None,
+        variety: MishearConfig::default().variety,
+        variety_values: None,
     };
     let mut intensity = 1.0;
     let mut seed = 0;
@@ -201,6 +209,8 @@ fn parse(args: Vec<String>) -> Result<Options, String> {
             "--crossing" => o.crossing = number(value("--crossing")?)?,
             "--root-values" => o.root_values = Some(numbers(&value("--root-values")?)?),
             "--crossing-values" => o.crossing_values = Some(numbers(&value("--crossing-values")?)?),
+            "--variety" => o.variety = number(value("--variety")?)?,
+            "--variety-values" => o.variety_values = Some(numbers(&value("--variety-values")?)?),
             "--penalty-values" => o.penalty_values = Some(numbers(&value("--penalty-values")?)?),
             "--pron-values" => {
                 o.pron_values = Some(
@@ -341,6 +351,7 @@ fn mishear_config(o: &Options) -> MishearConfig {
         function_word_share: o.function_share,
         root: o.root,
         crossing: o.crossing,
+        variety: o.variety,
         // `--within X` fixes the bound; otherwise it grows to the top N.
         max_bound: o.within.unwrap_or(30.0),
     }
@@ -361,13 +372,14 @@ fn print_mishearing(engine: &Engine, text: &str, o: &Options) -> Result<(), Stri
     }
     for h in &m.heard {
         println!(
-            "  {:>5.2}  phonetic {:>4.2}  shared {} root {} kept {}/{}  {}",
+            "  {:>5.2}  phonetic {:>4.2}  shared {} root {} kept {}/{} reused {}  {}",
             h.cost,
             h.phonetic,
             h.shared,
             h.related,
             h.kept,
             m.boundaries.len(),
+            h.reused,
             h.text
         );
     }
@@ -552,7 +564,7 @@ fn grid(o: &Options) -> Vec<Options> {
         .collect();
     // Each axis multiplies the grid, the first outermost.
     type Axis = (Option<Vec<f32>>, fn(&mut Options, f32));
-    let axes: [Axis; 7] = [
+    let axes: [Axis; 8] = [
         (o.lm_values.clone(), |o, v| o.lm = v),
         (o.penalty_values.clone(), |o, v| o.word_penalty = v),
         (o.stress_values.clone(), |o, v| o.stress_mismatch = v),
@@ -560,6 +572,7 @@ fn grid(o: &Options) -> Vec<Options> {
         (o.novelty_values.clone(), |o, v| o.novelty = v),
         (o.root_values.clone(), |o, v| o.root = v),
         (o.crossing_values.clone(), |o, v| o.crossing = v),
+        (o.variety_values.clone(), |o, v| o.variety = v),
     ];
     for (values, set) in axes {
         let Some(values) = values else { continue };
@@ -579,7 +592,7 @@ fn grid(o: &Options) -> Vec<Options> {
 
 fn label(o: &Options) -> String {
     format!(
-        "lm {:<4} pen {:<4} {:<5} stress {:<3} swap {:<3} nov {:<3} root {:<3} cross {:<3}",
+        "lm {:<4} pen {:<4} {:<5} stress {:<3} swap {:<3} nov {:<3} root {:<3} cross {:<3} var {:<3}",
         o.lm,
         o.word_penalty,
         if o.all_pronunciations { "all" } else { "first" },
@@ -587,7 +600,8 @@ fn label(o: &Options) -> String {
         o.swap,
         o.novelty,
         o.root,
-        o.crossing
+        o.crossing,
+        o.variety
     )
 }
 

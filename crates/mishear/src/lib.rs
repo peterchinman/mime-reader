@@ -17,7 +17,7 @@ pub mod wasm;
 
 pub use cost::{CostConfig, CostModel};
 pub use deform::{Action, Class, Context, Deformation, Rule, VowelChart, VowelMove};
-pub use engine::{Engine, Heard, MishearConfig, Mishearing, Reading};
+pub use engine::{Engine, Heard, MishearConfig, Mishearing, Reading, Variety};
 pub use lexicon::{Lexicon, WordId};
 pub use phone::Ph;
 pub use search::{Match, SearchConfig, SearchStats, best_matches, search};

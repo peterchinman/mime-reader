@@ -87,6 +87,15 @@ const SEARCH_KNOBS: Knob[] = [
   },
   {
     type: 'number',
+    key: 'variety',
+    label: 'variety',
+    hint: 'Extra cost per word an earlier hearing in the list used, or a homophone of one (“cents” after “sense”), as novelty does for the line’s own words. Each hearing is then the best one given those above it, so the list varies. 0: the plain top N, which often differ by a word. With bigrams on, it slows the search several-fold.',
+    min: 0,
+    max: 5,
+    step: 0.05,
+  },
+  {
+    type: 'number',
     key: 'root',
     label: 'same-root penalty',
     hint: 'Extra cost per heard word sharing a stem with a word of the line: “flying” for “fly in”, “flies” for “fly” (Snowball English stemmer). The same word counts too, on top of novelty. Irregular forms (“flew”) aren’t caught.',
@@ -872,10 +881,11 @@ function renderResult(result: ResultDto, ms: number, rebuildMs: number): void {
             `cost ${fmt(h.cost)}`,
             `sound ${fmt(h.phonetic)}`,
             ...(mishear ? [`${h.shared} same word`, `${h.related} same root`] : []),
+            ...(i > 0 ? [`${h.reused} reused`] : []),
             ...(result.boundaries.length ? [`crosses ${result.boundaries.length - h.kept} of ${result.boundaries.length} boundaries`] : []),
           ].join(' · '),
           title:
-            'cost: sound + word prior + word penalty + novelty + same-root + kept boundaries. sound: the phonetic part alone. same root: words other than the line’s own that share a stem with one of them.',
+            'cost: sound + word prior + word penalty + novelty + same-root + kept boundaries + variety. sound: the phonetic part alone. same root: words other than the line’s own that share a stem with one of them. reused: words an earlier hearing in the list used.',
         }),
       );
       li.onclick = () => {

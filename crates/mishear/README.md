@@ -139,7 +139,8 @@ of the input. Its cost adds up three things:
   original line contains, and a fifth of that for function words. Two more
   are off by default: a charge for words sharing a stem with the line's
   (`--root`), and one for each of the line's word boundaries a hearing
-  keeps (`--crossing`).
+  keeps (`--crossing`). And each hearing after the first pays 1.0 for each
+  word an earlier one used (`--variety`; see "Variety").
 
 There are two passes:
 
@@ -166,6 +167,7 @@ and runs a grid of them.
 | `--novelty`, `--function-share` | 1.0, 0.2 | departing from the original's words |
 | `--root` | 0 | departing from the original's roots too ("flying" for "fly in") |
 | `--crossing` | 0 | hearings that cut across the original's word boundaries |
+| `--variety` | 1.0 | each hearing differing from those above it, against the plain top N |
 | `--stress-mismatch` | 0 | keeping the line's rhythm (extra cost when a stressed vowel pairs with an unstressed one) |
 | `--swap` | off | adjacent consonants exchanged as one edit ("ask" ↔ "aks") |
 | `--all-spellings` | off | listing homophone spellings separately, rather than merging hearings that sound the same |
@@ -219,14 +221,16 @@ scores another counts file on the same pairs.
 - **Pruning pairs seen fewer than 3 times** costs 0.07 nats on subtitles and
   0.13 on Wikipedia (at μ 1000), and halves the file. Fewer than 5 would
   cost nearly twice that.
-- **What it sounds like.** "Kiss the sky": unigram "case this guy", "case
-  thus guy", "case this chi"; with `--bigrams`, "case this guy", "guess this
-  guy", "does this guy", "keys this guy" (Gutenberg had "kisses guy", "case
-  this gay"). "Since Persia fell at Marathon" gains "…at me rough on".
-- **Cost.** Over 12 public lines, a mishearing averages 137 ms with the
-  unigram model and 370 ms with bigrams (Gutenberg's took 318). Loading the
-  counts adds about 0.35 s to the command line, and about 2 s in the web
-  page, which fetches them only when bigrams are turned on.
+- **What it sounds like.** "Kiss the sky", plain top hearings
+  (`--variety 0`): unigram "case this guy", "case thus guy", "case this
+  chi"; with `--bigrams`, "case this guy", "guess this guy", "does this
+  guy", "keys this guy" (Gutenberg had "kisses guy", "case this gay").
+  "Since Persia fell at Marathon" gains "…at me rough on".
+- **Cost.** Over 12 public lines, a plain list (`--variety 0`) averages
+  137 ms with the unigram model and 370 ms with bigrams (Gutenberg's took
+  318). Variety costs more with bigrams than without (see "Variety").
+  Loading the counts adds about 0.35 s to the command line, and about 2 s
+  in the web page, which fetches them only when bigrams are turned on.
 - OPUS distributes the subtitles without owning them. The counts are
   generated locally and gitignored, like the wordfreq list.
 
@@ -240,7 +244,8 @@ ranks among the top 50 hearings of the original.
 
 ```sh
 cargo run --release -p mishear -- eval --all-words --all-spellings \
-  --lm-values 0.02,0.05 --novelty-values 0,0.1 --stress-values 0,0.3
+  --lm-values 0.02,0.05 --novelty-values 0,0.1 --stress-values 0,0.3 \
+  --variety 0
 ```
 
 At its best (`--lm 0.02`, `--novelty 0`), only 2 of the 12 reachable
@@ -248,6 +253,12 @@ mishearings make the top 50: "hark the harold angels sing" at rank 1 and
 "gladly the cross eyed bear" at rank 2 (MRR 0.125). With `--bigrams`, both
 are at rank 1 (MRR 0.167), and both stay in the top 10 at `--novelty 0.1`,
 where the unigram model keeps only "harold" there (rank 6).
+
+These ranks are among the plain top 50 (`--variety 0`). With the default
+`--variety 1`, "harold" stays first, but "gladly the cross eyed bear" drops
+out of the top 50 and "jose can you see" comes in at 19–23 (MRR 0.087 at
+`--lm 0.02`). A mondegreen that changes one word looks, to variety, like
+the hearings above it.
 
 The others lose to closer neighbours. "Bringing in the thieves" (sound
 cost 0.30) beats "bringing in the sheep" (0.94), and "while shepherds
@@ -271,8 +282,9 @@ on, "hark the harold angels sing" can come out as "…angels singh". Use
   "fly", "flies" and "flying" all give "fli". The same word counts too, so
   `--root` adds to `--novelty` for it. `--function-share` applies when the
   line's word is a function word. Irregular forms ("flew") aren't caught.
-  - In "the swallows fly in", the top hearings at 0 all end in "flying"
-    ("thus willows flying"). From `--root 1` they end in "frying".
+  - In "the swallows fly in", the plain top hearings (`--variety 0`) all
+    end in "flying" at 0 ("thus willows flying"). From `--root 1` they end
+    in "frying".
   - In "Since Persia fell at Marathon", "marathons" gets past `--novelty`,
     which only catches the identical word. `--root` catches it.
 - **`--crossing F` rewards each of the line's word boundaries that a
@@ -281,13 +293,45 @@ on, "hark the harold angels sing" can come out as "…angels singh". Use
   as F for each boundary a hearing keeps: a word starting exactly there.
   Every hearing keeps or cuts each boundary, so the ranking is the same as
   for a reward, and the search stays exact. The costs shown include it.
-  - In "Since Persia fell at Marathon", the top four at 0 all keep
-    "at|marathon" ("…affair at marathons"). From 0.3 they all cut across it
-    ("sin spurs of era telethon").
+  - In "Since Persia fell at Marathon", the plain top four (`--variety 0`)
+    all keep "at|marathon" at 0 ("…affair at marathons"). From 0.3 they all
+    cut across it ("sin spurs of era telethon").
   - On that line it costs no time: about 100 ms at every setting.
 - `mishear` prints each hearing's counts: `shared` (same word), `root`
-  (another word with the same stem) and `kept` (boundaries kept, out of
-  the line's).
+  (another word with the same stem), `kept` (boundaries kept, out of the
+  line's) and `reused` (words an earlier hearing used).
+
+### Variety
+
+The plain top N tend to be one hearing respelled: "sin spurs affair at
+marathons", "seen spurs affair at marathons", "sense persevere at
+marathons", … `--variety F` (default 1.0) treats the hearings above each
+one as novelty treats the line: each word an earlier hearing used costs F
+more, as does any homophone of it ("cents" after "sense"). Function words
+pay `--function-share` of that, and with `--root`, words sharing their
+stems pay too. Each hearing is then the best one given those above it:
+
+- "Since Persia fell at Marathon": "sin spurs affair at marathons", "sense
+  persevere admire of on", "sins per the fella telethon", "cents purchase
+  era telephone", "sensors a ferret marathon", "seen spur shuffle add marry
+  than", "sisters authoritarian", "signs burgess arid mare often".
+- "Kiss the sky": "case this guy", "kisses chi", "guess thus to", "cases
+  gay", "gives ask i", "guys the stay", "keys vista", "give just a".
+
+`--variety 0` lists the plain top N, from one search.
+
+**Exact, without a search per hearing.** Penalties only add cost, so one
+pass-1 lattice serves every hearing, as long as it keeps per span the N
+best words plus one for each penalized word. Pass 2 returns a pool of 24
+more than the hearings already taken. The next hearings come from that
+pool, rescored with their new penalties, while the best of them is
+provably the best overall: it costs no more than the pool's last member
+did, and everything outside the pool cost at least that before the new
+penalties. A test checks the result against a full search per hearing.
+
+**Cost.** Over 12 public lines, 228 ms per line on average, against 129 ms
+for the plain list (1.8×). With `--bigrams`, whose pass 2 is much dearer,
+0.75–1.2 s on long lines, against about 0.2 s (4–6×).
 
 ### Rhythm and swaps
 
@@ -343,9 +387,9 @@ Finding the exact best is barely more expensive than the top 10. Both cost
 about one bounded trie walk per input position, which grows linearly with
 the vocabulary and the line's length. The bounded search ("N within X") is
 about 1.5× cheaper, because it skips the bound-raising rounds. An
-approximate search isn't needed. Mishearings typically take 0.1–0.3 s per
-line (with `--bigrams`, 0.2–0.8 s), because the penalty on shared words
-pushes the bound out. Accents that lengthen the line take longer; Japanese epenthesis, for
+approximate search isn't needed. Mishearings typically take 0.1–0.5 s per
+line (with `--bigrams`, up to about 1.3 s), because the penalties on
+shared words, the line's and earlier hearings', push the bound out. Accents that lengthen the line take longer; Japanese epenthesis, for
 example, takes about 1 s.
 
 ## Deformations

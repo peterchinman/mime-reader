@@ -34,6 +34,8 @@ pub struct Lexicon {
     first: Vec<Vec<Ph>>,
     /// The words sharing each [`stem`].
     by_stem: HashMap<String, Vec<WordId>>,
+    /// The words with each sound (see [`Self::sound`]).
+    by_sound: Vec<Vec<WordId>>,
 }
 
 /// A word's stem, by Snowball's English stemmer (Porter2): "fly", "flies"
@@ -173,6 +175,7 @@ impl Lexicon {
             sound: Vec::new(),
             first: Vec::new(),
             by_stem: HashMap::new(),
+            by_sound: Vec::new(),
         };
         let mut sounds: HashMap<Vec<Ph>, u32> = HashMap::new();
         for frequency in frequencies {
@@ -201,6 +204,11 @@ impl Lexicon {
             lexicon
                 .sound
                 .push(*sounds.entry(first.clone()).or_insert(next));
+            let sound = lexicon.sound[id as usize] as usize;
+            if sound == lexicon.by_sound.len() {
+                lexicon.by_sound.push(Vec::new());
+            }
+            lexicon.by_sound[sound].push(id);
             lexicon.first.push(first);
             let mut seen: Vec<Vec<Ph>> = Vec::new();
             let count = if all_pronunciations {
@@ -262,6 +270,12 @@ impl Lexicon {
 
     pub fn id(&self, word: &str) -> Option<WordId> {
         self.index.get(&word.to_lowercase()).copied()
+    }
+
+    /// Every word that sounds like `id` (by first pronunciation), `id`
+    /// itself included: "there", "their", "they're".
+    pub fn homophones(&self, id: WordId) -> &[WordId] {
+        &self.by_sound[self.sound(id) as usize]
     }
 
     /// Every word with `word`'s [`stem`], `word` itself included.
