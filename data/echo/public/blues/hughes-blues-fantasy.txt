@@ -1,0 +1,45 @@
+form: blues
+title: Blues Fantasy
+author: Langston Hughes
+year: 1926
+source: https://www.gutenberg.org/ebooks/74745
+notes: text from The Weary Blues (Knopf, 1926), Gutenberg #74745; H = Hey! Hey! variants
+template: H____H MGMG__ H WW____ RP _ RP__ _H_H
+
+Hey! Hey!
+That’s what the
+Blues singers say.
+Singing minor melodies
+They laugh,
+Hey! Hey!
+
+My man’s done left me,
+Chile, he’s gone away.
+My good man’s left me,
+Babe, he’s gone away.
+Now the cryin’ blues
+Haunts me night and day.
+
+Hey!...Hey!
+
+Weary,
+Weary,
+Trouble, pain.
+Sun’s gonna shine
+Somewhere
+Again.
+
+I got a railroad ticket,
+Pack my trunk and ride.
+
+Sing ’em, sister!
+
+Got a railroad ticket,
+Pack my trunk and ride.
+And when I get on the train
+I’ll cast my blues aside.
+
+Laughing,
+Hey!...Hey!
+Laugh a loud,
+Hey! Hey!

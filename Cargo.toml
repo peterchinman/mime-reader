@@ -20,9 +20,12 @@ tsify = { version = "0.5", features = ["js"] }
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
 
-# Native-only: criterion for benchmarks
+# Native-only: criterion for benchmarks; serde for the echo fixtures and the
+# echo_compare harness (both already in the lockfile via the wasm deps).
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [[bench]]
 name = "distance_vs_align"
@@ -31,3 +34,15 @@ harness = false
 [[bench]]
 name = "find_rhymes"
 harness = false
+
+[[bench]]
+name = "echo_align"
+harness = false
+
+# Scores the labeled echo corpus with every aligner and reports how well each
+# separates echoes from non-echoes. `test = true` runs its unit tests (corpus
+# well-formedness, metrics) under `cargo test`.
+[[example]]
+name = "echo_compare"
+path = "examples/echo_compare/main.rs"
+test = true

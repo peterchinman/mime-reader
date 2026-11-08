@@ -4,3 +4,4 @@
 /web/pkg
 node_modules
 /web/tuning/dist
+/data/echo/private/

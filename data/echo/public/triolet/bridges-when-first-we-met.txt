@@ -1,0 +1,15 @@
+form: triolet
+title: Triolet (When first we met we did not guess)
+author: Robert Bridges
+year: 1912
+source: https://www.gutenberg.org/ebooks/37804
+notes: text from The Poetical Works of Robert Bridges (Oxford, 1912), Gutenberg #37804
+
+When first we met we did not guess
+That Love would prove so hard a master;
+Of more than common friendliness
+When first we met we did not guess.
+Who could foretell this sore distress,
+This irretrievable disaster
+When first we met?--We did not guess
+That Love would prove so hard a master.

@@ -1,0 +1,28 @@
+form: blues
+title: Bad Man
+author: Langston Hughes
+year: 1927
+source: https://en.wikisource.org/wiki/Fine_Clothes_to_the_Jew/Bad_Man
+notes: text from Fine Clothes to the Jew (Knopf, 1927), proofread Wikisource transcription of the scan; each blues line split in two: 6-line AAB stanzas
+template: abab__*3
+
+I'm a bad, bad man
+Cause everbody tells me so.
+I'm a bad, bad man.
+Everbody tells me so.
+I takes ma meanness and ma licker
+Everwhere I go.
+
+I beats ma wife an'
+I beats ma side gal too.
+Beats ma wife an'
+Beats ma side gal too.
+Don't know why I do it but
+It keeps me from feelin' blue.
+
+I'm so bad I
+Don't even want to be good.
+So bad, bad, bad I
+Don't even want to be good.
+I'm goin' to de devil an'
+I wouldn't go to heaben if I could.

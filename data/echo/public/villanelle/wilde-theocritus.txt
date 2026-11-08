@@ -1,0 +1,31 @@
+form: villanelle
+title: Theocritus: A Villanelle
+author: Oscar Wilde
+year: 1913
+source: https://www.gutenberg.org/ebooks/1057
+notes: text from Poems (Methuen, 1913 edition), Gutenberg #1057; small-caps opening 'O SINGER' normalized to 'O Singer'
+
+O Singer of Persephone!
+In the dim meadows desolate
+Dost thou remember Sicily?
+
+Still through the ivy flits the bee
+Where Amaryllis lies in state;
+O Singer of Persephone!
+
+Simætha calls on Hecate
+And hears the wild dogs at the gate;
+Dost thou remember Sicily?
+
+Still by the light and laughing sea
+Poor Polypheme bemoans his fate;
+O Singer of Persephone!
+
+And still in boyish rivalry
+Young Daphnis challenges his mate;
+Dost thou remember Sicily?
+
+Slim Lacon keeps a goat for thee,
+For thee the jocund shepherds wait;
+O Singer of Persephone!
+Dost thou remember Sicily?

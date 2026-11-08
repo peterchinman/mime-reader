@@ -1,0 +1,31 @@
+form: villanelle
+title: On a Nankin Plate
+author: Austin Dobson
+year: 1887
+source: https://www.gutenberg.org/ebooks/45736
+notes: text from Gleeson White, ed., Ballades and Rondeaus, Chants Royal, Sestinas, Villanelles, &c. (1887), Gutenberg #45736
+
+"Ah me, but it might have been!
+Was there ever so dismal a fate?"--
+Quoth the little blue mandarin.
+
+"Such a maid as was never seen!
+She passed, though I cried to her 'Wait,'--
+Ah me, but it might have been!
+
+"I cried, 'O my Flower, my Queen,
+Be mine!' 'Twas precipitate,"--
+Quoth the little blue mandarin,--
+
+"But then ... she was just sixteen,--
+Long-eyed,--as a lily straight,--
+Ah me, but it might have been!
+
+"As it was, from her palankeen,
+She laughed--'you're a week too late!'"
+(Quoth the little blue mandarin.)
+
+"That is why, in a mist of spleen,
+I mourn on this Nankin Plate.
+Ah me, but it might have been!"
+Quoth the little blue mandarin.

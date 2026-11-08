@@ -1,0 +1,434 @@
+{"config": "default", "a": "", "b": "", "distance": 0, "steps": []}
+{"config": "default", "a": "", "b": "K", "distance": 500, "steps": ["indel - K"]}
+{"config": "default", "a": "K", "b": "", "distance": 500, "steps": ["indel K -"]}
+{"config": "default", "a": "AE1", "b": "", "distance": 100000, "steps": ["indel AE1 -"]}
+{"config": "default", "a": "", "b": "AE1", "distance": 100000, "steps": ["indel - AE1"]}
+{"config": "default", "a": "", "b": "M AO1 S T", "distance": 101500, "steps": ["indel - M", "indel - AO1", "indel - S", "indel - T"]}
+{"config": "default", "a": "M AO1 S T", "b": "", "distance": 101500, "steps": ["indel M -", "indel AO1 -", "indel S -", "indel T -"]}
+{"config": "default", "a": "AE1 T", "b": "", "distance": 100500, "steps": ["indel AE1 -", "indel T -"]}
+{"config": "default", "a": "", "b": "AE1 T", "distance": 100500, "steps": ["indel - AE1", "indel - T"]}
+{"config": "default", "a": "M OW1 S T", "b": "M OW1 T S", "distance": 200, "steps": ["match M M", "match OW1 OW1", "right S T", "left T S"]}
+{"config": "default", "a": "M OW1 T S", "b": "M OW1 S T", "distance": 200, "steps": ["match M M", "match OW1 OW1", "right T S", "left S T"]}
+{"config": "default", "a": "AE1 K S", "b": "AE1 S K", "distance": 200, "steps": ["match AE1 AE1", "right K S", "left S K"]}
+{"config": "default", "a": "AE1 S K", "b": "AE1 K S", "distance": 200, "steps": ["match AE1 AE1", "right S K", "left K S"]}
+{"config": "default", "a": "S T", "b": "T S", "distance": 200, "steps": ["right S T", "left T S"]}
+{"config": "default", "a": "T S", "b": "S T", "distance": 200, "steps": ["right T S", "left S T"]}
+{"config": "default", "a": "S T R", "b": "T S R", "distance": 200, "steps": ["right S T", "left T S", "match R R"]}
+{"config": "default", "a": "T S R", "b": "S T R", "distance": 200, "steps": ["right T S", "left S T", "match R R"]}
+{"config": "default", "a": "K S T", "b": "S K T", "distance": 200, "steps": ["right K S", "left S K", "match T T"]}
+{"config": "default", "a": "S K T", "b": "K S T", "distance": 200, "steps": ["right S K", "left K S", "match T T"]}
+{"config": "default", "a": "M P S", "b": "S P M", "distance": 1200, "steps": ["indel M -", "right P S", "left S P", "indel - M"]}
+{"config": "default", "a": "S P M", "b": "M P S", "distance": 1200, "steps": ["indel S -", "right P M", "left M P", "indel - S"]}
+{"config": "default", "a": "S K S", "b": "K S K", "distance": 1000, "steps": ["indel S -", "match K K", "match S S", "indel - K"]}
+{"config": "default", "a": "K S K", "b": "S K S", "distance": 1000, "steps": ["indel K -", "match S S", "match K K", "indel - S"]}
+{"config": "default", "a": "T T", "b": "T T", "distance": 0, "steps": ["match T T", "match T T"]}
+{"config": "default", "a": "S T S T", "b": "T S T S", "distance": 400, "steps": ["right S T", "left T S", "right S T", "left T S"]}
+{"config": "default", "a": "T S T S", "b": "S T S T", "distance": 400, "steps": ["right T S", "left S T", "right T S", "left S T"]}
+{"config": "default", "a": "AE1 S T S", "b": "AE1 T S T", "distance": 1000, "steps": ["match AE1 AE1", "indel S -", "match T T", "match S S", "indel - T"]}
+{"config": "default", "a": "AE1 T S T", "b": "AE1 S T S", "distance": 1000, "steps": ["match AE1 AE1", "indel T -", "match S S", "match T T", "indel - S"]}
+{"config": "default", "a": "T EH1 N", "b": "T EH1 N N", "distance": 100, "steps": ["match T T", "match EH1 EH1", "match N N", "indel - N"]}
+{"config": "default", "a": "T EH1 N N", "b": "T EH1 N", "distance": 100, "steps": ["match T T", "match EH1 EH1", "match N N", "indel N -"]}
+{"config": "default", "a": "B B", "b": "B", "distance": 100, "steps": ["match B B", "indel B -"]}
+{"config": "default", "a": "B", "b": "B B", "distance": 100, "steps": ["match B B", "indel - B"]}
+{"config": "default", "a": "IH0 B", "b": "P T B B", "distance": 100600, "steps": ["indel - P", "sub IH0 T", "match B B", "indel - B"]}
+{"config": "default", "a": "P T B B", "b": "IH0 B", "distance": 100600, "steps": ["indel P -", "sub T IH0", "match B B", "indel B -"]}
+{"config": "default", "a": "B AE1 T IH0 NG", "b": "B AE1 T T IH0 NG", "distance": 100, "steps": ["match B B", "match AE1 AE1", "match T T", "indel - T", "match IH0 IH0", "match NG NG"]}
+{"config": "default", "a": "B AE1 T T IH0 NG", "b": "B AE1 T IH0 NG", "distance": 100, "steps": ["match B B", "match AE1 AE1", "match T T", "indel T -", "match IH0 IH0", "match NG NG"]}
+{"config": "default", "a": "EH1 N T UW1", "b": "EH1 N T T UW1", "distance": 100, "steps": ["match EH1 EH1", "match N N", "match T T", "indel - T", "match UW1 UW1"]}
+{"config": "default", "a": "EH1 N T T UW1", "b": "EH1 N T UW1", "distance": 100, "steps": ["match EH1 EH1", "match N N", "match T T", "indel T -", "match UW1 UW1"]}
+{"config": "default", "a": "N N N", "b": "N", "distance": 200, "steps": ["match N N", "indel N -", "indel N -"]}
+{"config": "default", "a": "N", "b": "N N N", "distance": 200, "steps": ["match N N", "indel - N", "indel - N"]}
+{"config": "default", "a": "AE1 N D", "b": "AE1 N N D D", "distance": 200, "steps": ["match AE1 AE1", "match N N", "indel - N", "match D D", "indel - D"]}
+{"config": "default", "a": "AE1 N N D D", "b": "AE1 N D", "distance": 200, "steps": ["match AE1 AE1", "match N N", "indel N -", "match D D", "indel D -"]}
+{"config": "default", "a": "AE1 T", "b": "T AE1", "distance": 1000, "steps": ["indel - T", "match AE1 AE1", "indel T -"]}
+{"config": "default", "a": "T AE1", "b": "AE1 T", "distance": 1000, "steps": ["indel T -", "match AE1 AE1", "indel - T"]}
+{"config": "default", "a": "AE1", "b": "K", "distance": 100000, "steps": ["sub AE1 K"]}
+{"config": "default", "a": "K", "b": "AE1", "distance": 100000, "steps": ["sub K AE1"]}
+{"config": "default", "a": "M AE1 T", "b": "M T AE1", "distance": 1000, "steps": ["match M M", "indel - T", "match AE1 AE1", "indel T -"]}
+{"config": "default", "a": "M T AE1", "b": "M AE1 T", "distance": 1000, "steps": ["match M M", "indel T -", "match AE1 AE1", "indel - T"]}
+{"config": "default", "a": "AE1 AH0", "b": "AH0 AE1", "distance": 3234, "steps": ["sub AE1 AH0", "sub AH0 AE1"]}
+{"config": "default", "a": "AH0 AE1", "b": "AE1 AH0", "distance": 3234, "steps": ["sub AH0 AE1", "sub AE1 AH0"]}
+{"config": "default", "a": "K AE1", "b": "AE1 K", "distance": 1000, "steps": ["indel K -", "match AE1 AE1", "indel - K"]}
+{"config": "default", "a": "AE1 K", "b": "K AE1", "distance": 1000, "steps": ["indel - K", "match AE1 AE1", "indel K -"]}
+{"config": "default", "a": "UW1 P R IH2 N T", "b": "UW1 B AE1 G", "distance": 4461, "steps": ["match UW1 UW1", "sub P B", "indel R -", "sub IH2 AE1", "indel N -", "sub T G"]}
+{"config": "default", "a": "UW1 B AE1 G", "b": "UW1 P R IH2 N T", "distance": 4461, "steps": ["match UW1 UW1", "sub B P", "indel - R", "sub AE1 IH2", "indel - N", "sub G T"]}
+{"config": "default", "a": "AE1 T", "b": "AA1 T", "distance": 1344, "steps": ["sub AE1 AA1", "match T T"]}
+{"config": "default", "a": "AA1 T", "b": "AE1 T", "distance": 1344, "steps": ["sub AA1 AE1", "match T T"]}
+{"config": "default", "a": "B T", "b": "B IH1 T", "distance": 100000, "steps": ["match B B", "indel - IH1", "match T T"]}
+{"config": "default", "a": "B IH1 T", "b": "B T", "distance": 100000, "steps": ["match B B", "indel IH1 -", "match T T"]}
+{"config": "default", "a": "AY1 Z", "b": "AY1 Z IH0 Z", "distance": 100500, "steps": ["match AY1 AY1", "match Z Z", "indel - IH0", "indel - Z"]}
+{"config": "default", "a": "AY1 Z IH0 Z", "b": "AY1 Z", "distance": 100500, "steps": ["match AY1 AY1", "match Z Z", "indel IH0 -", "indel Z -"]}
+{"config": "default", "a": "OW1 L D", "b": "OW1 L", "distance": 500, "steps": ["match OW1 OW1", "match L L", "indel D -"]}
+{"config": "default", "a": "OW1 L", "b": "OW1 L D", "distance": 500, "steps": ["match OW1 OW1", "match L L", "indel - D"]}
+{"config": "default", "a": "IY1", "b": "IY1 T S", "distance": 1000, "steps": ["match IY1 IY1", "indel - T", "indel - S"]}
+{"config": "default", "a": "IY1 T S", "b": "IY1", "distance": 1000, "steps": ["match IY1 IY1", "indel T -", "indel S -"]}
+{"config": "default", "a": "AE1 F V", "b": "AE1 V F", "distance": 200, "steps": ["match AE1 AE1", "right F V", "left V F"]}
+{"config": "default", "a": "AE1 V F", "b": "AE1 F V", "distance": 200, "steps": ["match AE1 AE1", "right V F", "left F V"]}
+{"config": "default", "a": "AO1 R L", "b": "AO1 L R", "distance": 200, "steps": ["match AO1 AO1", "right R L", "left L R"]}
+{"config": "default", "a": "AO1 L R", "b": "AO1 R L", "distance": 200, "steps": ["match AO1 AO1", "right L R", "left R L"]}
+{"config": "default", "a": "AE1 W V", "b": "AE1 V W", "distance": 200, "steps": ["match AE1 AE1", "right W V", "left V W"]}
+{"config": "default", "a": "AE1 V W", "b": "AE1 W V", "distance": 200, "steps": ["match AE1 AE1", "right V W", "left W V"]}
+{"config": "default", "a": "AE1 JH Z", "b": "AE1 Z JH", "distance": 200, "steps": ["match AE1 AE1", "right JH Z", "left Z JH"]}
+{"config": "default", "a": "AE1 Z JH", "b": "AE1 JH Z", "distance": 200, "steps": ["match AE1 AE1", "right Z JH", "left JH Z"]}
+{"config": "default", "a": "AE1 R W", "b": "AE1 W R", "distance": 200, "steps": ["match AE1 AE1", "right R W", "left W R"]}
+{"config": "default", "a": "AE1 W R", "b": "AE1 R W", "distance": 200, "steps": ["match AE1 AE1", "right W R", "left R W"]}
+{"config": "default", "a": "AE1 CH F", "b": "AE1 F CH", "distance": 200, "steps": ["match AE1 AE1", "right CH F", "left F CH"]}
+{"config": "default", "a": "AE1 F CH", "b": "AE1 CH F", "distance": 200, "steps": ["match AE1 AE1", "right F CH", "left CH F"]}
+{"config": "all_equal", "a": "", "b": "", "distance": 0, "steps": []}
+{"config": "all_equal", "a": "", "b": "K", "distance": 500, "steps": ["indel - K"]}
+{"config": "all_equal", "a": "K", "b": "", "distance": 500, "steps": ["indel K -"]}
+{"config": "all_equal", "a": "AE1", "b": "", "distance": 500, "steps": ["indel AE1 -"]}
+{"config": "all_equal", "a": "", "b": "AE1", "distance": 500, "steps": ["indel - AE1"]}
+{"config": "all_equal", "a": "", "b": "M AO1 S T", "distance": 2000, "steps": ["indel - M", "indel - AO1", "indel - S", "indel - T"]}
+{"config": "all_equal", "a": "M AO1 S T", "b": "", "distance": 2000, "steps": ["indel M -", "indel AO1 -", "indel S -", "indel T -"]}
+{"config": "all_equal", "a": "AE1 T", "b": "", "distance": 1000, "steps": ["indel AE1 -", "indel T -"]}
+{"config": "all_equal", "a": "", "b": "AE1 T", "distance": 1000, "steps": ["indel - AE1", "indel - T"]}
+{"config": "all_equal", "a": "M OW1 S T", "b": "M OW1 T S", "distance": 1000, "steps": ["match M M", "match OW1 OW1", "right S T", "left T S"]}
+{"config": "all_equal", "a": "M OW1 T S", "b": "M OW1 S T", "distance": 1000, "steps": ["match M M", "match OW1 OW1", "right T S", "left S T"]}
+{"config": "all_equal", "a": "AE1 K S", "b": "AE1 S K", "distance": 1000, "steps": ["match AE1 AE1", "right K S", "left S K"]}
+{"config": "all_equal", "a": "AE1 S K", "b": "AE1 K S", "distance": 1000, "steps": ["match AE1 AE1", "right S K", "left K S"]}
+{"config": "all_equal", "a": "S T", "b": "T S", "distance": 1000, "steps": ["right S T", "left T S"]}
+{"config": "all_equal", "a": "T S", "b": "S T", "distance": 1000, "steps": ["right T S", "left S T"]}
+{"config": "all_equal", "a": "S T R", "b": "T S R", "distance": 1000, "steps": ["right S T", "left T S", "match R R"]}
+{"config": "all_equal", "a": "T S R", "b": "S T R", "distance": 1000, "steps": ["right T S", "left S T", "match R R"]}
+{"config": "all_equal", "a": "K S T", "b": "S K T", "distance": 1000, "steps": ["right K S", "left S K", "match T T"]}
+{"config": "all_equal", "a": "S K T", "b": "K S T", "distance": 1000, "steps": ["right S K", "left K S", "match T T"]}
+{"config": "all_equal", "a": "M P S", "b": "S P M", "distance": 2000, "steps": ["sub M S", "match P P", "sub S M"]}
+{"config": "all_equal", "a": "S P M", "b": "M P S", "distance": 2000, "steps": ["sub S M", "match P P", "sub M S"]}
+{"config": "all_equal", "a": "S K S", "b": "K S K", "distance": 1000, "steps": ["indel S -", "match K K", "match S S", "indel - K"]}
+{"config": "all_equal", "a": "K S K", "b": "S K S", "distance": 1000, "steps": ["indel K -", "match S S", "match K K", "indel - S"]}
+{"config": "all_equal", "a": "T T", "b": "T T", "distance": 0, "steps": ["match T T", "match T T"]}
+{"config": "all_equal", "a": "S T S T", "b": "T S T S", "distance": 1000, "steps": ["indel S -", "match T T", "match S S", "match T T", "indel - S"]}
+{"config": "all_equal", "a": "T S T S", "b": "S T S T", "distance": 1000, "steps": ["indel T -", "match S S", "match T T", "match S S", "indel - T"]}
+{"config": "all_equal", "a": "AE1 S T S", "b": "AE1 T S T", "distance": 1000, "steps": ["match AE1 AE1", "indel S -", "match T T", "match S S", "indel - T"]}
+{"config": "all_equal", "a": "AE1 T S T", "b": "AE1 S T S", "distance": 1000, "steps": ["match AE1 AE1", "indel T -", "match S S", "match T T", "indel - S"]}
+{"config": "all_equal", "a": "T EH1 N", "b": "T EH1 N N", "distance": 500, "steps": ["match T T", "match EH1 EH1", "match N N", "indel - N"]}
+{"config": "all_equal", "a": "T EH1 N N", "b": "T EH1 N", "distance": 500, "steps": ["match T T", "match EH1 EH1", "match N N", "indel N -"]}
+{"config": "all_equal", "a": "B B", "b": "B", "distance": 500, "steps": ["match B B", "indel B -"]}
+{"config": "all_equal", "a": "B", "b": "B B", "distance": 500, "steps": ["match B B", "indel - B"]}
+{"config": "all_equal", "a": "IH0 B", "b": "P T B B", "distance": 1500, "steps": ["indel - P", "indel - T", "sub IH0 B", "match B B"]}
+{"config": "all_equal", "a": "P T B B", "b": "IH0 B", "distance": 1500, "steps": ["indel P -", "indel T -", "sub B IH0", "match B B"]}
+{"config": "all_equal", "a": "B AE1 T IH0 NG", "b": "B AE1 T T IH0 NG", "distance": 500, "steps": ["match B B", "match AE1 AE1", "match T T", "indel - T", "match IH0 IH0", "match NG NG"]}
+{"config": "all_equal", "a": "B AE1 T T IH0 NG", "b": "B AE1 T IH0 NG", "distance": 500, "steps": ["match B B", "match AE1 AE1", "match T T", "indel T -", "match IH0 IH0", "match NG NG"]}
+{"config": "all_equal", "a": "EH1 N T UW1", "b": "EH1 N T T UW1", "distance": 500, "steps": ["match EH1 EH1", "match N N", "match T T", "indel - T", "match UW1 UW1"]}
+{"config": "all_equal", "a": "EH1 N T T UW1", "b": "EH1 N T UW1", "distance": 500, "steps": ["match EH1 EH1", "match N N", "match T T", "indel T -", "match UW1 UW1"]}
+{"config": "all_equal", "a": "N N N", "b": "N", "distance": 1000, "steps": ["match N N", "indel N -", "indel N -"]}
+{"config": "all_equal", "a": "N", "b": "N N N", "distance": 1000, "steps": ["match N N", "indel - N", "indel - N"]}
+{"config": "all_equal", "a": "AE1 N D", "b": "AE1 N N D D", "distance": 1000, "steps": ["match AE1 AE1", "match N N", "indel - N", "indel - D", "match D D"]}
+{"config": "all_equal", "a": "AE1 N N D D", "b": "AE1 N D", "distance": 1000, "steps": ["match AE1 AE1", "match N N", "indel N -", "indel D -", "match D D"]}
+{"config": "all_equal", "a": "AE1 T", "b": "T AE1", "distance": 1000, "steps": ["sub AE1 T", "sub T AE1"]}
+{"config": "all_equal", "a": "T AE1", "b": "AE1 T", "distance": 1000, "steps": ["sub T AE1", "sub AE1 T"]}
+{"config": "all_equal", "a": "AE1", "b": "K", "distance": 500, "steps": ["sub AE1 K"]}
+{"config": "all_equal", "a": "K", "b": "AE1", "distance": 500, "steps": ["sub K AE1"]}
+{"config": "all_equal", "a": "M AE1 T", "b": "M T AE1", "distance": 1000, "steps": ["match M M", "sub AE1 T", "sub T AE1"]}
+{"config": "all_equal", "a": "M T AE1", "b": "M AE1 T", "distance": 1000, "steps": ["match M M", "sub T AE1", "sub AE1 T"]}
+{"config": "all_equal", "a": "AE1 AH0", "b": "AH0 AE1", "distance": 462, "steps": ["sub AE1 AH0", "sub AH0 AE1"]}
+{"config": "all_equal", "a": "AH0 AE1", "b": "AE1 AH0", "distance": 462, "steps": ["sub AH0 AE1", "sub AE1 AH0"]}
+{"config": "all_equal", "a": "K AE1", "b": "AE1 K", "distance": 1000, "steps": ["sub K AE1", "sub AE1 K"]}
+{"config": "all_equal", "a": "AE1 K", "b": "K AE1", "distance": 1000, "steps": ["sub AE1 K", "sub K AE1"]}
+{"config": "all_equal", "a": "UW1 P R IH2 N T", "b": "UW1 B AE1 G", "distance": 1923, "steps": ["match UW1 UW1", "sub P B", "indel R -", "sub IH2 AE1", "indel N -", "sub T G"]}
+{"config": "all_equal", "a": "UW1 B AE1 G", "b": "UW1 P R IH2 N T", "distance": 1923, "steps": ["match UW1 UW1", "sub B P", "indel - R", "sub AE1 IH2", "indel - N", "sub G T"]}
+{"config": "all_equal", "a": "AE1 T", "b": "AA1 T", "distance": 192, "steps": ["sub AE1 AA1", "match T T"]}
+{"config": "all_equal", "a": "AA1 T", "b": "AE1 T", "distance": 192, "steps": ["sub AA1 AE1", "match T T"]}
+{"config": "all_equal", "a": "B T", "b": "B IH1 T", "distance": 500, "steps": ["match B B", "indel - IH1", "match T T"]}
+{"config": "all_equal", "a": "B IH1 T", "b": "B T", "distance": 500, "steps": ["match B B", "indel IH1 -", "match T T"]}
+{"config": "all_equal", "a": "AY1 Z", "b": "AY1 Z IH0 Z", "distance": 1000, "steps": ["match AY1 AY1", "match Z Z", "indel - IH0", "indel - Z"]}
+{"config": "all_equal", "a": "AY1 Z IH0 Z", "b": "AY1 Z", "distance": 1000, "steps": ["match AY1 AY1", "match Z Z", "indel IH0 -", "indel Z -"]}
+{"config": "all_equal", "a": "OW1 L D", "b": "OW1 L", "distance": 500, "steps": ["match OW1 OW1", "match L L", "indel D -"]}
+{"config": "all_equal", "a": "OW1 L", "b": "OW1 L D", "distance": 500, "steps": ["match OW1 OW1", "match L L", "indel - D"]}
+{"config": "all_equal", "a": "IY1", "b": "IY1 T S", "distance": 1000, "steps": ["match IY1 IY1", "indel - T", "indel - S"]}
+{"config": "all_equal", "a": "IY1 T S", "b": "IY1", "distance": 1000, "steps": ["match IY1 IY1", "indel T -", "indel S -"]}
+{"config": "all_equal", "a": "AE1 F V", "b": "AE1 V F", "distance": 200, "steps": ["match AE1 AE1", "sub F V", "sub V F"]}
+{"config": "all_equal", "a": "AE1 V F", "b": "AE1 F V", "distance": 200, "steps": ["match AE1 AE1", "sub V F", "sub F V"]}
+{"config": "all_equal", "a": "AO1 R L", "b": "AO1 L R", "distance": 200, "steps": ["match AO1 AO1", "sub R L", "sub L R"]}
+{"config": "all_equal", "a": "AO1 L R", "b": "AO1 R L", "distance": 200, "steps": ["match AO1 AO1", "sub L R", "sub R L"]}
+{"config": "all_equal", "a": "AE1 W V", "b": "AE1 V W", "distance": 400, "steps": ["match AE1 AE1", "sub W V", "sub V W"]}
+{"config": "all_equal", "a": "AE1 V W", "b": "AE1 W V", "distance": 400, "steps": ["match AE1 AE1", "sub V W", "sub W V"]}
+{"config": "all_equal", "a": "AE1 JH Z", "b": "AE1 Z JH", "distance": 400, "steps": ["match AE1 AE1", "sub JH Z", "sub Z JH"]}
+{"config": "all_equal", "a": "AE1 Z JH", "b": "AE1 JH Z", "distance": 400, "steps": ["match AE1 AE1", "sub Z JH", "sub JH Z"]}
+{"config": "all_equal", "a": "AE1 R W", "b": "AE1 W R", "distance": 1000, "steps": ["match AE1 AE1", "right R W", "left W R"]}
+{"config": "all_equal", "a": "AE1 W R", "b": "AE1 R W", "distance": 1000, "steps": ["match AE1 AE1", "right W R", "left R W"]}
+{"config": "all_equal", "a": "AE1 CH F", "b": "AE1 F CH", "distance": 1000, "steps": ["match AE1 AE1", "right CH F", "left F CH"]}
+{"config": "all_equal", "a": "AE1 F CH", "b": "AE1 CH F", "distance": 1000, "steps": ["match AE1 AE1", "right F CH", "left CH F"]}
+{"config": "cheap_gaps", "a": "", "b": "", "distance": 0, "steps": []}
+{"config": "cheap_gaps", "a": "", "b": "K", "distance": 200, "steps": ["indel - K"]}
+{"config": "cheap_gaps", "a": "K", "b": "", "distance": 200, "steps": ["indel K -"]}
+{"config": "cheap_gaps", "a": "AE1", "b": "", "distance": 100000, "steps": ["indel AE1 -"]}
+{"config": "cheap_gaps", "a": "", "b": "AE1", "distance": 100000, "steps": ["indel - AE1"]}
+{"config": "cheap_gaps", "a": "", "b": "M AO1 S T", "distance": 100600, "steps": ["indel - M", "indel - AO1", "indel - S", "indel - T"]}
+{"config": "cheap_gaps", "a": "M AO1 S T", "b": "", "distance": 100600, "steps": ["indel M -", "indel AO1 -", "indel S -", "indel T -"]}
+{"config": "cheap_gaps", "a": "AE1 T", "b": "", "distance": 100200, "steps": ["indel AE1 -", "indel T -"]}
+{"config": "cheap_gaps", "a": "", "b": "AE1 T", "distance": 100200, "steps": ["indel - AE1", "indel - T"]}
+{"config": "cheap_gaps", "a": "M OW1 S T", "b": "M OW1 T S", "distance": 400, "steps": ["match M M", "match OW1 OW1", "right S T", "left T S"]}
+{"config": "cheap_gaps", "a": "M OW1 T S", "b": "M OW1 S T", "distance": 400, "steps": ["match M M", "match OW1 OW1", "right T S", "left S T"]}
+{"config": "cheap_gaps", "a": "AE1 K S", "b": "AE1 S K", "distance": 400, "steps": ["match AE1 AE1", "right K S", "left S K"]}
+{"config": "cheap_gaps", "a": "AE1 S K", "b": "AE1 K S", "distance": 400, "steps": ["match AE1 AE1", "right S K", "left K S"]}
+{"config": "cheap_gaps", "a": "S T", "b": "T S", "distance": 400, "steps": ["right S T", "left T S"]}
+{"config": "cheap_gaps", "a": "T S", "b": "S T", "distance": 400, "steps": ["right T S", "left S T"]}
+{"config": "cheap_gaps", "a": "S T R", "b": "T S R", "distance": 400, "steps": ["right S T", "left T S", "match R R"]}
+{"config": "cheap_gaps", "a": "T S R", "b": "S T R", "distance": 400, "steps": ["right T S", "left S T", "match R R"]}
+{"config": "cheap_gaps", "a": "K S T", "b": "S K T", "distance": 400, "steps": ["right K S", "left S K", "match T T"]}
+{"config": "cheap_gaps", "a": "S K T", "b": "K S T", "distance": 400, "steps": ["right S K", "left K S", "match T T"]}
+{"config": "cheap_gaps", "a": "M P S", "b": "S P M", "distance": 800, "steps": ["indel M -", "right P S", "left S P", "indel - M"]}
+{"config": "cheap_gaps", "a": "S P M", "b": "M P S", "distance": 800, "steps": ["indel S -", "right P M", "left M P", "indel - S"]}
+{"config": "cheap_gaps", "a": "S K S", "b": "K S K", "distance": 400, "steps": ["indel S -", "match K K", "match S S", "indel - K"]}
+{"config": "cheap_gaps", "a": "K S K", "b": "S K S", "distance": 400, "steps": ["indel K -", "match S S", "match K K", "indel - S"]}
+{"config": "cheap_gaps", "a": "T T", "b": "T T", "distance": 0, "steps": ["match T T", "match T T"]}
+{"config": "cheap_gaps", "a": "S T S T", "b": "T S T S", "distance": 400, "steps": ["indel S -", "match T T", "match S S", "match T T", "indel - S"]}
+{"config": "cheap_gaps", "a": "T S T S", "b": "S T S T", "distance": 400, "steps": ["indel T -", "match S S", "match T T", "match S S", "indel - T"]}
+{"config": "cheap_gaps", "a": "AE1 S T S", "b": "AE1 T S T", "distance": 400, "steps": ["match AE1 AE1", "indel S -", "match T T", "match S S", "indel - T"]}
+{"config": "cheap_gaps", "a": "AE1 T S T", "b": "AE1 S T S", "distance": 400, "steps": ["match AE1 AE1", "indel T -", "match S S", "match T T", "indel - S"]}
+{"config": "cheap_gaps", "a": "T EH1 N", "b": "T EH1 N N", "distance": 0, "steps": ["match T T", "match EH1 EH1", "match N N", "indel - N"]}
+{"config": "cheap_gaps", "a": "T EH1 N N", "b": "T EH1 N", "distance": 0, "steps": ["match T T", "match EH1 EH1", "match N N", "indel N -"]}
+{"config": "cheap_gaps", "a": "B B", "b": "B", "distance": 0, "steps": ["match B B", "indel B -"]}
+{"config": "cheap_gaps", "a": "B", "b": "B B", "distance": 0, "steps": ["match B B", "indel - B"]}
+{"config": "cheap_gaps", "a": "IH0 B", "b": "P T B B", "distance": 100200, "steps": ["indel - P", "sub IH0 T", "match B B", "indel - B"]}
+{"config": "cheap_gaps", "a": "P T B B", "b": "IH0 B", "distance": 100200, "steps": ["indel P -", "sub T IH0", "match B B", "indel B -"]}
+{"config": "cheap_gaps", "a": "B AE1 T IH0 NG", "b": "B AE1 T T IH0 NG", "distance": 0, "steps": ["match B B", "match AE1 AE1", "match T T", "indel - T", "match IH0 IH0", "match NG NG"]}
+{"config": "cheap_gaps", "a": "B AE1 T T IH0 NG", "b": "B AE1 T IH0 NG", "distance": 0, "steps": ["match B B", "match AE1 AE1", "match T T", "indel T -", "match IH0 IH0", "match NG NG"]}
+{"config": "cheap_gaps", "a": "EH1 N T UW1", "b": "EH1 N T T UW1", "distance": 0, "steps": ["match EH1 EH1", "match N N", "match T T", "indel - T", "match UW1 UW1"]}
+{"config": "cheap_gaps", "a": "EH1 N T T UW1", "b": "EH1 N T UW1", "distance": 0, "steps": ["match EH1 EH1", "match N N", "match T T", "indel T -", "match UW1 UW1"]}
+{"config": "cheap_gaps", "a": "N N N", "b": "N", "distance": 0, "steps": ["match N N", "indel N -", "indel N -"]}
+{"config": "cheap_gaps", "a": "N", "b": "N N N", "distance": 0, "steps": ["match N N", "indel - N", "indel - N"]}
+{"config": "cheap_gaps", "a": "AE1 N D", "b": "AE1 N N D D", "distance": 0, "steps": ["match AE1 AE1", "match N N", "indel - N", "match D D", "indel - D"]}
+{"config": "cheap_gaps", "a": "AE1 N N D D", "b": "AE1 N D", "distance": 0, "steps": ["match AE1 AE1", "match N N", "indel N -", "match D D", "indel D -"]}
+{"config": "cheap_gaps", "a": "AE1 T", "b": "T AE1", "distance": 400, "steps": ["indel - T", "match AE1 AE1", "indel T -"]}
+{"config": "cheap_gaps", "a": "T AE1", "b": "AE1 T", "distance": 400, "steps": ["indel T -", "match AE1 AE1", "indel - T"]}
+{"config": "cheap_gaps", "a": "AE1", "b": "K", "distance": 100000, "steps": ["sub AE1 K"]}
+{"config": "cheap_gaps", "a": "K", "b": "AE1", "distance": 100000, "steps": ["sub K AE1"]}
+{"config": "cheap_gaps", "a": "M AE1 T", "b": "M T AE1", "distance": 400, "steps": ["match M M", "indel - T", "match AE1 AE1", "indel T -"]}
+{"config": "cheap_gaps", "a": "M T AE1", "b": "M AE1 T", "distance": 400, "steps": ["match M M", "indel T -", "match AE1 AE1", "indel - T"]}
+{"config": "cheap_gaps", "a": "AE1 AH0", "b": "AH0 AE1", "distance": 3234, "steps": ["sub AE1 AH0", "sub AH0 AE1"]}
+{"config": "cheap_gaps", "a": "AH0 AE1", "b": "AE1 AH0", "distance": 3234, "steps": ["sub AH0 AE1", "sub AE1 AH0"]}
+{"config": "cheap_gaps", "a": "K AE1", "b": "AE1 K", "distance": 400, "steps": ["indel K -", "match AE1 AE1", "indel - K"]}
+{"config": "cheap_gaps", "a": "AE1 K", "b": "K AE1", "distance": 400, "steps": ["indel - K", "match AE1 AE1", "indel K -"]}
+{"config": "cheap_gaps", "a": "UW1 P R IH2 N T", "b": "UW1 B AE1 G", "distance": 3861, "steps": ["match UW1 UW1", "sub P B", "indel R -", "sub IH2 AE1", "indel N -", "sub T G"]}
+{"config": "cheap_gaps", "a": "UW1 B AE1 G", "b": "UW1 P R IH2 N T", "distance": 3861, "steps": ["match UW1 UW1", "sub B P", "indel - R", "sub AE1 IH2", "indel - N", "sub G T"]}
+{"config": "cheap_gaps", "a": "AE1 T", "b": "AA1 T", "distance": 1344, "steps": ["sub AE1 AA1", "match T T"]}
+{"config": "cheap_gaps", "a": "AA1 T", "b": "AE1 T", "distance": 1344, "steps": ["sub AA1 AE1", "match T T"]}
+{"config": "cheap_gaps", "a": "B T", "b": "B IH1 T", "distance": 100000, "steps": ["match B B", "indel - IH1", "match T T"]}
+{"config": "cheap_gaps", "a": "B IH1 T", "b": "B T", "distance": 100000, "steps": ["match B B", "indel IH1 -", "match T T"]}
+{"config": "cheap_gaps", "a": "AY1 Z", "b": "AY1 Z IH0 Z", "distance": 100200, "steps": ["match AY1 AY1", "match Z Z", "indel - IH0", "indel - Z"]}
+{"config": "cheap_gaps", "a": "AY1 Z IH0 Z", "b": "AY1 Z", "distance": 100200, "steps": ["match AY1 AY1", "match Z Z", "indel IH0 -", "indel Z -"]}
+{"config": "cheap_gaps", "a": "OW1 L D", "b": "OW1 L", "distance": 200, "steps": ["match OW1 OW1", "match L L", "indel D -"]}
+{"config": "cheap_gaps", "a": "OW1 L", "b": "OW1 L D", "distance": 200, "steps": ["match OW1 OW1", "match L L", "indel - D"]}
+{"config": "cheap_gaps", "a": "IY1", "b": "IY1 T S", "distance": 400, "steps": ["match IY1 IY1", "indel - T", "indel - S"]}
+{"config": "cheap_gaps", "a": "IY1 T S", "b": "IY1", "distance": 400, "steps": ["match IY1 IY1", "indel T -", "indel S -"]}
+{"config": "cheap_gaps", "a": "AE1 F V", "b": "AE1 V F", "distance": 200, "steps": ["match AE1 AE1", "sub F V", "sub V F"]}
+{"config": "cheap_gaps", "a": "AE1 V F", "b": "AE1 F V", "distance": 200, "steps": ["match AE1 AE1", "sub V F", "sub F V"]}
+{"config": "cheap_gaps", "a": "AO1 R L", "b": "AO1 L R", "distance": 200, "steps": ["match AO1 AO1", "sub R L", "sub L R"]}
+{"config": "cheap_gaps", "a": "AO1 L R", "b": "AO1 R L", "distance": 200, "steps": ["match AO1 AO1", "sub L R", "sub R L"]}
+{"config": "cheap_gaps", "a": "AE1 W V", "b": "AE1 V W", "distance": 400, "steps": ["match AE1 AE1", "right W V", "left V W"]}
+{"config": "cheap_gaps", "a": "AE1 V W", "b": "AE1 W V", "distance": 400, "steps": ["match AE1 AE1", "right V W", "left W V"]}
+{"config": "cheap_gaps", "a": "AE1 JH Z", "b": "AE1 Z JH", "distance": 400, "steps": ["match AE1 AE1", "right JH Z", "left Z JH"]}
+{"config": "cheap_gaps", "a": "AE1 Z JH", "b": "AE1 JH Z", "distance": 400, "steps": ["match AE1 AE1", "right Z JH", "left JH Z"]}
+{"config": "cheap_gaps", "a": "AE1 R W", "b": "AE1 W R", "distance": 400, "steps": ["match AE1 AE1", "right R W", "left W R"]}
+{"config": "cheap_gaps", "a": "AE1 W R", "b": "AE1 R W", "distance": 400, "steps": ["match AE1 AE1", "right W R", "left R W"]}
+{"config": "cheap_gaps", "a": "AE1 CH F", "b": "AE1 F CH", "distance": 400, "steps": ["match AE1 AE1", "right CH F", "left F CH"]}
+{"config": "cheap_gaps", "a": "AE1 F CH", "b": "AE1 CH F", "distance": 400, "steps": ["match AE1 AE1", "right F CH", "left CH F"]}
+{"config": "all_zero", "a": "", "b": "", "distance": 0, "steps": []}
+{"config": "all_zero", "a": "", "b": "K", "distance": 0, "steps": ["indel - K"]}
+{"config": "all_zero", "a": "K", "b": "", "distance": 0, "steps": ["indel K -"]}
+{"config": "all_zero", "a": "AE1", "b": "", "distance": 0, "steps": ["indel AE1 -"]}
+{"config": "all_zero", "a": "", "b": "AE1", "distance": 0, "steps": ["indel - AE1"]}
+{"config": "all_zero", "a": "", "b": "M AO1 S T", "distance": 0, "steps": ["indel - M", "indel - AO1", "indel - S", "indel - T"]}
+{"config": "all_zero", "a": "M AO1 S T", "b": "", "distance": 0, "steps": ["indel M -", "indel AO1 -", "indel S -", "indel T -"]}
+{"config": "all_zero", "a": "AE1 T", "b": "", "distance": 0, "steps": ["indel AE1 -", "indel T -"]}
+{"config": "all_zero", "a": "", "b": "AE1 T", "distance": 0, "steps": ["indel - AE1", "indel - T"]}
+{"config": "all_zero", "a": "M OW1 S T", "b": "M OW1 T S", "distance": 0, "steps": ["match M M", "match OW1 OW1", "sub S T", "sub T S"]}
+{"config": "all_zero", "a": "M OW1 T S", "b": "M OW1 S T", "distance": 0, "steps": ["match M M", "match OW1 OW1", "sub T S", "sub S T"]}
+{"config": "all_zero", "a": "AE1 K S", "b": "AE1 S K", "distance": 0, "steps": ["match AE1 AE1", "sub K S", "sub S K"]}
+{"config": "all_zero", "a": "AE1 S K", "b": "AE1 K S", "distance": 0, "steps": ["match AE1 AE1", "sub S K", "sub K S"]}
+{"config": "all_zero", "a": "S T", "b": "T S", "distance": 0, "steps": ["sub S T", "sub T S"]}
+{"config": "all_zero", "a": "T S", "b": "S T", "distance": 0, "steps": ["sub T S", "sub S T"]}
+{"config": "all_zero", "a": "S T R", "b": "T S R", "distance": 0, "steps": ["sub S T", "sub T S", "match R R"]}
+{"config": "all_zero", "a": "T S R", "b": "S T R", "distance": 0, "steps": ["sub T S", "sub S T", "match R R"]}
+{"config": "all_zero", "a": "K S T", "b": "S K T", "distance": 0, "steps": ["sub K S", "sub S K", "match T T"]}
+{"config": "all_zero", "a": "S K T", "b": "K S T", "distance": 0, "steps": ["sub S K", "sub K S", "match T T"]}
+{"config": "all_zero", "a": "M P S", "b": "S P M", "distance": 0, "steps": ["sub M S", "match P P", "sub S M"]}
+{"config": "all_zero", "a": "S P M", "b": "M P S", "distance": 0, "steps": ["sub S M", "match P P", "sub M S"]}
+{"config": "all_zero", "a": "S K S", "b": "K S K", "distance": 0, "steps": ["sub S K", "sub K S", "sub S K"]}
+{"config": "all_zero", "a": "K S K", "b": "S K S", "distance": 0, "steps": ["sub K S", "sub S K", "sub K S"]}
+{"config": "all_zero", "a": "T T", "b": "T T", "distance": 0, "steps": ["match T T", "match T T"]}
+{"config": "all_zero", "a": "S T S T", "b": "T S T S", "distance": 0, "steps": ["sub S T", "sub T S", "sub S T", "sub T S"]}
+{"config": "all_zero", "a": "T S T S", "b": "S T S T", "distance": 0, "steps": ["sub T S", "sub S T", "sub T S", "sub S T"]}
+{"config": "all_zero", "a": "AE1 S T S", "b": "AE1 T S T", "distance": 0, "steps": ["match AE1 AE1", "sub S T", "sub T S", "sub S T"]}
+{"config": "all_zero", "a": "AE1 T S T", "b": "AE1 S T S", "distance": 0, "steps": ["match AE1 AE1", "sub T S", "sub S T", "sub T S"]}
+{"config": "all_zero", "a": "T EH1 N", "b": "T EH1 N N", "distance": 0, "steps": ["match T T", "match EH1 EH1", "match N N", "indel - N"]}
+{"config": "all_zero", "a": "T EH1 N N", "b": "T EH1 N", "distance": 0, "steps": ["match T T", "match EH1 EH1", "match N N", "indel N -"]}
+{"config": "all_zero", "a": "B B", "b": "B", "distance": 0, "steps": ["match B B", "indel B -"]}
+{"config": "all_zero", "a": "B", "b": "B B", "distance": 0, "steps": ["match B B", "indel - B"]}
+{"config": "all_zero", "a": "IH0 B", "b": "P T B B", "distance": 0, "steps": ["indel - P", "indel - T", "sub IH0 B", "match B B"]}
+{"config": "all_zero", "a": "P T B B", "b": "IH0 B", "distance": 0, "steps": ["indel P -", "indel T -", "sub B IH0", "match B B"]}
+{"config": "all_zero", "a": "B AE1 T IH0 NG", "b": "B AE1 T T IH0 NG", "distance": 0, "steps": ["match B B", "match AE1 AE1", "match T T", "indel - T", "match IH0 IH0", "match NG NG"]}
+{"config": "all_zero", "a": "B AE1 T T IH0 NG", "b": "B AE1 T IH0 NG", "distance": 0, "steps": ["match B B", "match AE1 AE1", "match T T", "indel T -", "match IH0 IH0", "match NG NG"]}
+{"config": "all_zero", "a": "EH1 N T UW1", "b": "EH1 N T T UW1", "distance": 0, "steps": ["match EH1 EH1", "match N N", "match T T", "indel - T", "match UW1 UW1"]}
+{"config": "all_zero", "a": "EH1 N T T UW1", "b": "EH1 N T UW1", "distance": 0, "steps": ["match EH1 EH1", "match N N", "match T T", "indel T -", "match UW1 UW1"]}
+{"config": "all_zero", "a": "N N N", "b": "N", "distance": 0, "steps": ["match N N", "indel N -", "indel N -"]}
+{"config": "all_zero", "a": "N", "b": "N N N", "distance": 0, "steps": ["match N N", "indel - N", "indel - N"]}
+{"config": "all_zero", "a": "AE1 N D", "b": "AE1 N N D D", "distance": 0, "steps": ["match AE1 AE1", "match N N", "indel - N", "indel - D", "match D D"]}
+{"config": "all_zero", "a": "AE1 N N D D", "b": "AE1 N D", "distance": 0, "steps": ["match AE1 AE1", "match N N", "indel N -", "indel D -", "match D D"]}
+{"config": "all_zero", "a": "AE1 T", "b": "T AE1", "distance": 0, "steps": ["sub AE1 T", "sub T AE1"]}
+{"config": "all_zero", "a": "T AE1", "b": "AE1 T", "distance": 0, "steps": ["sub T AE1", "sub AE1 T"]}
+{"config": "all_zero", "a": "AE1", "b": "K", "distance": 0, "steps": ["sub AE1 K"]}
+{"config": "all_zero", "a": "K", "b": "AE1", "distance": 0, "steps": ["sub K AE1"]}
+{"config": "all_zero", "a": "M AE1 T", "b": "M T AE1", "distance": 0, "steps": ["match M M", "sub AE1 T", "sub T AE1"]}
+{"config": "all_zero", "a": "M T AE1", "b": "M AE1 T", "distance": 0, "steps": ["match M M", "sub T AE1", "sub AE1 T"]}
+{"config": "all_zero", "a": "AE1 AH0", "b": "AH0 AE1", "distance": 0, "steps": ["sub AE1 AH0", "sub AH0 AE1"]}
+{"config": "all_zero", "a": "AH0 AE1", "b": "AE1 AH0", "distance": 0, "steps": ["sub AH0 AE1", "sub AE1 AH0"]}
+{"config": "all_zero", "a": "K AE1", "b": "AE1 K", "distance": 0, "steps": ["sub K AE1", "sub AE1 K"]}
+{"config": "all_zero", "a": "AE1 K", "b": "K AE1", "distance": 0, "steps": ["sub AE1 K", "sub K AE1"]}
+{"config": "all_zero", "a": "UW1 P R IH2 N T", "b": "UW1 B AE1 G", "distance": 0, "steps": ["match UW1 UW1", "indel P -", "indel R -", "sub IH2 B", "sub N AE1", "sub T G"]}
+{"config": "all_zero", "a": "UW1 B AE1 G", "b": "UW1 P R IH2 N T", "distance": 0, "steps": ["match UW1 UW1", "indel - P", "indel - R", "sub B IH2", "sub AE1 N", "sub G T"]}
+{"config": "all_zero", "a": "AE1 T", "b": "AA1 T", "distance": 0, "steps": ["sub AE1 AA1", "match T T"]}
+{"config": "all_zero", "a": "AA1 T", "b": "AE1 T", "distance": 0, "steps": ["sub AA1 AE1", "match T T"]}
+{"config": "all_zero", "a": "B T", "b": "B IH1 T", "distance": 0, "steps": ["match B B", "indel - IH1", "match T T"]}
+{"config": "all_zero", "a": "B IH1 T", "b": "B T", "distance": 0, "steps": ["match B B", "indel IH1 -", "match T T"]}
+{"config": "all_zero", "a": "AY1 Z", "b": "AY1 Z IH0 Z", "distance": 0, "steps": ["match AY1 AY1", "match Z Z", "indel - IH0", "indel - Z"]}
+{"config": "all_zero", "a": "AY1 Z IH0 Z", "b": "AY1 Z", "distance": 0, "steps": ["match AY1 AY1", "match Z Z", "indel IH0 -", "indel Z -"]}
+{"config": "all_zero", "a": "OW1 L D", "b": "OW1 L", "distance": 0, "steps": ["match OW1 OW1", "match L L", "indel D -"]}
+{"config": "all_zero", "a": "OW1 L", "b": "OW1 L D", "distance": 0, "steps": ["match OW1 OW1", "match L L", "indel - D"]}
+{"config": "all_zero", "a": "IY1", "b": "IY1 T S", "distance": 0, "steps": ["match IY1 IY1", "indel - T", "indel - S"]}
+{"config": "all_zero", "a": "IY1 T S", "b": "IY1", "distance": 0, "steps": ["match IY1 IY1", "indel T -", "indel S -"]}
+{"config": "all_zero", "a": "AE1 F V", "b": "AE1 V F", "distance": 0, "steps": ["match AE1 AE1", "sub F V", "sub V F"]}
+{"config": "all_zero", "a": "AE1 V F", "b": "AE1 F V", "distance": 0, "steps": ["match AE1 AE1", "sub V F", "sub F V"]}
+{"config": "all_zero", "a": "AO1 R L", "b": "AO1 L R", "distance": 0, "steps": ["match AO1 AO1", "sub R L", "sub L R"]}
+{"config": "all_zero", "a": "AO1 L R", "b": "AO1 R L", "distance": 0, "steps": ["match AO1 AO1", "sub L R", "sub R L"]}
+{"config": "all_zero", "a": "AE1 W V", "b": "AE1 V W", "distance": 0, "steps": ["match AE1 AE1", "sub W V", "sub V W"]}
+{"config": "all_zero", "a": "AE1 V W", "b": "AE1 W V", "distance": 0, "steps": ["match AE1 AE1", "sub V W", "sub W V"]}
+{"config": "all_zero", "a": "AE1 JH Z", "b": "AE1 Z JH", "distance": 0, "steps": ["match AE1 AE1", "sub JH Z", "sub Z JH"]}
+{"config": "all_zero", "a": "AE1 Z JH", "b": "AE1 JH Z", "distance": 0, "steps": ["match AE1 AE1", "sub Z JH", "sub JH Z"]}
+{"config": "all_zero", "a": "AE1 R W", "b": "AE1 W R", "distance": 0, "steps": ["match AE1 AE1", "sub R W", "sub W R"]}
+{"config": "all_zero", "a": "AE1 W R", "b": "AE1 R W", "distance": 0, "steps": ["match AE1 AE1", "sub W R", "sub R W"]}
+{"config": "all_zero", "a": "AE1 CH F", "b": "AE1 F CH", "distance": 0, "steps": ["match AE1 AE1", "sub CH F", "sub F CH"]}
+{"config": "all_zero", "a": "AE1 F CH", "b": "AE1 CH F", "distance": 0, "steps": ["match AE1 AE1", "sub F CH", "sub CH F"]}
+{"config": "all_equal", "a": "B", "b": "T T", "distance": 900, "steps": ["indel - T", "sub B T"]}
+{"config": "all_equal", "a": "B AE1 AE1", "b": "AH0 N S AH0 T", "distance": 2231, "steps": ["sub B AH0", "indel - N", "indel - S", "sub AE1 AH0", "sub AE1 T"]}
+{"config": "all_equal", "a": "T T", "b": "AE1", "distance": 1000, "steps": ["indel T -", "sub T AE1"]}
+{"config": "all_equal", "a": "K T S T T S", "b": "N N N K AH0 B", "distance": 3900, "steps": ["indel - N", "indel - N", "indel - N", "match K K", "indel T -", "indel S -", "sub T AH0", "sub T B", "indel S -"]}
+{"config": "all_equal", "a": "B N B IY1 N AH0 AE1", "b": "IY1 T K AH0", "distance": 2900, "steps": ["indel B -", "sub N IY1", "sub B T", "sub IY1 K", "indel N -", "match AH0 AH0", "indel AE1 -"]}
+{"config": "all_equal", "a": "IY1 AE1 S IY1 S K", "b": "K AH0 N S N", "distance": 2731, "steps": ["sub IY1 K", "sub AE1 AH0", "indel S -", "sub IY1 N", "match S S", "sub K N"]}
+{"config": "all_equal", "a": "T S K B S", "b": "N T T S B N", "distance": 2500, "steps": ["indel - N", "indel - T", "match T T", "match S S", "indel K -", "match B B", "sub S N"]}
+{"config": "all_equal", "a": "T T S", "b": "T N N T T N N", "distance": 3000, "steps": ["match T T", "indel - N", "indel - N", "indel - T", "match T T", "indel - N", "sub S N"]}
+{"config": "all_equal", "a": "AE1 IY1 N S N", "b": "AH0 S S S N K", "distance": 2231, "steps": ["sub AE1 AH0", "sub IY1 S", "sub N S", "match S S", "match N N", "indel - K"]}
+{"config": "all_equal", "a": "S T T N B", "b": "K N AH0 N", "distance": 2300, "steps": ["indel S -", "indel T -", "sub T K", "match N N", "sub B AH0", "indel - N"]}
+{"config": "all_equal", "a": "T T AH0", "b": "S N T", "distance": 2000, "steps": ["indel - S", "sub T N", "match T T", "indel AH0 -"]}
+{"config": "all_equal", "a": "AH0 AH0 AH0 AH0 AH0 S T", "b": "K AH0 B T", "distance": 2500, "steps": ["indel AH0 -", "indel AH0 -", "sub AH0 K", "match AH0 AH0", "sub AH0 B", "indel S -", "match T T"]}
+{"config": "all_equal", "a": "AE1 B T T T N T", "b": "N AH0 B T T S T", "distance": 2231, "steps": ["indel - N", "sub AE1 AH0", "match B B", "indel T -", "match T T", "match T T", "sub N S", "match T T"]}
+{"config": "all_equal", "a": "S K T B B AE1 K", "b": "AE1 N S S AH0 N", "distance": 4500, "steps": ["indel - AE1", "indel - N", "match S S", "indel K -", "indel T -", "indel B -", "indel B -", "sub AE1 S", "sub K AH0", "indel - N"]}
+{"config": "all_equal", "a": "S N S", "b": "AE1 T AE1 S AH0 N", "distance": 2500, "steps": ["sub S AE1", "indel - T", "sub N AE1", "match S S", "indel - AH0", "indel - N"]}
+{"config": "all_equal", "a": "N K T K T N", "b": "IY1 S N IY1 N T", "distance": 3500, "steps": ["indel - IY1", "indel - S", "match N N", "indel K -", "indel T -", "sub K IY1", "right T N", "left N T"]}
+{"config": "all_equal", "a": "AE1 N B", "b": "B K S B N", "distance": 2500, "steps": ["indel - B", "indel - K", "sub AE1 S", "right N B", "left B N"]}
+{"config": "all_equal", "a": "N T N S", "b": "S T N N S N T", "distance": 2500, "steps": ["indel - S", "right N T", "left T N", "match N N", "match S S", "indel - N", "indel - T"]}
+{"config": "all_equal", "a": "B AE1 IY1 T T B IY1", "b": "N AE1", "distance": 3385, "steps": ["indel B -", "indel AE1 -", "sub IY1 N", "indel T -", "indel T -", "indel B -", "sub IY1 AE1"]}
+{"config": "all_equal", "a": "AH0 AE1 B K K N AE1", "b": "S S T", "distance": 3300, "steps": ["sub AH0 S", "sub AE1 S", "indel B -", "indel K -", "sub K T", "indel N -", "indel AE1 -"]}
+{"config": "all_equal", "a": "S S AE1 S", "b": "S B N AH0 B K S", "distance": 2500, "steps": ["match S S", "indel - B", "indel - N", "sub S AH0", "indel - B", "sub AE1 K", "match S S"]}
+{"config": "all_equal", "a": "N N", "b": "S T T", "distance": 2500, "steps": ["indel - S", "sub N T", "sub N T"]}
+{"config": "all_equal", "a": "S AE1 N AH0 AH0 N", "b": "AH0 S B N T", "distance": 2500, "steps": ["indel - AH0", "match S S", "sub AE1 B", "match N N", "indel AH0 -", "sub AH0 T", "indel N -"]}
+{"config": "all_equal", "a": "N N N S", "b": "IY1 AH0", "distance": 2000, "steps": ["indel N -", "indel N -", "sub N IY1", "sub S AH0"]}
+{"config": "all_equal", "a": "N S B S N", "b": "N T T", "distance": 2400, "steps": ["match N N", "indel S -", "sub B T", "indel S -", "sub N T"]}
+{"config": "cheap_gaps", "a": "T T K N", "b": "N B T", "distance": 800, "steps": ["indel T -", "indel T -", "indel K -", "match N N", "indel - B", "indel - T"]}
+{"config": "cheap_gaps", "a": "AE1 S", "b": "AE1 AH0 S B S IY1 K", "distance": 200600, "steps": ["match AE1 AE1", "indel - AH0", "indel - S", "indel - B", "match S S", "indel - IY1", "indel - K"]}
+{"config": "cheap_gaps", "a": "S", "b": "B N S N S T S", "distance": 1200, "steps": ["indel - B", "indel - N", "indel - S", "indel - N", "indel - S", "indel - T", "match S S"]}
+{"config": "cheap_gaps", "a": "N", "b": "T", "distance": 400, "steps": ["indel N -", "indel - T"]}
+{"config": "cheap_gaps", "a": "AE1 AE1 T T S T T", "b": "K S T AE1", "distance": 101000, "steps": ["indel - K", "indel - S", "sub AE1 T", "match AE1 AE1", "indel T -", "indel T -", "indel S -", "indel T -", "indel T -"]}
+{"config": "cheap_gaps", "a": "S AH0 B B", "b": "T T T S K N N", "distance": 100600, "steps": ["indel - T", "indel - T", "indel - T", "match S S", "sub AH0 K", "indel B -", "indel B -", "indel - N", "indel - N"]}
+{"config": "cheap_gaps", "a": "S T B T S S T", "b": "K N N", "distance": 1500, "steps": ["indel S -", "indel T -", "indel B -", "indel T -", "indel S -", "indel S -", "sub T K", "indel - N", "indel - N"]}
+{"config": "cheap_gaps", "a": "T IY1 T N B K N", "b": "S AH0 K K T N", "distance": 4161, "steps": ["indel T -", "indel - S", "sub IY1 AH0", "indel T -", "indel N -", "indel B -", "match K K", "indel - K", "indel - T", "match N N"]}
+{"config": "cheap_gaps", "a": "AH0 T N N", "b": "N AH0 S S S S AE1", "distance": 100600, "steps": ["indel - N", "match AH0 AH0", "indel T -", "indel - S", "indel - S", "indel - S", "indel - S", "sub N AE1", "indel N -"]}
+{"config": "cheap_gaps", "a": "T B T N S N", "b": "IY1 S B", "distance": 101000, "steps": ["indel T -", "indel B -", "indel T -", "sub N IY1", "match S S", "indel N -", "indel - B"]}
+{"config": "cheap_gaps", "a": "K S S AH0 B", "b": "AH0 B T T T S B", "distance": 1000, "steps": ["indel K -", "indel S -", "indel S -", "match AH0 AH0", "indel - B", "indel - T", "indel - T", "indel - T", "indel - S", "match B B"]}
+{"config": "cheap_gaps", "a": "S", "b": "AE1 IY1", "distance": 200000, "steps": ["indel - AE1", "sub S IY1"]}
+{"config": "cheap_gaps", "a": "B N T S IY1", "b": "S N S T IY1 S", "distance": 1000, "steps": ["indel B -", "indel - S", "match N N", "right T S", "left S T", "match IY1 IY1", "indel - S"]}
+{"config": "cheap_gaps", "a": "IY1", "b": "S K K AH0 AH0", "distance": 103361, "steps": ["indel - S", "indel - K", "indel - K", "indel - AH0", "sub IY1 AH0"]}
+{"config": "cheap_gaps", "a": "IY1 T S T AE1", "b": "T", "distance": 200400, "steps": ["indel IY1 -", "indel T -", "indel S -", "match T T", "indel AE1 -"]}
+{"config": "cheap_gaps", "a": "N T IY1 B IY1 S AH0", "b": "IY1", "distance": 200800, "steps": ["indel N -", "indel T -", "indel IY1 -", "indel B -", "match IY1 IY1", "indel S -", "indel AH0 -"]}
+{"config": "cheap_gaps", "a": "K N AE1 AH0 S AE1", "b": "N K AE1 S T", "distance": 200400, "steps": ["right K N", "left N K", "match AE1 AE1", "indel AH0 -", "match S S", "sub AE1 T"]}
+{"config": "cheap_gaps", "a": "N S", "b": "S N N T T", "distance": 600, "steps": ["right N S", "left S N", "indel - N", "indel - T", "indel - T"]}
+{"config": "cheap_gaps", "a": "N B AH0 T S", "b": "AH0 N", "distance": 1000, "steps": ["indel N -", "indel B -", "match AH0 AH0", "indel T -", "indel S -", "indel - N"]}
+{"config": "cheap_gaps", "a": "AH0 B", "b": "N K N AH0 K K", "distance": 1000, "steps": ["indel - N", "indel - K", "indel - N", "match AH0 AH0", "indel B -", "indel - K", "indel - K"]}
+{"config": "cheap_gaps", "a": "T S", "b": "AE1 S S S B S IY1", "distance": 200400, "steps": ["sub T AE1", "indel - S", "indel - S", "indel - S", "indel - B", "match S S", "indel - IY1"]}
+{"config": "cheap_gaps", "a": "AE1 IY1 AH0 AE1 N", "b": "B", "distance": 400200, "steps": ["indel AE1 -", "indel IY1 -", "indel AH0 -", "sub AE1 B", "indel N -"]}
+{"config": "cheap_gaps", "a": "AH0 AE1 N", "b": "T AH0 B S T S S", "distance": 101000, "steps": ["indel - T", "match AH0 AH0", "sub AE1 B", "indel N -", "indel - S", "indel - T", "indel - S", "indel - S"]}
+{"config": "cheap_gaps", "a": "S K T T T T", "b": "IY1 B", "distance": 100600, "steps": ["indel S -", "indel K -", "sub T IY1", "indel T -", "indel T -", "indel T -", "indel - B"]}
+{"config": "cheap_gaps", "a": "T AH0", "b": "B N AH0", "distance": 600, "steps": ["sub T B", "indel - N", "match AH0 AH0"]}
+{"config": "all_zero", "a": "T IY1", "b": "K N N AE1", "distance": 0, "steps": ["indel - K", "indel - N", "sub T N", "sub IY1 AE1"]}
+{"config": "all_zero", "a": "IY1 T", "b": "AH0 N AH0 AE1", "distance": 0, "steps": ["indel - AH0", "indel - N", "sub IY1 AH0", "sub T AE1"]}
+{"config": "all_zero", "a": "S N AH0 T T AE1 N", "b": "B B AH0 S AH0 K", "distance": 0, "steps": ["indel S -", "sub N B", "sub AH0 B", "sub T AH0", "sub T S", "sub AE1 AH0", "sub N K"]}
+{"config": "all_zero", "a": "AE1 K T T", "b": "IY1 N T K N", "distance": 0, "steps": ["indel - IY1", "sub AE1 N", "sub K T", "sub T K", "sub T N"]}
+{"config": "all_zero", "a": "AH0 N T S S", "b": "T AE1 T N B N", "distance": 0, "steps": ["indel - T", "sub AH0 AE1", "sub N T", "sub T N", "sub S B", "sub S N"]}
+{"config": "all_zero", "a": "T K S S K", "b": "B AH0 T T AE1 K S", "distance": 0, "steps": ["indel - B", "indel - AH0", "match T T", "sub K T", "sub S AE1", "sub S K", "sub K S"]}
+{"config": "all_zero", "a": "AH0 IY1", "b": "B S S IY1", "distance": 0, "steps": ["indel - B", "indel - S", "sub AH0 S", "match IY1 IY1"]}
+{"config": "all_zero", "a": "B T", "b": "S B T IY1", "distance": 0, "steps": ["indel - S", "indel - B", "sub B T", "sub T IY1"]}
+{"config": "all_zero", "a": "B S", "b": "K AE1 T S B AH0 S", "distance": 0, "steps": ["indel - K", "indel - AE1", "indel - T", "indel - S", "indel - B", "sub B AH0", "match S S"]}
+{"config": "all_zero", "a": "N N", "b": "S", "distance": 0, "steps": ["indel N -", "sub N S"]}
+{"config": "all_zero", "a": "AE1 S", "b": "T S S N S N AE1", "distance": 0, "steps": ["indel - T", "indel - S", "indel - S", "indel - N", "indel - S", "sub AE1 N", "sub S AE1"]}
+{"config": "all_zero", "a": "AH0 K AE1", "b": "T B S IY1", "distance": 0, "steps": ["indel - T", "sub AH0 B", "sub K S", "sub AE1 IY1"]}
+{"config": "all_zero", "a": "N K IY1 S S", "b": "S", "distance": 0, "steps": ["indel N -", "indel K -", "indel IY1 -", "indel S -", "match S S"]}
+{"config": "all_zero", "a": "T T AH0 K", "b": "AH0 S B AH0 N S", "distance": 0, "steps": ["indel - AH0", "indel - S", "sub T B", "sub T AH0", "sub AH0 N", "sub K S"]}
+{"config": "all_zero", "a": "AE1 N AE1 S S K", "b": "T B", "distance": 0, "steps": ["indel AE1 -", "indel N -", "indel AE1 -", "indel S -", "sub S T", "sub K B"]}
+{"config": "default", "a": "B N T N AH0 AH0 B", "b": "N S T IY1 K N", "distance": 105461, "steps": ["indel B -", "match N N", "indel - S", "match T T", "indel N -", "sub AH0 IY1", "sub AH0 K", "sub B N"]}
+{"config": "default", "a": "N S", "b": "AE1 AE1 AE1 S AH0 S", "distance": 400500, "steps": ["indel - AE1", "indel - AE1", "indel - AE1", "indel - S", "sub N AH0", "match S S"]}
+{"config": "default", "a": "S S IY1 K", "b": "B K AE1 T B", "distance": 5095, "steps": ["indel S -", "indel S -", "indel - B", "indel - K", "sub IY1 AE1", "sub K T", "indel - B"]}
+{"config": "default", "a": "K", "b": "N S", "distance": 1500, "steps": ["indel - N", "sub K S"]}
+{"config": "default", "a": "S B T AE1 B", "b": "N AE1 T", "distance": 2400, "steps": ["indel S -", "indel B -", "sub T N", "match AE1 AE1", "sub B T"]}
+{"config": "default", "a": "S", "b": "AH0 S N IY1 K S", "distance": 201500, "steps": ["indel - AH0", "indel - S", "indel - N", "indel - IY1", "indel - K", "match S S"]}
+{"config": "default", "a": "T T N S N T K", "b": "N K B B", "distance": 2700, "steps": ["indel T -", "indel T -", "indel N -", "indel S -", "match N N", "sub T K", "sub K B", "indel - B"]}
+{"config": "default", "a": "AH0 N T AH0", "b": "AH0 T AH0 AH0 N", "distance": 101000, "steps": ["match AH0 AH0", "indel N -", "match T T", "indel - AH0", "match AH0 AH0", "indel - N"]}
+{"config": "default", "a": "B AE1 S S T N", "b": "AE1 K N T", "distance": 1800, "steps": ["indel B -", "match AE1 AE1", "indel S -", "indel S -", "indel - K", "right T N", "left N T"]}
+{"config": "default", "a": "T AE1 S N IY1 N", "b": "T AH0 B B", "distance": 103217, "steps": ["match T T", "sub AE1 AH0", "indel S -", "indel N -", "sub IY1 B", "indel N -", "indel - B"]}
+{"config": "default", "a": "S S N AE1 N AH0", "b": "N", "distance": 201100, "steps": ["indel S -", "indel S -", "indel N -", "indel AE1 -", "match N N", "indel AH0 -"]}
+{"config": "default", "a": "AE1 S AE1 S N T", "b": "S T N", "distance": 200700, "steps": ["indel AE1 -", "indel S -", "indel AE1 -", "match S S", "right N T", "left T N"]}
+{"config": "default", "a": "IY1 S S N", "b": "N N S", "distance": 100700, "steps": ["sub IY1 N", "indel S -", "right S N", "left N S"]}
+{"config": "default", "a": "K N S", "b": "AE1 N T S N", "distance": 101000, "steps": ["indel - AE1", "indel - N", "sub K T", "right N S", "left S N"]}
+{"config": "default", "a": "S T T N IY1 N S", "b": "T S N", "distance": 101300, "steps": ["indel S -", "match T T", "indel T -", "indel N -", "indel IY1 -", "right N S", "left S N"]}
+{"config": "default", "a": "AE1 S P AA2 R", "b": "AH1 K S T ER0", "distance": 8300, "steps": ["sub AE1 AH1", "indel - K", "match S S", "sub P T", "sub AA2 ER0", "indel R -"]}
+{"config": "default", "a": "IY0 M AY1 R", "b": "IH1 M N IY0 Z", "distance": 6078, "steps": ["sub IY0 IH1", "match M M", "indel - N", "sub AY1 IY0", "sub R Z"]}
+{"config": "default", "a": "ER1 T AH0 N AH0 N T", "b": "AA1 R V AH0 L", "distance": 105117, "steps": ["indel ER1 -", "indel T -", "sub AH0 AA1", "indel - R", "sub N V", "match AH0 AH0", "indel N -", "sub T L"]}
+{"config": "default", "a": "EH1 T JH AH0 N", "b": "EH1 L IH0 K AH0 L Z", "distance": 102500, "steps": ["match EH1 EH1", "indel - L", "sub T IH0", "sub JH K", "match AH0 AH0", "indel - L", "sub N Z"]}
+{"config": "default", "a": "AE1 S IH0 R Z", "b": "EH1 V ER0 IH0 JH D", "distance": 102944, "steps": ["sub AE1 EH1", "sub S V", "indel - ER0", "match IH0 IH0", "indel R -", "sub Z JH", "indel - D"]}
+{"config": "default", "a": "IH2 R AA1 K", "b": "IY1 Z N IH0 NG", "distance": 7078, "steps": ["sub IH2 IY1", "indel - Z", "sub R N", "sub AA1 IH0", "sub K NG"]}
+{"config": "default", "a": "EH1 L T EH2 K", "b": "IH1 JH IY0", "distance": 4361, "steps": ["sub EH1 IH1", "indel L -", "sub T JH", "sub EH2 IY0", "indel K -"]}
+{"config": "default", "a": "EH1 R IH0 K T ER0 AY2 Z IH0 NG", "b": "EH0 N EH1 L", "distance": 304883, "steps": ["sub EH1 EH0", "indel R -", "indel IH0 -", "indel K -", "indel T -", "indel ER0 -", "sub AY2 N", "indel Z -", "sub IH0 EH1", "sub NG L"]}
+{"config": "default", "a": "OW1 L D F AY2 N", "b": "OW0 D EY1 L", "distance": 3883, "steps": ["sub OW1 OW0", "indel L -", "match D D", "indel F -", "sub AY2 EY1", "sub N L"]}
+{"config": "default", "a": "AE0 Z AH0 Z", "b": "IH1 S ER0 EY2 T", "distance": 107022, "steps": ["sub AE0 IH1", "sub Z S", "indel - ER0", "sub AH0 EY2", "sub Z T"]}
+{"config": "default", "a": "AE0 S IY1 F", "b": "EH1 L P ER0 Z", "distance": 10517, "steps": ["sub AE0 EH1", "indel - L", "sub S P", "sub IY1 ER0", "sub F Z"]}
+{"config": "default", "a": "AH0 P W AY1 D", "b": "AO1 R M AW2 S", "distance": 7078, "steps": ["sub AH0 AO1", "indel P -", "sub W R", "indel - M", "sub AY1 AW2", "sub D S"]}
+{"config": "default", "a": "IY1 P AE0 K IH0 JH D", "b": "IY0 L AO1 N", "distance": 105727, "steps": ["sub IY1 IY0", "indel P -", "sub AE0 L", "indel K -", "sub IH0 AO1", "indel JH -", "sub D N"]}
+{"config": "default", "a": "AH0 M EY2", "b": "OW1 Z AH0 L AH0 N", "distance": 104961, "steps": ["indel - OW1", "indel - Z", "match AH0 AH0", "sub M L", "sub EY2 AH0", "indel - N"]}
+{"config": "default", "a": "ER0 S T EY1 D", "b": "IH0 S T R IY1 T", "distance": 7327, "steps": ["sub ER0 IH0", "match S S", "match T T", "indel - R", "sub EY1 IY1", "sub D T"]}
+{"config": "default", "a": "AE1 K AH0 N B AW2 M", "b": "EH1 JH IH0 S T R AA2 R", "distance": 8783, "steps": ["sub AE1 EH1", "sub K JH", "sub AH0 IH0", "sub N S", "sub B T", "indel - R", "sub AW2 AA2", "sub M R"]}
+{"config": "default", "a": "AE1 SH K AA2 R D Z", "b": "IH1 S P L IY0", "distance": 9700, "steps": ["sub AE1 IH1", "sub SH S", "sub K P", "indel - L", "sub AA2 IY0", "indel R -", "indel D -", "indel Z -"]}
+{"config": "default", "a": "AH0 V AO1 R D", "b": "IH1 CH UW0 EY2 T IH0 D", "distance": 204334, "steps": ["sub AH0 IH1", "sub V CH", "sub AO1 UW0", "indel - EY2", "indel - T", "sub R IH0", "match D D"]}
+{"config": "default", "a": "AE1 CH IY0 OW0", "b": "EH1 K IH0 NG", "distance": 103088, "steps": ["sub AE1 EH1", "sub CH K", "sub IY0 IH0", "sub OW0 NG"]}
+{"config": "default", "a": "OW0 V AH0 S T", "b": "AY1 S AO2 R", "distance": 7822, "steps": ["sub OW0 AY1", "sub V S", "sub AH0 AO2", "indel S -", "sub T R"]}
+{"config": "default", "a": "AH0 T IY2 Z", "b": "AA1 L IH0 NG Z W ER2 TH", "distance": 105734, "steps": ["sub AH0 AA1", "sub T L", "sub IY2 IH0", "indel - NG", "match Z Z", "indel - W", "indel - ER2", "indel - TH"]}
+{"config": "default", "a": "AH1 V ER0 AH2 P", "b": "UW1 T IH2 K", "distance": 105139, "steps": ["sub AH1 UW1", "indel V -", "sub ER0 T", "sub AH2 IH2", "sub P K"]}
+{"config": "default", "a": "EH1 B R AY0 N", "b": "OW1 L B AE2 K S", "distance": 9500, "steps": ["sub EH1 OW1", "indel - L", "match B B", "indel R -", "sub AY0 AE2", "indel - K", "sub N S"]}
+{"config": "default", "a": "AE1 JH AH0 S T R EY2 T", "b": "EH1 M AH0 N IY2", "distance": 6188, "steps": ["sub AE1 EH1", "sub JH M", "match AH0 AH0", "indel S -", "indel T -", "sub R N", "sub EY2 IY2", "indel T -"]}
+{"config": "default", "a": "AO1 S T R IH0 CH", "b": "IH1 P B IH2 L D ER0", "distance": 105661, "steps": ["sub AO1 IH1", "indel S -", "sub T P", "sub R B", "sub IH0 IH2", "indel - L", "sub CH D", "indel - ER0"]}
+{"config": "default", "a": "AE0 T OW1 D", "b": "ER0 S W IY2 T", "distance": 11288, "steps": ["sub AE0 ER0", "indel - S", "sub T W", "sub OW1 IY2", "sub D T"]}
+{"config": "default", "a": "AE1 T IH0 K AH0 L IY0", "b": "AA1 R JH R IY0", "distance": 202444, "steps": ["sub AE1 AA1", "indel T -", "sub IH0 R", "indel K -", "sub AH0 JH", "sub L R", "match IY0 IY0"]}
+{"config": "default", "a": "AH0 B EY1 S T", "b": "IH1 T K AE2 T", "distance": 5978, "steps": ["sub AH0 IH1", "sub B T", "indel - K", "sub EY1 AE2", "indel S -", "match T T"]}
+{"config": "default", "a": "EH0 T R AH0", "b": "IH1 N IH0 K AH0 M", "distance": 103144, "steps": ["indel - IH1", "indel - N", "sub EH0 IH0", "sub T K", "indel R -", "match AH0 AH0", "indel - M"]}
+{"config": "default", "a": "AY1 L D HH UH2 D Z", "b": "AE1 N W AH0 Z", "distance": 6812, "steps": ["sub AY1 AE1", "indel - N", "sub L W", "indel D -", "indel HH -", "sub UH2 AH0", "indel D -", "match Z Z"]}
+{"config": "default", "a": "IH1 N S T AH0 N T", "b": "AW1 T K AH2 M Z", "distance": 5761, "steps": ["sub IH1 AW1", "indel N -", "indel S -", "match T T", "indel - K", "sub AH0 AH2", "sub N M", "sub T Z"]}
+{"config": "default", "a": "AO2 R JH IY1 N", "b": "UW1 Z L EH2 T ER0 Z", "distance": 105334, "steps": ["sub AO2 UW1", "indel - Z", "sub R L", "indel JH -", "sub IY1 EH2", "indel - T", "sub N ER0", "indel - Z"]}
+{"config": "default", "a": "AH0 K AH0 N", "b": "AA1 P B ER0 G", "distance": 7756, "steps": ["sub AH0 AA1", "sub K P", "indel - B", "sub AH0 ER0", "sub N G"]}
+{"config": "default", "a": "AA1 R K L IY2 Z IH0 Z", "b": "AY2 N IY0", "distance": 106227, "steps": ["sub AA1 AY2", "indel R -", "indel K -", "sub L N", "sub IY2 IY0", "indel Z -", "indel IH0 -", "indel Z -"]}
+{"config": "default", "a": "AE1 NG K IH0 W IH0 T S", "b": "ER1 K L AW0", "distance": 110078, "steps": ["sub AE1 ER1", "indel NG -", "match K K", "indel IH0 -", "sub W L", "sub IH0 AW0", "indel T -", "indel S -"]}
+{"config": "default", "a": "OY1 AH0 N T", "b": "AA1 D L OW2", "distance": 9000, "steps": ["sub OY1 AA1", "indel - D", "indel - L", "sub AH0 OW2", "indel N -", "indel T -"]}
+{"config": "default", "a": "UW1 T R IY0 AH0 N T S", "b": "AO1 R AH0 L EH2 R IY0 Z", "distance": 107756, "steps": ["sub UW1 AO1", "indel T -", "match R R", "sub IY0 AH0", "indel - L", "sub AH0 EH2", "sub N R", "sub T IY0", "sub S Z"]}
+{"config": "default", "a": "IH0 T AH0 N Z", "b": "EH1 K AH0 N D AY2 T", "distance": 102917, "steps": ["sub IH0 EH1", "sub T K", "match AH0 AH0", "match N N", "indel - D", "sub Z AY2", "indel - T"]}
+{"config": "default", "a": "AA1 N K AO2 R D", "b": "EH1 L S IH0 K AA2 L", "distance": 105639, "steps": ["sub AA1 EH1", "indel - L", "indel - S", "sub N IH0", "match K K", "sub AO2 AA2", "sub R L", "indel D -"]}
+{"config": "default", "a": "ER1 P AH0 N T S", "b": "AE1 S T AH0 N EY2 T IH0 D", "distance": 206683, "steps": ["sub ER1 AE1", "indel - S", "sub P T", "match AH0 AH0", "match N N", "indel - EY2", "match T T", "sub S IH0", "indel - D"]}
+{"config": "default", "a": "OW1 S T AH0 JH", "b": "IY1 L IH0 S T EY2 T", "distance": 106822, "steps": ["indel - IY1", "indel - L", "sub OW1 IH0", "match S S", "match T T", "sub AH0 EY2", "sub JH T"]}
+{"config": "default", "a": "AH1 N D ER0 S EH2 L IH0 NG", "b": "OW1 N OW2", "distance": 207656, "steps": ["sub AH1 OW1", "match N N", "indel D -", "indel ER0 -", "indel S -", "indel EH2 -", "indel L -", "sub IH0 OW2", "indel NG -"]}
+{"config": "default", "a": "IH1 F T ER0", "b": "IH2 R Z AO1 L D", "distance": 8322, "steps": ["sub IH1 IH2", "indel - R", "sub F Z", "indel T -", "sub ER0 AO1", "indel - L", "indel - D"]}
+{"config": "default", "a": "OW1 S T ER0 AH0 L", "b": "AA1 R L T", "distance": 203617, "steps": ["indel OW1 -", "indel S -", "indel T -", "indel ER0 -", "sub AH0 AA1", "indel - R", "match L L", "indel - T"]}
+{"config": "default", "a": "EH1 S AH0 F AY2 D", "b": "EH1 P IH0 L EH2 P S IY0", "distance": 106878, "steps": ["match EH1 EH1", "indel - P", "sub S IH0", "indel - L", "sub AH0 EH2", "indel - P", "sub F S", "sub AY2 IY0", "indel D -"]}
+{"config": "default", "a": "AA0 G AO1 N", "b": "AA1 T S AH0", "distance": 3283, "steps": ["sub AA0 AA1", "sub G T", "indel - S", "sub AO1 AH0", "indel N -"]}
+{"config": "default", "a": "AA1 R K AH0 B L IY0", "b": "OW0 T ER2 F", "distance": 109066, "steps": ["sub AA1 OW0", "indel R -", "sub K T", "sub AH0 ER2", "indel B -", "indel L -", "sub IY0 F"]}
+{"config": "default", "a": "IH1 NG D AW2", "b": "AO1 N T EY0", "distance": 7400, "steps": ["sub IH1 AO1", "sub NG N", "sub D T", "sub AW2 EY0"]}
+{"config": "default", "a": "AH1 V ER0 N ER0 Z", "b": "AH1 JH AH0 L", "distance": 105539, "steps": ["match AH1 AH1", "sub V JH", "sub ER0 AH0", "indel N -", "sub ER0 L", "indel Z -"]}
+{"config": "default", "a": "EH1 R N IY0 AH0", "b": "IH0 F AH0 L", "distance": 103117, "steps": ["sub EH1 IH0", "indel R -", "indel N -", "sub IY0 F", "match AH0 AH0", "indel - L"]}

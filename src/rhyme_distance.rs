@@ -1,3 +1,5 @@
+pub use crate::align::{AlignmentStep, OwnedAlignmentStep, TranspositionDirection};
+use crate::align::{GapModel, ScoreTable, Trace, linear};
 use crate::consonant_distance::{
     AnalyticConsonantDistance, AnalyticConsonantDistanceConfig, ConsonantDistanceScorer,
 };
@@ -66,117 +68,6 @@ impl Default for RhymeDistanceConfig {
     }
 }
 
-const INF: u32 = u32::MAX / 2;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TranspositionDirection {
-    /// This phoneme matches a later/right column in the other sequence.
-    Right,
-    /// This phoneme matches an earlier/left column in the other sequence.
-    Left,
-}
-
-impl TranspositionDirection {
-    pub fn as_char(self) -> char {
-        match self {
-            TranspositionDirection::Right => '\\',
-            TranspositionDirection::Left => '/',
-        }
-    }
-}
-
-// Todo: should this be folded into Edit enum?
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AlignmentStep<'a> {
-    Match {
-        a: &'a Phoneme,
-        b: &'a Phoneme,
-    },
-    Substitution {
-        a: &'a Phoneme,
-        b: &'a Phoneme,
-    },
-    Indel {
-        a: Option<&'a Phoneme>,
-        b: Option<&'a Phoneme>,
-    },
-    Transposition {
-        a: &'a Phoneme,
-        b: &'a Phoneme,
-        direction: TranspositionDirection,
-    },
-}
-
-/// An owned [`AlignmentStep`], for keeping an alignment alive beyond the
-/// borrowed slices it was computed from (e.g. inside cached analysis results).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OwnedAlignmentStep {
-    Match {
-        a: Phoneme,
-        b: Phoneme,
-    },
-    Substitution {
-        a: Phoneme,
-        b: Phoneme,
-    },
-    Indel {
-        a: Option<Phoneme>,
-        b: Option<Phoneme>,
-    },
-    Transposition {
-        a: Phoneme,
-        b: Phoneme,
-        direction: TranspositionDirection,
-    },
-}
-
-impl OwnedAlignmentStep {
-    /// The first-sequence phoneme of this step (`None` for a gap).
-    pub fn a(&self) -> Option<&Phoneme> {
-        match self {
-            OwnedAlignmentStep::Match { a, .. }
-            | OwnedAlignmentStep::Substitution { a, .. }
-            | OwnedAlignmentStep::Transposition { a, .. } => Some(a),
-            OwnedAlignmentStep::Indel { a, .. } => a.as_ref(),
-        }
-    }
-
-    /// The second-sequence phoneme of this step (`None` for a gap).
-    pub fn b(&self) -> Option<&Phoneme> {
-        match self {
-            OwnedAlignmentStep::Match { b, .. }
-            | OwnedAlignmentStep::Substitution { b, .. }
-            | OwnedAlignmentStep::Transposition { b, .. } => Some(b),
-            OwnedAlignmentStep::Indel { b, .. } => b.as_ref(),
-        }
-    }
-}
-
-impl From<AlignmentStep<'_>> for OwnedAlignmentStep {
-    fn from(step: AlignmentStep<'_>) -> Self {
-        match step {
-            AlignmentStep::Match { a, b } => OwnedAlignmentStep::Match {
-                a: a.clone(),
-                b: b.clone(),
-            },
-            AlignmentStep::Substitution { a, b } => OwnedAlignmentStep::Substitution {
-                a: a.clone(),
-                b: b.clone(),
-            },
-            AlignmentStep::Indel { a, b } => OwnedAlignmentStep::Indel {
-                a: a.cloned(),
-                b: b.cloned(),
-            },
-            AlignmentStep::Transposition { a, b, direction } => OwnedAlignmentStep::Transposition {
-                a: a.clone(),
-                b: b.clone(),
-                direction,
-            },
-        }
-    }
-}
-
-// TODO: should this be folded into DpOutput?
 #[derive(Debug, PartialEq, Eq)]
 pub struct RhymeDistanceOutput<'a> {
     score: u32,
@@ -194,6 +85,12 @@ impl<'a> RhymeDistanceOutput<'a> {
     }
 }
 
+/// Scores rhyme distance on the shared alignment engine
+/// ([`crate::align`]): a global, linear-gap alignment with adjacent
+/// consonant transpositions, in the `score = −cost` profile.
+///
+/// The phoneme engines are consulted once per configuration, to fill a
+/// [`ScoreTable`] of negated pair costs; every setter rebuilds it.
 #[derive(Clone)]
 pub struct RhymeDistanceScorer<V = VowelHexGraph, C = AnalyticConsonantDistance>
 where
@@ -203,20 +100,48 @@ where
     vowel_scorer: V,
     consonant_scorer: C,
     config: RhymeDistanceConfig,
+    /// `−(engine distance × coefficient)` for same-class pairs,
+    /// `−vowel_to_consonant_mismatch` across classes.
+    table: ScoreTable,
+    /// Open 0; extend = the per-phoneme indel penalties.
+    gaps: GapModel,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Edit {
-    Start,
-    GapInFirst,
-    GapInSecond,
-    Substitute,
-    Transpose,
+/// The rhyme profile's pair scores: negated costs.
+fn rhyme_table<V, C>(vowels: &V, consonants: &C, config: &RhymeDistanceConfig) -> ScoreTable
+where
+    V: VowelDistanceScorer,
+    C: ConsonantDistanceScorer,
+{
+    ScoreTable::from_fn(|p, q| {
+        let cost = match (p, q) {
+            (Phoneme::Vowel(v1), Phoneme::Vowel(v2)) => {
+                i64::from(vowels.distance(v1, v2)) * i64::from(config.vowel_coefficient)
+            }
+            (Phoneme::Consonant(c1), Phoneme::Consonant(c2)) => {
+                i64::from(consonants.distance(c1, c2)) * i64::from(config.consonant_coefficient)
+            }
+            _ => i64::from(config.vowel_to_consonant_mismatch),
+        };
+        -cost
+    })
 }
 
-struct DpOutput {
-    score: u32,
-    edits: Option<Vec<Vec<Edit>>>,
+/// The rhyme profile's gaps: linear, each gapped phoneme paying its indel
+/// penalty.
+fn rhyme_gaps(config: &RhymeDistanceConfig) -> GapModel {
+    GapModel {
+        open: 0,
+        open_repeated_consonant: 0,
+        extend_vowel: i64::from(config.vowel_indel_penalty),
+        extend_consonant: i64::from(config.consonant_indel_penalty),
+        extend_repeated_consonant: i64::from(config.consonant_repeated_penalty),
+    }
+}
+
+/// A non-negative engine cost as a rhyme distance, saturating at the limit.
+fn cost_to_u32(cost: i64) -> u32 {
+    u32::try_from(cost).unwrap_or(u32::MAX)
 }
 
 impl RhymeDistanceScorer<VowelHexGraph, AnalyticConsonantDistance> {
@@ -238,6 +163,7 @@ impl RhymeDistanceScorer<VowelHexGraph, AnalyticConsonantDistance> {
 
     pub fn set_vowel_config(&mut self, config: VowelHexGraphConfig) {
         self.vowel_scorer = VowelHexGraph::with_config(config);
+        self.rebuild();
     }
 
     pub fn consonant_config(&self) -> AnalyticConsonantDistanceConfig {
@@ -246,6 +172,7 @@ impl RhymeDistanceScorer<VowelHexGraph, AnalyticConsonantDistance> {
 
     pub fn set_consonant_config(&mut self, config: AnalyticConsonantDistanceConfig) {
         self.consonant_scorer = AnalyticConsonantDistance::with_config(config);
+        self.rebuild();
     }
 }
 
@@ -285,10 +212,13 @@ where
         consonant_scorer: C,
         config: RhymeDistanceConfig,
     ) -> Self {
+        let table = rhyme_table(&vowel_scorer, &consonant_scorer, &config);
         Self {
             vowel_scorer,
             consonant_scorer,
             config,
+            table,
+            gaps: rhyme_gaps(&config),
         }
     }
 
@@ -298,246 +228,58 @@ where
 
     pub fn set_config(&mut self, config: RhymeDistanceConfig) {
         self.config = config;
+        self.rebuild();
+    }
+
+    /// Re-derives the score table and gap model from the engines and config.
+    /// Every setter must call this, or scoring keeps the old costs.
+    fn rebuild(&mut self) {
+        self.table = rhyme_table(&self.vowel_scorer, &self.consonant_scorer, &self.config);
+        self.gaps = rhyme_gaps(&self.config);
     }
 
     fn gap_penalty(&self, phoneme: &Phoneme, prev: Option<&Phoneme>) -> u32 {
-        match phoneme {
-            Phoneme::Vowel(_) => self.config.vowel_indel_penalty,
-            Phoneme::Consonant(c) => {
-                if let Some(Phoneme::Consonant(p)) = prev
-                    && c.phoneme == p.phoneme
-                {
-                    return self.config.consonant_repeated_penalty;
-                }
-
-                self.config.consonant_indel_penalty
-            }
-        }
+        cost_to_u32(self.gaps.open_cost(phoneme, prev) + self.gaps.extend_cost(phoneme, prev))
     }
 
     fn substitution_score(&self, p1: &Phoneme, p2: &Phoneme) -> u32 {
-        match (p1, p2) {
-            (Phoneme::Vowel(v1), Phoneme::Vowel(v2)) => {
-                self.vowel_scorer.distance(v1, v2) * self.config.vowel_coefficient
-            }
-            (Phoneme::Consonant(c1), Phoneme::Consonant(c2)) => {
-                self.consonant_scorer.distance(c1, c2) * self.config.consonant_coefficient
-            }
-            _ => self.config.vowel_to_consonant_mismatch,
-        }
+        cost_to_u32(-self.table.score(p1, p2))
     }
 
-    /// Picks the cheapest candidate; on equal cost the lower `priority` wins.
-    /// Priorities (match 0 < transposition 1 < costly substitution 2 <
-    /// insertion 3 < deletion 4) prefer the most "structural" explanation in
-    /// the traceback and make it deterministic regardless of the order in
-    /// which candidates are offered. Only the traceback is affected — every
-    /// candidate has a distinct priority, so the chosen *cost* never depends
-    /// on this ordering.
-    fn choose_edit(best: &mut (u32, u8, Edit), cost: u32, priority: u8, edit: Edit) {
-        if cost < best.0 || (cost == best.0 && priority < best.1) {
-            *best = (cost, priority, edit);
-        }
-    }
-
-    /// Optimal-string-alignment (OSA) distance: substitutions,
-    /// context-aware gaps, and adjacent consonant transpositions.
-    ///
-    /// Matrix layout: `dists[i][j]` is the minimal cost of aligning `s1[..i]`
-    /// with `s2[..j]`; the answer is `dists[len1][len2]`.
-    ///
-    /// OSA caveats (deliberate): unlike unrestricted Damerau-Levenshtein, no
-    /// substring is edited more than once, and the result is not a metric (the
-    /// triangle inequality can fail). Both are fine for rhyme scoring, where
-    /// every comparison stands alone.
-    fn run_dp(
+    /// Runs the engine's linear global recurrence on `s1` vs `s2`, with
+    /// `prefix_context` as the gap context before each first phoneme.
+    fn run(
         &self,
         s1: &[Phoneme],
         s2: &[Phoneme],
         prefix_context: Option<&Phoneme>,
         trace: bool,
-    ) -> DpOutput {
-        let len1 = s1.len();
-        let len2 = s2.len();
-
-        let mut dists = vec![vec![0u32; len2 + 1]; len1 + 1];
-        let mut edits = trace.then(|| vec![vec![Edit::Start; len2 + 1]; len1 + 1]);
-
-        // Boundaries: aligning a prefix of one sequence against nothing is the
-        // running sum of its gap penalties. The gap context (for the repeated-
-        // consonant discount) is the previous phoneme in the same sequence;
-        // `prefix_context` stands in before element 0.
-        for i in 1..=len1 {
-            let prev = if i > 1 {
-                Some(&s1[i - 2])
-            } else {
-                prefix_context
-            };
-            dists[i][0] = dists[i - 1][0].saturating_add(self.gap_penalty(&s1[i - 1], prev));
-            if let Some(edits) = edits.as_mut() {
-                edits[i][0] = Edit::GapInSecond;
-            }
-        }
-        for j in 1..=len2 {
-            let prev = if j > 1 {
-                Some(&s2[j - 2])
-            } else {
-                prefix_context
-            };
-            dists[0][j] = dists[0][j - 1].saturating_add(self.gap_penalty(&s2[j - 1], prev));
-            if let Some(edits) = edits.as_mut() {
-                edits[0][j] = Edit::GapInFirst;
-            }
-        }
-
-        for (i1, p1) in s1.iter().enumerate() {
-            for (i2, p2) in s2.iter().enumerate() {
-                // This iteration writes dists[i][j]: s1[..i] vs s2[..j], with
-                // p1 = s1[i-1] and p2 = s2[j-1] the phonemes being consumed.
-                let (i, j) = (i1 + 1, i2 + 1);
-
-                let del_cost = self.gap_penalty(
-                    p1,
-                    if i1 > 0 {
-                        s1.get(i1 - 1)
-                    } else {
-                        prefix_context
-                    },
-                );
-                let ins_cost = self.gap_penalty(
-                    p2,
-                    if i2 > 0 {
-                        s2.get(i2 - 1)
-                    } else {
-                        prefix_context
-                    },
-                );
-                let sub_cost = self.substitution_score(p1, p2);
-
-                let mut best = (INF, u8::MAX, Edit::Start);
-
-                // Adjacent consonant transposition (optimal string alignment):
-                // the pair s1[i1-1],s1[i1] mirrors s2[i2-1],s2[i2]. Only
-                // immediately adjacent consonants qualify, so this steps back
-                // two cells in each sequence.
-                if i1 > 0
-                    && i2 > 0
-                    && matches!(
-                        (&s1[i1 - 1], p1),
-                        (Phoneme::Consonant(_), Phoneme::Consonant(_))
-                    )
-                    && p1 == &s2[i2 - 1]
-                    && &s1[i1 - 1] == p2
-                {
-                    let trans_cost =
-                        dists[i - 2][j - 2].saturating_add(self.config.transposition_cost);
-                    Self::choose_edit(&mut best, trans_cost, 1, Edit::Transpose);
-                }
-
-                Self::choose_edit(
-                    &mut best,
-                    dists[i - 1][j - 1].saturating_add(sub_cost),
-                    if sub_cost == 0 { 0 } else { 2 },
-                    Edit::Substitute,
-                );
-                // GapInFirst advances through s2 (inserts p2), so it costs
-                // ins_cost; GapInSecond advances through s1 (deletes p1), so it
-                // costs del_cost.
-                Self::choose_edit(
-                    &mut best,
-                    dists[i][j - 1].saturating_add(ins_cost),
-                    3,
-                    Edit::GapInFirst,
-                );
-                Self::choose_edit(
-                    &mut best,
-                    dists[i - 1][j].saturating_add(del_cost),
-                    4,
-                    Edit::GapInSecond,
-                );
-
-                dists[i][j] = best.0;
-                if let Some(edits) = edits.as_mut() {
-                    edits[i][j] = best.2;
-                }
-            }
-        }
-
-        DpOutput {
-            score: dists[len1][len2],
-            edits,
-        }
+    ) -> Trace {
+        linear::align_global(
+            s1,
+            s2,
+            &self.table,
+            &self.gaps,
+            prefix_context,
+            prefix_context,
+            Some(i64::from(self.config.transposition_cost)),
+            trace,
+        )
     }
 
-    fn backtrack_alignment<'a>(
-        s1: &'a [Phoneme],
-        s2: &'a [Phoneme],
-        edits: &[Vec<Edit>],
-    ) -> Vec<AlignmentStep<'a>> {
-        let mut i = s1.len();
-        let mut j = s2.len();
-        let mut alignment = Vec::new();
-
-        while i > 0 || j > 0 {
-            match edits[i][j] {
-                Edit::Start => break,
-                Edit::GapInFirst => {
-                    j -= 1;
-                    alignment.push(AlignmentStep::Indel {
-                        a: None,
-                        b: Some(&s2[j]),
-                    });
-                }
-                Edit::GapInSecond => {
-                    i -= 1;
-                    alignment.push(AlignmentStep::Indel {
-                        a: Some(&s1[i]),
-                        b: None,
-                    });
-                }
-                Edit::Substitute => {
-                    i -= 1;
-                    j -= 1;
-                    let step = if s1[i] == s2[j] {
-                        AlignmentStep::Match {
-                            a: &s1[i],
-                            b: &s2[j],
-                        }
-                    } else {
-                        AlignmentStep::Substitution {
-                            a: &s1[i],
-                            b: &s2[j],
-                        }
-                    };
-                    alignment.push(step);
-                }
-                Edit::Transpose => {
-                    // Adjacent swap of s1[i-2],s1[i-1] with s2[j-2],s2[j-1]:
-                    // emit the later crossing pair then the earlier one (the
-                    // final reverse orders them earlier-first), and step back
-                    // two cells in each sequence.
-                    let i1 = i - 1;
-                    let i2 = j - 1;
-
-                    alignment.push(AlignmentStep::Transposition {
-                        a: &s1[i1],
-                        b: &s2[i2],
-                        direction: TranspositionDirection::Left,
-                    });
-                    alignment.push(AlignmentStep::Transposition {
-                        a: &s1[i1 - 1],
-                        b: &s2[i2 - 1],
-                        direction: TranspositionDirection::Right,
-                    });
-
-                    i -= 2;
-                    j -= 2;
-                }
-            }
-        }
-
-        alignment.reverse();
-        alignment
+    /// The length of the common prefix of `slice1` and `slice2`, and the
+    /// phoneme just before the end of it (the gap context it leaves behind).
+    fn common_prefix<'p>(
+        slice1: &'p [Phoneme],
+        slice2: &[Phoneme],
+    ) -> (usize, Option<&'p Phoneme>) {
+        let prefix = slice1
+            .iter()
+            .zip(slice2.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let prefix_context = prefix.checked_sub(1).map(|last| &slice1[last]);
+        (prefix, prefix_context)
     }
 
     pub fn align<'a>(
@@ -563,38 +305,20 @@ where
         //   => repeated discount) is only reachable when the DP may match B
         //   with the first B of the pair. `dp_matches_exhaustive_oracle`
         //   guards this.
-        let prefix = slice1
-            .iter()
-            .zip(slice2.iter())
-            .take_while(|(a, b)| a == b)
-            .count();
-        let prefix_context: Option<&Phoneme> = if prefix > 0 {
-            Some(&slice1[prefix - 1])
-        } else {
-            None
-        };
+        let (prefix, prefix_context) = Self::common_prefix(slice1, slice2);
         let s1 = &slice1[prefix..];
         let s2 = &slice2[prefix..];
 
-        let dp = self.run_dp(s1, s2, prefix_context, true);
-        let edits = dp
-            .edits
-            .as_ref()
-            .expect("traceback edits are recorded when trace is enabled");
-        let mut alignment = Self::backtrack_alignment(s1, s2, edits);
-
-        for i in (0..prefix).rev() {
-            alignment.insert(
-                0,
-                AlignmentStep::Match {
-                    a: &slice1[i],
-                    b: &slice2[i],
-                },
-            );
-        }
+        let trace = self.run(s1, s2, prefix_context, true);
+        let mut alignment: Vec<AlignmentStep<'a>> = slice1[..prefix]
+            .iter()
+            .zip(&slice2[..prefix])
+            .map(|(a, b)| AlignmentStep::Match { a, b })
+            .collect();
+        alignment.extend(trace.steps(s1, s2));
 
         RhymeDistanceOutput {
-            score: dp.score,
+            score: cost_to_u32(-trace.score),
             alignment,
         }
     }
@@ -602,17 +326,7 @@ where
     pub fn distance(&self, slice1: &[Phoneme], slice2: &[Phoneme]) -> u32 {
         // Strip common prefix. Only the prefix: see `align` for why prefix
         // stripping preserves optimality while suffix stripping would not.
-        let prefix = slice1
-            .iter()
-            .zip(slice2.iter())
-            .take_while(|(a, b)| a == b)
-            .count();
-        // The element just before the stripped region — needed for repeated-consonant gap detection.
-        let prefix_context: Option<&Phoneme> = if prefix > 0 {
-            Some(&slice1[prefix - 1])
-        } else {
-            None
-        };
+        let (prefix, prefix_context) = Self::common_prefix(slice1, slice2);
         let s1 = &slice1[prefix..];
         let s2 = &slice2[prefix..];
 
@@ -625,7 +339,7 @@ where
             (s1, s2)
         };
 
-        self.run_dp(s1, s2, prefix_context, false).score
+        cost_to_u32(-self.run(s1, s2, prefix_context, false).score)
     }
 
     /// The per-step cost of an alignment, parallel to `steps`, such that the
@@ -758,6 +472,8 @@ mod tests {
         vowel_distance::VowelDistanceScorer,
     };
     use std::sync::OnceLock;
+
+    const INF: u32 = u32::MAX / 2;
 
     struct FixedVowelScorer;
 
@@ -929,7 +645,7 @@ mod tests {
     /// sharing the cost primitives but none of the machinery under test: no
     /// matrix, no boundary initialization, no prefix/suffix stripping, no
     /// slice swapping.
-    /// This is an *implementation* oracle — it validates that run_dp and its
+    /// This is an *implementation* oracle — it validates that the DP and its
     /// wrappers faithfully minimize the OSA recurrence, not that OSA is the
     /// right model. Exponential, so only for tiny inputs.
     fn oracle_distance(
@@ -1052,14 +768,14 @@ mod tests {
 
     #[test]
     fn interior_gap_charges_the_gapped_phoneme() {
-        // Regression: run_dp once swapped the insert/delete gap costs, charging
+        // Regression: the DP once swapped the insert/delete gap costs, charging
         // an interior gap by the *other* sequence's current phoneme. That let a
         // vowel be indel'd for the price of an adjacent consonant, dodging the
         // vowel_indel_penalty (e.g. "blueprint" vs "new bag" scored far too low).
         //
         // Matching consonants on both sides force the vowel to be an interior
-        // gap. Both orientations are checked: inserting the vowel exercises the
-        // GapInFirst branch, deleting it exercises GapInSecond.
+        // gap. Both orientations are checked: inserting the vowel skips a `b`
+        // phoneme, deleting it skips an `a` phoneme.
         let s = scorer();
         let vowel_indel = config().vowel_indel_penalty;
         assert_eq!(

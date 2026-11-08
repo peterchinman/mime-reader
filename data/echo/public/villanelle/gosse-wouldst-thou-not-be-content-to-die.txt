@@ -1,0 +1,31 @@
+form: villanelle
+title: Villanelle (Wouldst thou not be content to die)
+author: Edmund Gosse
+year: 1887
+source: https://www.gutenberg.org/ebooks/45736
+notes: text from Gleeson White, ed., Ballades and Rondeaus, Chants Royal, Sestinas, Villanelles, &c. (1887), Gutenberg #45736; the B refrain drifts (passes by / hath passed by) and the final A line is reworded
+
+Wouldst thou not be content to die
+When low-hung fruit is hardly clinging
+And golden autumn passes by?
+
+Beneath this delicate rose-gray sky,
+While sunset bells are faintly ringing,
+Wouldst thou not be content to die?
+
+For wintry webs of mist on high
+Out of the muffled earth are springing,
+And golden Autumn passes by.
+
+O now when pleasures fade and fly,
+And Hope her southward flight is winging,
+Wouldst thou not be content to die?
+
+Lest Winter come, with wailing cry
+His cruel icy bondage bringing,
+When golden Autumn hath passed by;
+
+And thou with many a tear and sigh,
+While life her wasted hands is wringing,
+Shall pray in vain for leave to die
+When golden Autumn hath passed by.

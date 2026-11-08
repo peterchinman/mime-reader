@@ -2,6 +2,12 @@
 
 use std::rc::Rc;
 
+mod echo;
+pub use echo::{
+    AlignerKindDto, EchoAlignmentDto, EchoConfigDto, EchoFormResultDto, EchoTemplateDto,
+    default_echo_config,
+};
+
 use serde::{Deserialize, Serialize};
 use tsify::Tsify;
 use wasm_bindgen::prelude::*;
@@ -37,6 +43,8 @@ pub fn default_rhyme_comparison_config() -> RhymeComparisonConfigDto {
 pub struct WasmAnalyzer {
     dict: Rc<ConfiguredDictionary<CmuDictionary>>,
     scorer: Rc<Scorer>,
+    /// Echo's own config; its detector is built per call (see `wasm::echo`).
+    echo_config: crate::EchoConfig,
 }
 
 #[wasm_bindgen]
@@ -57,6 +65,7 @@ impl WasmAnalyzer {
         Ok(WasmAnalyzer {
             dict: Rc::new(dict),
             scorer: Rc::new(Scorer::new()),
+            echo_config: crate::EchoConfig::default(),
         })
     }
 
@@ -1353,7 +1362,7 @@ mod tests {
         include_bytes!("../data/CMUdict/cmudict-0.7b")
     }
 
-    fn analyzer() -> WasmAnalyzer {
+    pub(super) fn analyzer() -> WasmAnalyzer {
         WasmAnalyzer::new(dict_bytes(), None).expect("embedded dictionary should parse")
     }
 

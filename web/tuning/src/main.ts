@@ -10,12 +10,19 @@ import init, {
 	type VowelConfigDto,
 } from "mime-reader";
 import rhymePairTests from "../../../rhyme_pair_tests.json";
+import {
+	configIsModified,
+	configOverrides,
+	isRecord,
+	renderConfigControls,
+	restoreConfig,
+} from "./config-controls";
+import { fixtureGroupsFrom, type PairTuple } from "./fixtures";
 
 // The dictionary is served as a static asset (see web/tuning/public/, which
 // symlinks the repo's data/CMUdict/cmudict-0.7b).
 const DICT_URL = "/cmudict-0.7b";
 const CONFIG_STORAGE_KEY = "mime_reader:tuning:distance-configs:v1";
-const U32_MAX = 4_294_967_295;
 
 type ConfigKind = "vowel" | "consonant" | "rhyme";
 
@@ -117,30 +124,14 @@ const CONFIG_DOCS: Record<keyof RhymeConfigDto, string> = {
 const $ = <T extends HTMLElement>(sel: string): T =>
 	document.querySelector(sel) as T;
 
-// The doc strings are kept verbatim (see CONFIG_DOCS), but the developer TODO
-// notes aren't useful while tuning, so drop those paragraphs for display.
-function description(doc: string): string {
-	return doc
-		.split("\n\n")
-		.filter((para) => !para.trimStart().startsWith("TODO"))
-		.join("\n\n");
-}
-
 interface Pair {
 	leader: string;
 	follower: string;
 	group?: PairGroup;
 }
 
-type PairTuple = [string, string];
 type PairGroup = string;
 type ThresholdPresetGroup = "further_slant_rhymes";
-
-interface FixtureGroup {
-	key: PairGroup;
-	label: string;
-	pairs: PairTuple[];
-}
 
 interface StoredConfigState {
 	version: 1;
@@ -166,30 +157,6 @@ const THRESHOLD_PRESETS: Array<{
 
 function fixturePair([leader, follower]: PairTuple, group: PairGroup): Pair {
 	return { leader, follower, group };
-}
-
-function fixtureGroupsFrom(data: unknown): FixtureGroup[] {
-	if (!data || typeof data !== "object" || Array.isArray(data)) return [];
-
-	return Object.entries(data).flatMap(([key, section]) => {
-		if (!section || typeof section !== "object" || Array.isArray(section)) {
-			return [];
-		}
-
-		const pairsValue = (section as Record<string, unknown>).pairs;
-		if (!Array.isArray(pairsValue)) return [];
-
-		const pairs = pairsValue.filter(isPairTuple);
-		return pairs.length === 0 ? [] : [{ key, label: key, pairs }];
-	});
-}
-
-function isPairTuple(value: unknown): value is PairTuple {
-	return (
-		Array.isArray(value) &&
-		value.length === 2 &&
-		value.every((item) => typeof item === "string")
-	);
 }
 
 let analyzer: Analyzer;
@@ -277,19 +244,6 @@ async function main(): Promise<void> {
 	render();
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function isConfigValue(value: unknown): value is number {
-	return (
-		typeof value === "number" &&
-		Number.isInteger(value) &&
-		value >= 0 &&
-		value <= U32_MAX
-	);
-}
-
 function isRhymeNormalization(value: unknown): value is RhymeNormalizationDto {
 	return (
 		value === "none" ||
@@ -323,30 +277,6 @@ function loadStoredConfigState(): StoredConfigState | null {
 	}
 }
 
-function restoreConfig<T extends object>(
-	defaults: T,
-	fields: Array<keyof T>,
-	stored: unknown,
-): T {
-	const restored = { ...defaults };
-	if (!isRecord(stored)) return restored;
-
-	const target = restored as Record<string, unknown>;
-	for (const field of fields) {
-		const value = stored[String(field)];
-		if (isConfigValue(value)) target[String(field)] = value;
-	}
-	return restored;
-}
-
-function configIsModified<T, K extends keyof T>(
-	config: T,
-	defaults: T,
-	fields: K[],
-): boolean {
-	return fields.some((field) => config[field] !== defaults[field]);
-}
-
 function configsAreModified(): boolean {
 	return (
 		configIsModified(vowelConfig, defaultVowelConfig, VOWEL_CONFIG_FIELDS) ||
@@ -358,20 +288,6 @@ function configsAreModified(): boolean {
 		configIsModified(rhymeConfig, defaultRhymeConfig, RHYME_CONFIG_FIELDS) ||
 		rhymeNormalization !== defaultRhymeNormalization
 	);
-}
-
-function configOverrides<T, K extends keyof T>(
-	config: T,
-	defaults: T,
-	fields: K[],
-): Record<string, number> {
-	const overrides: Record<string, number> = {};
-	for (const field of fields) {
-		if (config[field] !== defaults[field]) {
-			overrides[String(field)] = config[field] as number;
-		}
-	}
-	return overrides;
 }
 
 function persistConfigs(): void {
@@ -788,10 +704,22 @@ function syncConfigSwitcher(): void {
 	);
 }
 
+// Runs after every config edit: persist, then re-evaluate every pair (live +
+// saved) under the new config.
+function onConfigChange(): void {
+	persistConfigs();
+	syncRestoreDefaultsButton();
+	applyActiveThresholdPreset();
+	syncThresholdPresetButtons();
+	render();
+}
+
 function buildConfigControls(): void {
+	const container = $("#config-controls");
 	switch (activeConfigKind) {
 		case "vowel":
 			renderConfigControls(
+				container,
 				vowelConfig,
 				defaultVowelConfig,
 				VOWEL_CONFIG_FIELDS,
@@ -800,10 +728,12 @@ function buildConfigControls(): void {
 					vowelConfig[field] = value;
 					analyzer.setVowelConfig(vowelConfig);
 				},
+				onConfigChange,
 			);
 			break;
 		case "consonant":
 			renderConfigControls(
+				container,
 				consonantConfig,
 				defaultConsonantConfig,
 				CONSONANT_CONFIG_FIELDS,
@@ -812,10 +742,12 @@ function buildConfigControls(): void {
 					consonantConfig[field] = value;
 					analyzer.setConsonantConfig(consonantConfig);
 				},
+				onConfigChange,
 			);
 			break;
 		case "rhyme":
 			renderConfigControls(
+				container,
 				rhymeConfig,
 				defaultRhymeConfig,
 				RHYME_CONFIG_FIELDS,
@@ -823,80 +755,11 @@ function buildConfigControls(): void {
 				(field, value) => {
 					rhymeConfig[field] = value;
 					analyzer.setRhymeConfig(rhymeConfig);
-					},
-				);
+				},
+				onConfigChange,
+			);
 			break;
 	}
-}
-
-function renderConfigControls<T, K extends keyof T>(
-	config: T,
-	defaults: T,
-	fields: K[],
-	docs: Record<K, string>,
-	setValue: (field: K, value: number) => void,
-): void {
-	const container = $("#config-controls");
-	container.replaceChildren();
-	for (const field of fields) {
-		const row = document.createElement("label");
-		row.className = "config-row";
-
-		const name = document.createElement("span");
-		name.className = "config-name";
-		const fieldName = document.createElement("span");
-		fieldName.className = "config-field-name";
-		fieldName.textContent = String(field);
-		const modifiedMarker = document.createElement("small");
-		modifiedMarker.className = "config-modified";
-		modifiedMarker.textContent = "changed";
-		name.append(fieldName, modifiedMarker);
-
-		const input = document.createElement("input");
-		input.type = "number";
-		input.min = "0";
-		input.max = String(U32_MAX);
-		input.step = "1";
-		input.value = String(config[field]);
-		syncConfigRowModified(
-			row,
-			modifiedMarker,
-			config[field] !== defaults[field],
-		);
-
-		input.addEventListener("input", () => {
-			if (input.value === "") return; // mid-edit; leave config untouched
-			const n = Number(input.value);
-			if (!isConfigValue(n)) return;
-			setValue(field, n);
-			syncConfigRowModified(
-				row,
-				modifiedMarker,
-				config[field] !== defaults[field],
-			);
-			persistConfigs();
-			syncRestoreDefaultsButton();
-			applyActiveThresholdPreset();
-			syncThresholdPresetButtons();
-			render(); // re-evaluate every pair (live + saved) under the new config
-		});
-
-		const doc = document.createElement("small");
-		doc.className = "config-doc";
-		doc.textContent = description(docs[field]);
-
-		row.append(name, input, doc);
-		container.append(row);
-	}
-}
-
-function syncConfigRowModified(
-	row: HTMLElement,
-	marker: HTMLElement,
-	modified: boolean,
-): void {
-	row.classList.toggle("modified", modified);
-	marker.hidden = !modified;
 }
 
 main().catch((err) => {

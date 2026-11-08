@@ -1,0 +1,28 @@
+form: blues
+title: Hard Luck
+author: Langston Hughes
+year: 1927
+source: https://en.wikisource.org/wiki/Fine_Clothes_to_the_Jew/Hard_Luck
+notes: text from Fine Clothes to the Jew (Knopf, 1927), proofread Wikisource transcription of the scan; each blues line split in two: 6-line AAB stanzas
+template: abab__*3
+
+When hard luck overtakes you
+Nothin' for you to do.
+When hard luck overtakes you
+Nothin' for you to do.
+Gather up yo' fine clothes
+An' sell 'em to de Jew.
+
+Jew takes yo' fine clothes,
+Gives you a dollar an' a half.
+Jew takes yo' fine clothes,
+Gives you a dollar an' a half.
+Go to de bootleg's,
+Git some gin to make you laugh.
+
+If I was a mule I'd
+Git me a waggon to haul.
+If I was a mule I'd
+Git a waggon to haul.
+I'm so low-down I
+Ain't even got a stall.

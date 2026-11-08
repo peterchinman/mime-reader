@@ -1,0 +1,28 @@
+form: blues
+title: Homesick Blues
+author: Langston Hughes
+year: 1927
+source: https://en.wikisource.org/wiki/Fine_Clothes_to_the_Jew/Homesick_Blues
+notes: text from Fine Clothes to the Jew (Knopf, 1927), proofread Wikisource transcription of the scan; each blues line split in two: 6-line AAB stanzas
+template: abab__*3
+
+De railroad bridge's
+A sad song in de air.
+De railroad bridge's
+A sad song in de air.
+Ever time de trains pass
+I wants to go somewhere.
+
+I went down to de station.
+Ma heart was in ma mouth.
+Went down to de station.
+Heart was in ma mouth.
+Lookin' for a box car
+To roll me to de South.
+
+Homesick blues, Lawd,
+'S a terrible thing to have.
+Homesick blues is
+A terrible thing to have.
+To keep from cryin'
+I opens ma mouth an' laughs.

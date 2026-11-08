@@ -1,0 +1,15 @@
+form: triolet
+title: Triolet (Easy is the Triolet)
+author: W. E. Henley
+year: 1887
+source: https://www.gutenberg.org/ebooks/45736
+notes: text from Gleeson White, ed., Ballades and Rondeaus, Chants Royal, Sestinas, Villanelles, &c. (1887), Gutenberg #45736
+
+Easy is the Triolet,
+If you really learn to make it!
+Once a neat refrain you get,
+Easy is the Triolet.
+As you see!-I pay my debt
+With another rhyme. Deuce take it,
+Easy is the Triolet,
+If you really learn to make it!

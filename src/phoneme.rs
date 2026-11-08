@@ -380,6 +380,17 @@ pub fn get_syllable_count(phonemes: &[Phoneme]) -> usize {
         .count()
 }
 
+/// Whether `phoneme` is a consonant repeating `prev`, its predecessor in the
+/// same sequence (the second T of "T T"). Gapping a repeated consonant is
+/// cheaper than gapping a fresh one: "TEN TO" vs "TENT O" differ by an echo,
+/// not a new sound.
+pub(crate) fn is_repeated_consonant(phoneme: &Phoneme, prev: Option<&Phoneme>) -> bool {
+    matches!(
+        (phoneme, prev),
+        (Phoneme::Consonant(c), Some(Phoneme::Consonant(p))) if c.phoneme == p.phoneme
+    )
+}
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RhymingPart<'a> {
     pub phonemes: &'a [Phoneme],

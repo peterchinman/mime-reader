@@ -1,0 +1,41 @@
+form: blues
+title: The Yellow Dog Rag
+author: W. C. Handy
+year: 1914
+source: https://commons.wikimedia.org/wiki/File:Yellow_Dog_Rag_1.jpg
+notes: lyrics transcribed from the sheet-music scan (lines follow musical phrases; hyphenated syllables joined); copyright 1914 (pages 1-4 on Commons); the song later retitled Yellow Dog Blues (1919 edition not consulted); 2 verses then chorus; spoken aside kept in parentheses; only echo: the '...where the Southern cross' the (Yellow) Dog' lines
+template: ____________ ___A____A___ ______A
+
+E'er since Miss Susan Johnson lost her Jockey, Lee,
+There has been much excitement, more to be;
+You can hear her moaning night and morn.
+"Wonder where my Easy Rider's gone?"
+Cablegrams come of sympathy,
+Telegrams go of inquiry,
+Letters come from down in "Bam,"
+And ev'ry where that Uncle Sam
+Has even a rural delivery.
+All day the phone rings, But it's not for me,
+At last good tidings fill our hearts with glee,
+This message comes from Tennessee:
+
+I know the Yellow Dog District like a book,
+Indeed I know the route that Rider took;
+Ev'ry cross-tie, bayou, burg and bog.
+Way down where the Southern cross' the Dog,
+Money don't zactly grow on trees.
+On cotton stalks it grows wid ease;
+No race-horse, race-track, no grand-stand
+Is like Old Beck an' Buck-shot land,
+Down where the Southern cross' the Dog.
+Every kitchen there is a cabaret,
+Down there the boll wevil works while the darkies play
+This Yellow Dog Rag the live-long day.
+
+Dear Sue, your Easy Rider struck this burg today
+On a southboun' rattler side-door Pullman car.
+Seen him here an' he was on the hog.
+(The smoke was broke, no joke, not a jitney on him.)
+Easy Riders got a stay away,
+So he had to vamp it--but the hike aint far.
+He's gone where the Southern cross' the Yellow Dog.

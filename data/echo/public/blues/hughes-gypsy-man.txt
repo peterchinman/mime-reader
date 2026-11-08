@@ -1,0 +1,35 @@
+form: blues
+title: Gypsy Man
+author: Langston Hughes
+year: 1927
+source: https://en.wikisource.org/wiki/Fine_Clothes_to_the_Jew/Gypsy_Man
+notes: text from Fine Clothes to the Jew (Knopf, 1927), proofread Wikisource transcription of the scan; each blues line split in two: 6-line AAB stanzas
+template: abab__*4
+
+Ma man's a gypsy
+Cause he never does come home.
+Ma man's a gypsy,—
+He never does come home.
+I'm gonna be a gypsy woman.
+Fer I can't stay here alone.
+
+Once I was in Memphis,
+I mean Tennessee.
+Once I was in Memphis,
+Said Tennessee.
+But I had to leave cause
+Nobody there was good to me.
+
+I met a yellow papa,
+He took ma last thin dime.
+Met a yellow papa,
+He took ma last thin dime.
+I give it to him cause I loved him
+But I'll have mo' sense next time.
+
+Love, Oh, love is
+Such a strange disease.
+Love, Oh, love is
+Such a strange disease.
+When it hurts yo' heart you
+Sho can't find no ease.

@@ -1,0 +1,35 @@
+form: blues
+title: Midwinter Blues
+author: Langston Hughes
+year: 1927
+source: https://en.wikisource.org/wiki/Fine_Clothes_to_the_Jew/Midwinter_Blues
+notes: text from Fine Clothes to the Jew (Knopf, 1927), proofread Wikisource transcription of the scan; each blues line split in two: 6-line AAB stanzas
+template: abab__*4
+
+In de middle of de winter,
+Snow all over de ground.
+In de middle of de winter,
+Snow all over de ground,—
+'Twas de night befo' Christmas
+Ma good man turned me down.
+
+Don' know's I'd mind his goin'
+But he left me when de coal was low.
+Don' know's I'd mind his goin'
+But he left when de coal was low.
+Now, if a man loves a woman
+That ain't no time to go.
+
+He told me that he loved me
+But he must a been tellin' a lie.
+He told me that he loved me.
+He must a been tellin' a lie.
+But he's the only man I'll
+Love till de day I die.
+
+I'm gonna buy me a rose bud
+An' plant it at ma back door.
+Gonna buy me a rose bud
+And plant it at ma back door,
+So when I'm dead they
+Won't need no flowers from de store.
