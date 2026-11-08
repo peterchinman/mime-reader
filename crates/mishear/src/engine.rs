@@ -13,7 +13,7 @@ use mime_reader::{
 
 use crate::cost::CostModel;
 use crate::deform::Deformation;
-use crate::lexicon::{CommonWords, Lexicon, WordId, read_frequencies};
+use crate::lexicon::{CommonWords, Frequency, Lexicon, WordId, read_frequencies};
 use crate::phone::Ph;
 use crate::search::{Match, SearchConfig, SearchStats, best_matches};
 
@@ -59,6 +59,9 @@ pub struct Reading {
 #[derive(Debug, Clone)]
 pub struct Heard {
     pub text: String,
+    pub words: Vec<String>,
+    /// The (deformed) input span each word covers.
+    pub spans: Vec<std::ops::Range<usize>>,
     pub cost: f32,
     pub phonetic: f32,
     /// How many of its words the original contains.
@@ -94,25 +97,56 @@ impl Engine {
     ) -> Result<Self, String> {
         let dict =
             CmuDictionary::load(cmudict).map_err(|e| format!("{}: {e}", cmudict.display()))?;
-        let lexicon = Lexicon::build(
-            &dict,
+        Ok(Self::new(
+            dict,
             &read_frequencies(frequencies)?,
+            vocabulary,
+            all_pronunciations,
+            common,
+        ))
+    }
+
+    /// An engine over `dict`, keeping the `vocabulary` most frequent of
+    /// `frequencies` (only those in `common` when given).
+    pub fn new(
+        dict: CmuDictionary,
+        frequencies: &[Frequency],
+        vocabulary: usize,
+        all_pronunciations: bool,
+        common: Option<&CommonWords>,
+    ) -> Self {
+        let lexicon = Lexicon::build(&dict, frequencies, vocabulary, all_pronunciations, |w| {
+            common.is_none_or(|c| c.contains(w))
+        });
+        Self::with_lexicon(dict, lexicon)
+    }
+
+    /// Rebuilds the lexicon (dropping any bigrams: reload them after).
+    pub fn rebuild_lexicon(
+        &mut self,
+        frequencies: &[Frequency],
+        vocabulary: usize,
+        all_pronunciations: bool,
+        common: Option<&CommonWords>,
+    ) {
+        self.lexicon = Lexicon::build(
+            &self.dict,
+            frequencies,
             vocabulary,
             all_pronunciations,
             |w| common.is_none_or(|c| c.contains(w)),
         );
-        Self::with_lexicon(dict, lexicon)
     }
 
     /// An engine over an already-built lexicon.
-    pub fn with_lexicon(dict: CmuDictionary, lexicon: Lexicon) -> Result<Self, String> {
+    pub fn with_lexicon(dict: CmuDictionary, lexicon: Lexicon) -> Self {
         // Reading text may derive pronunciations for inflections CMUdict
-        // lacks; the lexicon sticks to its headwords.
-        Ok(Self {
+        // lacks; the lexicon sticks to its headwords (raw lookup).
+        Self {
             dict: dict.with_pronunciation_mode(PronunciationMode::AllowDerived),
             lexicon,
             cost: CostModel::default(),
-        })
+        }
     }
 
     /// The line's words and their first pronunciations.
@@ -195,6 +229,12 @@ impl Engine {
             })
             .map(|m| Heard {
                 text: m.text(&self.lexicon),
+                words: m
+                    .words
+                    .iter()
+                    .map(|&w| self.lexicon.word(w).to_string())
+                    .collect(),
+                spans: m.spans.clone(),
                 cost: m.cost,
                 phonetic: m.phonetic,
                 shared: m.words.iter().filter(|w| originals.contains(w)).count(),

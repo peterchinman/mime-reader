@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use mime_reader::CmuDictionary;
+use mime_reader::PronouncingDictionary;
 
 use crate::phone::Ph;
 
@@ -60,16 +60,18 @@ pub struct Frequency {
 /// Reads `word<TAB>zipf` lines, most frequent first.
 pub fn read_frequencies(path: &Path) -> Result<Vec<Frequency>, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    parse_frequencies(&text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Parses `word<TAB>zipf` lines, most frequent first.
+pub fn parse_frequencies(text: &str) -> Result<Vec<Frequency>, String> {
     text.lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
             let (word, zipf) = line
                 .split_once('\t')
-                .ok_or_else(|| format!("{}: malformed line {line:?}", path.display()))?;
-            let zipf = zipf
-                .trim()
-                .parse()
-                .map_err(|e| format!("{}: {line:?}: {e}", path.display()))?;
+                .ok_or_else(|| format!("malformed line {line:?}"))?;
+            let zipf = zipf.trim().parse().map_err(|e| format!("{line:?}: {e}"))?;
             Ok(Frequency {
                 word: word.to_string(),
                 zipf,
@@ -91,14 +93,19 @@ impl CommonWords {
     /// nouns) are ignored.
     pub fn read(path: &Path) -> Result<Self, String> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        Ok(Self {
+        Ok(Self::parse(&text))
+    }
+
+    /// [`Self::read`] from the list's text.
+    pub fn parse(text: &str) -> Self {
+        Self {
             words: text
                 .lines()
                 .map(str::trim)
                 .filter(|w| w.chars().next().is_some_and(|c| c.is_ascii_lowercase()))
                 .map(str::to_string)
                 .collect(),
-        })
+        }
     }
 
     pub fn contains(&self, word: &str) -> bool {
@@ -133,8 +140,8 @@ impl Lexicon {
     /// The `max_words` most frequent words that CMUdict can pronounce, that
     /// are spelled with letters and apostrophes only, and that `keep`
     /// accepts — with every CMUdict pronunciation, or only the first.
-    pub fn build(
-        dict: &CmuDictionary,
+    pub fn build<D: PronouncingDictionary>(
+        dict: &D,
         frequencies: &[Frequency],
         max_words: usize,
         all_pronunciations: bool,
@@ -250,6 +257,12 @@ impl Lexicon {
     /// [`BIGRAM_PRIOR`]).
     pub fn load_bigrams(&mut self, path: &Path, prior: f32) -> Result<(), String> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        self.parse_bigrams(&text, prior)
+            .map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    /// [`Self::load_bigrams`] from the counts' text.
+    pub fn parse_bigrams(&mut self, text: &str, prior: f32) -> Result<(), String> {
         let mut totals = vec![0.0f32; self.len()];
         let mut pairs = HashMap::new();
         for line in text.lines() {
@@ -257,11 +270,9 @@ impl Lexicon {
             let (Some(left), Some(right), Some(count)) =
                 (fields.next(), fields.next(), fields.next())
             else {
-                return Err(format!("{}: malformed line {line:?}", path.display()));
+                return Err(format!("malformed line {line:?}"));
             };
-            let count: f32 = count
-                .parse()
-                .map_err(|e| format!("{}: {line:?}: {e}", path.display()))?;
+            let count: f32 = count.parse().map_err(|e| format!("{line:?}: {e}"))?;
             let Some(v) = self.id(left) else { continue };
             if right == "*" {
                 totals[v as usize] = count;

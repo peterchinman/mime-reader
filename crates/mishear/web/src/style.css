@@ -1,0 +1,443 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  --fg: #1d1d1f;
+  --muted: #6b6b70;
+  --line: #d9d9de;
+  --panel: #f6f6f8;
+  --accent: #2f6fdf;
+  --changed: #c2410c;
+  --changed-bg: #fde7d8;
+  --removed: #9a9aa0;
+  --chip: #e8effc;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #e8e8ea;
+    --muted: #9b9ba3;
+    --line: #3a3a40;
+    --panel: #1f1f23;
+    --accent: #79a6ff;
+    --changed: #ff9e66;
+    --changed-bg: #4a2a17;
+    --removed: #6e6e75;
+    --chip: #22304a;
+  }
+}
+
+body {
+  margin: 0;
+  padding: 1rem 1.5rem 3rem;
+  line-height: 1.4;
+  color: var(--fg);
+}
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+h1 {
+  font-size: 1.4rem;
+  margin: 0;
+}
+h2 {
+  font-size: 1.1rem;
+  margin: 1.5rem 0 0.5rem;
+}
+h3 {
+  font-size: 1rem;
+  margin: 1.25rem 0 0.25rem;
+}
+.tagline {
+  margin: 0;
+  color: var(--muted);
+}
+.status {
+  margin: 0 0 0 auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.status.busy::before {
+  content: '';
+  display: inline-block;
+  width: 0.6em;
+  height: 0.6em;
+  margin-right: 0.4em;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 0.9s ease-in-out infinite alternate;
+}
+@keyframes pulse {
+  from {
+    opacity: 0.25;
+  }
+}
+
+input,
+button,
+select,
+textarea {
+  font: inherit;
+}
+button {
+  cursor: pointer;
+}
+button.primary {
+  background: var(--accent);
+  color: white;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 0.2rem 0.9rem;
+}
+.hint {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin: 0.15rem 0 0.4rem;
+}
+
+main {
+  display: grid;
+  grid-template-columns: 25rem minmax(0, 1fr);
+  gap: 2rem;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  main {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---- controls ---- */
+aside details {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  margin-bottom: 0.6rem;
+  background: var(--panel);
+}
+aside summary {
+  cursor: pointer;
+  padding: 0.45rem 0.7rem;
+  font-weight: 600;
+}
+.panel-body {
+  padding: 0 0.7rem 0.7rem;
+}
+details.disabled .panel-body {
+  opacity: 0.45;
+  pointer-events: none;
+}
+.panel-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.3rem 0;
+}
+.row input[type='text'] {
+  flex: 1;
+}
+
+.knob {
+  margin: 0.55rem 0;
+}
+.knob-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+}
+.knob-head .name {
+  flex: 1;
+}
+.knob.changed .name::after {
+  content: ' •';
+  color: var(--accent);
+}
+.knob .reset {
+  font-size: 0.75rem;
+  padding: 0 0.3rem;
+  visibility: hidden;
+}
+.knob.changed .reset {
+  visibility: visible;
+}
+.knob-inputs {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.knob-inputs input[type='range'] {
+  flex: 1;
+  min-width: 0;
+}
+.knob-inputs input[type='number'] {
+  width: 5.5rem;
+}
+.knob.off .knob-inputs {
+  opacity: 0.4;
+}
+.knob .hint {
+  margin: 0.1rem 0 0;
+}
+
+.steps {
+  list-style: none;
+  padding: 0;
+  margin: 0.4rem 0;
+}
+.steps li {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 0.35rem 0.5rem;
+  margin-bottom: 0.4rem;
+  background: Canvas;
+}
+.step-head {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.step-head .kind {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  width: 4.4rem;
+  flex: none;
+}
+.step-head select {
+  flex: 1;
+  min-width: 0;
+}
+.step-head button {
+  padding: 0 0.35rem;
+}
+.step-params .knob {
+  margin: 0.3rem 0 0;
+}
+.step-params .row {
+  font-size: 0.9rem;
+}
+#add-step {
+  width: 100%;
+}
+.picking {
+  outline: 2px solid var(--accent);
+}
+
+.chart {
+  margin: 0.8rem 0 0;
+}
+.chart svg {
+  width: 100%;
+  height: auto;
+  background: Canvas;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+}
+.chart svg.pick {
+  cursor: crosshair;
+}
+.chart figcaption {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-top: 0.3rem;
+  font-size: 0.85rem;
+}
+.chart text {
+  font-size: 11px;
+  fill: var(--fg);
+}
+.chart .axis {
+  fill: var(--muted);
+  font-size: 10px;
+}
+.chart .grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.chart .orig {
+  fill: var(--removed);
+  stroke: var(--removed);
+}
+.chart .orig-label {
+  fill: var(--muted);
+}
+.chart .moved {
+  fill: var(--changed);
+  stroke: var(--changed);
+}
+.chart .moved-label {
+  fill: var(--changed);
+  font-weight: 600;
+}
+.chart .target {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  fill: none;
+}
+
+/* ---- workspace ---- */
+.input-bar textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 1.15rem;
+  padding: 0.4rem 0.5rem;
+  resize: vertical;
+}
+.mode {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 0.3rem;
+  font-size: 0.9rem;
+}
+.input-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 0.4rem;
+}
+.input-actions .hint {
+  margin: 0;
+}
+.error {
+  margin-top: 1rem;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid var(--changed);
+  background: var(--changed-bg);
+}
+
+.ph {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+}
+.ph ins {
+  text-decoration: none;
+  color: var(--changed);
+  background: var(--changed-bg);
+  border-radius: 2px;
+}
+.ph del {
+  color: var(--removed);
+}
+.sounds {
+  border-collapse: collapse;
+}
+.sounds th,
+.sounds td {
+  text-align: left;
+  padding: 0.15rem 0.9rem 0.15rem 0;
+  vertical-align: top;
+}
+.sounds th {
+  font-weight: 500;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.hearings {
+  padding-left: 2rem;
+  margin: 0.3rem 0;
+}
+.hearings li {
+  margin: 0.25rem 0;
+  cursor: pointer;
+}
+.hearings li.selected .text {
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 3px;
+}
+.hearings .text {
+  font-size: 1.2rem;
+}
+.hearings .meta {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-left: 0.6rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.alignment-scroll {
+  overflow-x: auto;
+  padding-bottom: 0.5rem;
+}
+.alignment {
+  display: grid;
+  column-gap: 0;
+  row-gap: 3px;
+  align-items: stretch;
+  width: max-content;
+}
+.alignment > * {
+  padding: 0.1rem 0.25rem;
+  white-space: nowrap;
+}
+.alignment .label {
+  color: var(--muted);
+  font-size: 0.8rem;
+  padding-right: 0.6rem;
+  text-align: right;
+}
+.alignment .orig-word {
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-align: center;
+}
+.alignment .input {
+  text-align: center;
+  border-left: 1px dotted var(--line);
+}
+.alignment .input.changed {
+  color: var(--changed);
+  background: var(--changed-bg);
+}
+.alignment .chip {
+  background: var(--chip);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  text-align: center;
+  margin: 0 1px;
+}
+.alignment .chip.shared {
+  border-style: dashed;
+  opacity: 0.7;
+}
+.alignment .chip.selected {
+  border-color: var(--accent);
+}
+
+.sweep {
+  display: flex;
+  gap: 1.25rem;
+  overflow-x: auto;
+  align-items: start;
+}
+.sweep .column {
+  min-width: 12rem;
+}
+.sweep h4 {
+  margin: 0 0 0.3rem;
+  font-size: 0.9rem;
+}
+.sweep ol {
+  margin: 0;
+  padding-left: 1.4rem;
+}
+.sweep li {
+  margin: 0.15rem 0;
+}
+.sweep .cost {
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin-left: 0.3rem;
+}

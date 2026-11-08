@@ -328,6 +328,9 @@ name = "mishear"
 version = "0.1.0"
 dependencies = [
  "mime-reader",
+ "serde",
+ "tsify",
+ "wasm-bindgen",
 ]
 
 [[package]]

@@ -77,6 +77,45 @@ Deformation options combine and apply in order:
 - `--vowels SPEC` adds a vowel move.
 - `--intensity F` scales every step's rate, from 0 to 1.
 
+## Web app
+
+`web/` is a page that exposes every knob. The engine is compiled to
+WebAssembly and runs in a Web Worker. It needs `wasm-pack` and the data from
+Setup.
+
+```sh
+cd crates/mishear/web
+npm install
+npm run dev     # builds the wasm, links the data into public/data, starts Vite
+npm run build   # the same, into dist/
+```
+
+What the page has:
+
+- **Input:** a line of text, or ARPAbet phonemes heard as given (no
+  deformation, no novelty).
+- **Random line:** picks from the public-domain poems in `data/echo/public`.
+  The private corpus is never bundled.
+- **Deformation:** an ordered list of steps (accent presets, consonant knobs,
+  vowel moves with masks and Labov's tendencies), plus intensity and seed.
+  For a pull step, you can click the chart to choose its target.
+- **Vowel chart:** a preview of the vowel-space moves.
+- **Results:** each word's spoken and deformed phonemes, with the deformation's
+  edits marked; the hearings, with their cost breakdown; and a grid aligning
+  each heard word with the phonemes it covers.
+- **Search, cost and lexicon panels:** every field of `SearchConfig`,
+  `CostConfig` and the lexicon options. Defaults come from the Rust side.
+  Changing the lexicon rebuilds it in the worker.
+- **Sweep:** the CLI `sweep` for any numeric search or cost knob, or for
+  intensity or seed.
+- **Saving:** settings are kept in localStorage, and "Copy link" puts them in
+  the URL.
+
+`npm run data` symlinks CMUdict, the generated word lists and
+`/usr/share/dict/words` into `public/data`, which is gitignored. A build
+copies them into `dist/`. That copy includes the wordfreq list, which is CC
+BY-SA 4.0, so a hosted build has to carry that license's attribution.
+
 ## Search
 
 A match covers the input with words, each word aligned to a contiguous span

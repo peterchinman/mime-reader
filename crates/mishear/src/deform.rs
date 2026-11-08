@@ -514,6 +514,18 @@ fn replace(p: Ph, symbol: &str) -> Ph {
     .unwrap_or_else(|| panic!("{p} can't become {symbol}"))
 }
 
+/// A vowel's place on the chart and where a deformation's vowel moves take
+/// it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VowelPreview {
+    pub symbol: &'static str,
+    pub start: Point,
+    pub end: Point,
+    pub moved_start: Point,
+    pub moved_end: Point,
+    pub becomes: &'static str,
+}
+
 /// Where each vowel sits: monophthongs as a point, diphthongs as a start
 /// and an end.
 pub struct VowelChart {
@@ -539,16 +551,25 @@ impl VowelChart {
 
     /// `p` moved by `moves`, snapped to the nearest vowel (keeping stress).
     pub fn moved(&self, p: Ph, moves: &[VowelMove]) -> Ph {
-        let Some((start, end)) = self.position(p.symbol()) else {
-            return p;
-        };
-        let (start, end) = moves.iter().fold((start, end), |(a, b), m| match m {
+        match self.move_points(p.symbol(), moves) {
+            Some((start, end)) => replace(p, self.nearest(start, end)),
+            None => p,
+        }
+    }
+
+    /// Where `moves` take the vowel `symbol`'s start and end, unsnapped.
+    fn move_points(&self, symbol: &str, moves: &[VowelMove]) -> Option<(Point, Point)> {
+        let (start, end) = self.position(symbol)?;
+        Some(moves.iter().fold((start, end), |(a, b), m| match m {
             VowelMove::ShiftOnset { .. } if a != b => (m.apply(a), b),
             _ => (m.apply(a), m.apply(b)),
-        });
+        }))
+    }
+
+    /// The vowel whose start and end are nearest these.
+    fn nearest(&self, start: Point, end: Point) -> &'static str {
         let dist = |a: Point, b: Point| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
-        let nearest = self
-            .vowels
+        self.vowels
             .iter()
             .min_by(|x, y| {
                 let dx = dist(x.1, start) + dist(x.2, end);
@@ -556,8 +577,41 @@ impl VowelChart {
                 dx.total_cmp(&dy)
             })
             .map(|&(symbol, ..)| symbol)
-            .expect("the chart has vowels");
-        replace(p, nearest)
+            .expect("the chart has vowels")
+    }
+
+    /// For every vowel on the chart, where `deformation`'s vowel steps take
+    /// it (as a stressed vowel): its last step's unsnapped points and the
+    /// vowel it ends as. Rules aren't shown, only the geometric moves.
+    pub fn preview(&self, deformation: &Deformation) -> Vec<VowelPreview> {
+        self.vowels
+            .iter()
+            .map(|&(symbol, start, end)| {
+                let mut current = symbol;
+                let (mut moved_start, mut moved_end) = (start, end);
+                for step in &deformation.steps {
+                    let StepKind::Vowels(vowels) = &step.kind else {
+                        continue;
+                    };
+                    let p = Ph::vowel(current, 1).expect("chart vowels are vowels");
+                    if vowels.only.as_ref().is_some_and(|c| !c.matches(p)) {
+                        continue;
+                    }
+                    if let Some((a, b)) = self.move_points(current, &vowels.moves) {
+                        (moved_start, moved_end) = (a, b);
+                        current = self.nearest(a, b);
+                    }
+                }
+                VowelPreview {
+                    symbol,
+                    start,
+                    end,
+                    moved_start,
+                    moved_end,
+                    becomes: current,
+                }
+            })
+            .collect()
     }
 }
 

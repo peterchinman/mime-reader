@@ -31,7 +31,9 @@
 
 use std::collections::HashMap;
 use std::ops::Range;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use crate::clock::Stopwatch;
 
 use crate::cost::CostModel;
 use crate::lexicon::{Lexicon, WordId};
@@ -127,7 +129,7 @@ pub fn search(
     cost: &CostModel,
     config: &SearchConfig,
 ) -> (Vec<Match>, SearchStats) {
-    let start = Instant::now();
+    let start = Stopwatch::start();
     let n = input.len();
     let bigrams = config.bigrams && lexicon.has_bigrams();
     let keep = config.results.max(1);
@@ -315,7 +317,7 @@ pub fn best_matches(
     growth: f32,
     max_bound: f32,
 ) -> (Vec<Match>, SearchStats) {
-    let start = Instant::now();
+    let start = Stopwatch::start();
     let mut config = config.clone();
     let mut total = SearchStats::default();
     loop {

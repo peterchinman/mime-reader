@@ -3,6 +3,7 @@
 //! ([`deform`]), and the two combined ([`engine`]).
 
 pub mod accents;
+pub mod clock;
 pub mod cost;
 pub mod deform;
 pub mod engine;
@@ -10,6 +11,9 @@ pub mod knobs;
 pub mod lexicon;
 pub mod phone;
 pub mod search;
+pub mod spec;
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
 
 pub use cost::{CostConfig, CostModel};
 pub use deform::{Action, Class, Context, Deformation, Rule, VowelChart, VowelMove};

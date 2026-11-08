@@ -9,6 +9,7 @@ use mishear::accents;
 use mishear::knobs;
 use mishear::lexicon::CommonWords;
 use mishear::phone::spell;
+use mishear::spec::{self, StepSpec};
 use mishear::{
     CostConfig, CostModel, Deformation, Engine, MishearConfig, Ph, SearchConfig, search,
 };
@@ -153,7 +154,7 @@ fn parse(args: Vec<String>) -> Result<Options, String> {
     };
     let mut intensity = 1.0;
     let mut seed = 0;
-    let mut names: Vec<String> = Vec::new();
+    let mut steps: Vec<StepSpec> = Vec::new();
     while let Some(arg) = args.next() {
         let mut value = |name: &str| args.next().ok_or_else(|| format!("{name} needs a value"));
         let number = |s: String| s.parse::<f32>().map_err(|e| format!("{s}: {e}"));
@@ -200,27 +201,9 @@ fn parse(args: Vec<String>) -> Result<Options, String> {
                     .parse()
                     .map_err(|e| format!("--line-seed: {e}"))?
             }
-            "--accent" => {
-                let name = value("--accent")?;
-                let accent = accents::preset(&name)
-                    .ok_or_else(|| format!("unknown accent {name:?} (see `list`)"))?;
-                o.deformation = std::mem::take(&mut o.deformation).then(accent);
-                names.push(name);
-            }
-            "--knob" => {
-                let name = value("--knob")?;
-                let knob = knobs::consonant(&name)
-                    .ok_or_else(|| format!("unknown knob {name:?} (see `list`)"))?;
-                o.deformation = std::mem::take(&mut o.deformation).then(knob);
-                names.push(name);
-            }
-            "--vowels" => {
-                let spec = value("--vowels")?;
-                let (moves, only) = knobs::vowel_knob(&spec)?;
-                let step = Deformation::new(spec.clone()).vowels_only(moves, only);
-                o.deformation = std::mem::take(&mut o.deformation).then(step);
-                names.push(spec);
-            }
+            "--accent" => steps.push(StepSpec::Accent(value("--accent")?)),
+            "--knob" => steps.push(StepSpec::Knob(value("--knob")?)),
+            "--vowels" => steps.push(StepSpec::Vowels(value("--vowels")?)),
             "--intensity" => intensity = number(value("--intensity")?)?,
             "--all-words" => o.all_words = true,
             "--unigram" => o.unigram = true,
@@ -235,12 +218,8 @@ fn parse(args: Vec<String>) -> Result<Options, String> {
             _ => o.positional.push(arg),
         }
     }
-    o.deformation = std::mem::take(&mut o.deformation).intensity(intensity);
-    o.deformation.seed = seed;
-    o.deformation.name = names.join(" + ");
-    if intensity < 1.0 {
-        o.deformation.name += &format!(" @ {intensity}");
-    }
+    o.deformation =
+        spec::deformation(&steps, intensity, seed).map_err(|e| format!("{e} (see `list`)"))?;
     Ok(o)
 }
 

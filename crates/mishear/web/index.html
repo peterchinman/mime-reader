@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>mishear</title>
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <header>
+      <h1>mishear</h1>
+      <p class="tagline">Deform a line's sounds, then hear other words in them.</p>
+      <p id="status" class="status" role="status">Loading…</p>
+    </header>
+    <main>
+      <aside id="controls">
+        <details open id="deformation-panel">
+          <summary>Deformation</summary>
+          <div class="panel-body">
+            <p class="hint">
+              Steps apply in order. Accents bundle consonant rules and vowel moves; you can also add
+              the pieces one at a time.
+            </p>
+            <ol id="steps" class="steps"></ol>
+            <select id="add-step" aria-label="Add a step"></select>
+            <div id="deformation-knobs"></div>
+            <figure class="chart">
+              <svg id="vowel-chart" viewBox="0 0 320 280" role="img" aria-label="Vowel chart"></svg>
+              <figcaption>
+                <span id="vowel-changes"></span>
+                <span class="hint"
+                  >Grey: General American (Hillenbrand et al. 1995). Colored: after the vowel-space
+                  moves. Accent rules that rewrite vowels by context aren't drawn.</span
+                >
+              </figcaption>
+            </figure>
+          </div>
+        </details>
+        <details open>
+          <summary>Search</summary>
+          <div class="panel-body" id="search-knobs"></div>
+        </details>
+        <details>
+          <summary>Cost</summary>
+          <div class="panel-body" id="cost-knobs"></div>
+        </details>
+        <details>
+          <summary>Lexicon</summary>
+          <div class="panel-body">
+            <div id="lexicon-knobs"></div>
+            <p id="lexicon-info" class="hint"></p>
+          </div>
+        </details>
+        <details>
+          <summary>Sweep</summary>
+          <div class="panel-body">
+            <p class="hint">Run the line once per value of one knob, everything else fixed.</p>
+            <label class="row">knob <select id="sweep-knob"></select></label>
+            <label class="row">values <input id="sweep-values" type="text" /></label>
+            <button id="sweep-run" type="button">Run sweep</button>
+          </div>
+        </details>
+        <div class="panel-actions">
+          <button id="reset-all" type="button">Reset every knob</button>
+          <button id="copy-link" type="button">Copy link to these settings</button>
+        </div>
+      </aside>
+
+      <section id="workspace">
+        <div class="input-bar">
+          <div class="mode" role="radiogroup" aria-label="Input">
+            <label><input type="radio" name="mode" value="mishear" checked /> text</label>
+            <label><input type="radio" name="mode" value="phonemes" /> ARPAbet phonemes</label>
+          </div>
+          <textarea id="text" rows="2" spellcheck="false"></textarea>
+          <div class="input-actions">
+            <button id="run" type="button" class="primary">Hear</button>
+            <button id="random-line" type="button">Random public-domain line</button>
+            <label><input id="auto-run" type="checkbox" /> run as I type</label>
+            <span id="source" class="hint"></span>
+          </div>
+        </div>
+        <div id="error" class="error" hidden></div>
+        <section id="sounds-section" hidden>
+          <h2>Sounds</h2>
+          <p id="deformation-name" class="hint"></p>
+          <table id="sounds" class="sounds"></table>
+        </section>
+        <section id="heard-section" hidden>
+          <h2>Heard</h2>
+          <ol id="hearings" class="hearings"></ol>
+          <p id="stats" class="hint"></p>
+          <h3>Alignment</h3>
+          <p class="hint">Each heard word over the (deformed) phonemes it covers.</p>
+          <div class="alignment-scroll"><div id="alignment" class="alignment"></div></div>
+        </section>
+        <section id="sweep-section" hidden>
+          <h2 id="sweep-title">Sweep</h2>
+          <div id="sweep" class="sweep"></div>
+        </section>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
