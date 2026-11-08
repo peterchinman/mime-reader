@@ -470,7 +470,7 @@ mod tests {
             zipf,
         })
         .collect();
-        Lexicon::build(&dict, &frequencies, 100, |_| true)
+        Lexicon::build(&dict, &frequencies, 100, true, |_| true)
     }
 
     /// Every word sequence's best cost over every segmentation, by brute

@@ -83,18 +83,24 @@ pub struct Engine {
 impl Engine {
     /// Loads CMUdict from `cmudict` and the frequency list from
     /// `frequencies`, keeping the `vocabulary` most frequent words — only
-    /// those in `common` when given.
+    /// those in `common` when given — with every pronunciation or only the
+    /// first.
     pub fn load(
         cmudict: &Path,
         frequencies: &Path,
         vocabulary: usize,
+        all_pronunciations: bool,
         common: Option<&CommonWords>,
     ) -> Result<Self, String> {
         let dict =
             CmuDictionary::load(cmudict).map_err(|e| format!("{}: {e}", cmudict.display()))?;
-        let lexicon = Lexicon::build(&dict, &read_frequencies(frequencies)?, vocabulary, |w| {
-            common.is_none_or(|c| c.contains(w))
-        });
+        let lexicon = Lexicon::build(
+            &dict,
+            &read_frequencies(frequencies)?,
+            vocabulary,
+            all_pronunciations,
+            |w| common.is_none_or(|c| c.contains(w)),
+        );
         Self::with_lexicon(dict, lexicon)
     }
 

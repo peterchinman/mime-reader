@@ -34,6 +34,9 @@ pub struct Lexicon {
 /// `P(w | v) = (count(v, w) + μ·P(w)) / (count(v) + μ)`, so a pair seen often
 /// is likely, and a rarely seen left word says little.
 struct Bigrams {
+    /// The smoothing strength `μ`: how many words of evidence the unigram
+    /// prior is worth.
+    prior: f32,
     /// `count(v)`: how often `v` is followed by any word.
     totals: Vec<f32>,
     pairs: HashMap<(WordId, WordId), f32>,
@@ -41,8 +44,8 @@ struct Bigrams {
     best: Vec<f32>,
 }
 
-/// The smoothing strength `μ`.
-const BIGRAM_PRIOR: f32 = 100.0;
+/// The default smoothing strength `μ`.
+pub const BIGRAM_PRIOR: f32 = 100.0;
 
 /// A word with its Zipf frequency (log10 occurrences per billion words).
 pub struct Frequency {
@@ -125,11 +128,12 @@ impl CommonWords {
 impl Lexicon {
     /// The `max_words` most frequent words that CMUdict can pronounce, that
     /// are spelled with letters and apostrophes only, and that `keep`
-    /// accepts, with every CMUdict pronunciation.
+    /// accepts — with every CMUdict pronunciation, or only the first.
     pub fn build(
         dict: &CmuDictionary,
         frequencies: &[Frequency],
         max_words: usize,
+        all_pronunciations: bool,
         keep: impl Fn(&str) -> bool,
     ) -> Self {
         let mut lexicon = Self {
@@ -161,7 +165,12 @@ impl Lexicon {
                 .push((9.0 - frequency.zipf) * std::f32::consts::LN_10);
             lexicon.index.insert(word.to_string(), id);
             let mut seen: Vec<Vec<Ph>> = Vec::new();
-            for pronunciation in pronunciations {
+            let count = if all_pronunciations {
+                pronunciations.len()
+            } else {
+                1
+            };
+            for pronunciation in &pronunciations[..count] {
                 let phonemes: Vec<Ph> = pronunciation.iter().map(Ph::from_phoneme).collect();
                 if !seen.contains(&phonemes) {
                     lexicon.insert(&phonemes, id);
@@ -213,8 +222,9 @@ impl Lexicon {
 
     /// Reads word-pair counts (`left<TAB>right<TAB>count`, with
     /// `left<TAB>*<TAB>total` lines for the left words' totals), for
-    /// [`Self::surprisal_after`].
-    pub fn load_bigrams(&mut self, path: &Path) -> Result<(), String> {
+    /// [`Self::surprisal_after`], smoothed with strength `prior` (μ; see
+    /// [`BIGRAM_PRIOR`]).
+    pub fn load_bigrams(&mut self, path: &Path, prior: f32) -> Result<(), String> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let mut totals = vec![0.0f32; self.len()];
         let mut pairs = HashMap::new();
@@ -237,11 +247,12 @@ impl Lexicon {
         }
         let mut best: Vec<f32> = self.surprisal.clone();
         for (&(v, w), &count) in &pairs {
-            let p = (count + BIGRAM_PRIOR * (-self.surprisal[w as usize]).exp())
-                / (totals[v as usize] + BIGRAM_PRIOR);
+            let p = (count + prior * (-self.surprisal[w as usize]).exp())
+                / (totals[v as usize] + prior);
             best[w as usize] = best[w as usize].min(-p.ln());
         }
         self.bigrams = Some(Bigrams {
+            prior,
             totals,
             pairs,
             best,
@@ -260,8 +271,7 @@ impl Lexicon {
         match (&self.bigrams, previous) {
             (Some(b), Some(v)) => {
                 let count = b.pairs.get(&(v, word)).copied().unwrap_or(0.0);
-                let p = (count + BIGRAM_PRIOR * (-unigram).exp())
-                    / (b.totals[v as usize] + BIGRAM_PRIOR);
+                let p = (count + b.prior * (-unigram).exp()) / (b.totals[v as usize] + b.prior);
                 -p.ln()
             }
             _ => unigram,

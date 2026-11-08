@@ -65,6 +65,7 @@ cargo run --release -p mishear -- deform "the light is gone from the hill" --acc
 cargo run --release -p mishear -- mishear "the light is gone from the hill" --accent cockney
 cargo run --release -p mishear -- mishear "…" --vowels mirror:front-back --knob th-stopping
 cargo run --release -p mishear -- examples --accent new-zealand --lines 6 --public
+cargo run --release -p mishear -- sweep "kiss the sky" --lm-values 0,0.05,0.2 --penalty-values 0,0.3
 cargo run --release -p mishear -- cost      # timing table
 cargo run --release -p mishear -- list      # accents and knobs
 ```
@@ -96,6 +97,39 @@ There are two passes:
    against every span starting there. The walk prunes subtrees that can't
    finish a word within the bound.
 2. A k-best dynamic program runs over the resulting word lattice.
+
+### The prior's knobs
+
+The weights below are judgment calls, picked by looking at output. They
+weren't fitted to data, so they are all flags. `sweep` loads the engine once
+and runs a grid of them.
+
+| flag | default | what it trades |
+|---|---|---|
+| `--lm` | 0.05 | sound against word frequency |
+| `--word-penalty` | 0.1 | many short words against few long ones |
+| `--pronunciations first\|all` | all | more ways to hear a word, against more chance matches |
+| `--bigram-prior` | 100 | trusting word pairs (small) against unigram frequency (large) |
+| `--unigram` | off | exactness and speed, against fluency |
+| `--vocab`, `--all-words` | 50k, filtered | coverage against obscure words, names and brands |
+| `--novelty`, `--function-share` | 1.0, 0.2 | departing from the original's words |
+
+What the sweep showed (`hear "kiss the sky"`, and two public-domain lines):
+
+- **`--lm 0`: sound alone.** Near-exact, obscure words: "kish thus chi",
+  "slip round's withe equals ast". The word penalty changes nothing at this
+  setting.
+- **`--lm` 0.02–0.1: the useful band.**
+  - At 0.05: "case thus guy", "case this guy", "crow don is so to be".
+  - At 0.1: more fluent, but further from the sound: "slip round the sequel
+    just", "written is so to be".
+- **`--lm` 0.2 and up: frequency alone.** "of the", "the ground the sequel
+  just". Add a word penalty of 0.3 and the line collapses into one common
+  long word: "inevitable", "scientifically".
+- **`--pronunciations first`** changes a few results ("crow donna's soda by"
+  rather than "crow don is so to be"), with no clear winner.
+- **`--bigram-prior`.** At 10 the model trusts sparse pairs ("cretin is so to
+  be"); at 1000 it acts like the unigram model.
 
 **Exactness.** With the unigram model (`--unigram`), the search is exact. It
 returns every match within the bound with its exact cost, and a test checks

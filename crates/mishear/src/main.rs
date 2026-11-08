@@ -21,6 +21,8 @@ USAGE: cargo run --release -p mishear -- COMMAND [OPTIONS]
   deform TEXT        TEXT's phonemes before and after a deformation
   mishear TEXT       deform TEXT, then hear it back
   examples           mishear lines drawn from data/echo
+  sweep TEXT         mishear TEXT at every combination of --lm-values,
+                     --penalty-values and --pron-values (top -n each)
   cost               time the search on corpus lines
   list               accents and knobs
 
@@ -29,7 +31,19 @@ SEARCH OPTIONS
   --within X         every match costing at most X (otherwise the exact top N)
   --novelty F        mishear/hear/examples: cost per word shared with the line
                      (default 1.0; function words a fifth of that)
-  --lm F             cost per nat of word surprisal (default 0.05)
+  --lm F             cost per nat of word surprisal, −ln P(word | previous):
+                     how much common words are preferred (default 0.05; 0
+                     ignores frequency)
+  --word-penalty F   cost per word: higher prefers fewer, longer words
+                     (default 0.1)
+  --pronunciations first|all
+                     match words under every CMUdict pronunciation or only
+                     the first (default all)
+  --bigram-prior F   bigram smoothing μ: how many words of evidence the
+                     unigram frequencies are worth (default 100; larger
+                     trusts word pairs less)
+  --function-share F the share of --novelty a shared function word costs
+                     (default 0.2)
   --vocab N          lexicon size: most frequent words (default 50000)
   --unigram          score words alone, not by the previous word too (the
                      bigram model, from data/bigrams-en.tsv, makes output
@@ -51,6 +65,11 @@ DEFORMATION OPTIONS (combine freely; applied in order)
   --intensity F      scale every step's rate (0–1; default 1)
   --seed N           which sites a partial rate picks (default 0)
 
+SWEEP OPTIONS
+  --lm-values A,B,…        (default: --lm)
+  --penalty-values A,B,…   (default: --word-penalty)
+  --pron-values first,all  (default: --pronunciations)
+
 EXAMPLES OPTIONS
   --lines K          how many corpus lines (default 6)
   --public           only the public-domain poems (data/echo/public)
@@ -70,6 +89,13 @@ struct Options {
     all_words: bool,
     unigram: bool,
     public_only: bool,
+    word_penalty: f32,
+    all_pronunciations: bool,
+    bigram_prior: f32,
+    function_share: f32,
+    lm_values: Option<Vec<f32>>,
+    penalty_values: Option<Vec<f32>>,
+    pron_values: Option<Vec<bool>>,
 }
 
 fn parse(args: Vec<String>) -> Result<Options, String> {
@@ -89,6 +115,13 @@ fn parse(args: Vec<String>) -> Result<Options, String> {
         all_words: false,
         unigram: false,
         public_only: false,
+        word_penalty: 0.1,
+        all_pronunciations: true,
+        bigram_prior: mishear::lexicon::BIGRAM_PRIOR,
+        function_share: 0.2,
+        lm_values: None,
+        penalty_values: None,
+        pron_values: None,
     };
     let mut intensity = 1.0;
     let mut seed = 0;
@@ -101,6 +134,22 @@ fn parse(args: Vec<String>) -> Result<Options, String> {
             "--within" => o.within = Some(number(value("--within")?)?),
             "--novelty" => o.novelty = number(value("--novelty")?)?,
             "--lm" => o.lm = number(value("--lm")?)?,
+            "--word-penalty" => o.word_penalty = number(value("--word-penalty")?)?,
+            "--bigram-prior" => o.bigram_prior = number(value("--bigram-prior")?)?,
+            "--function-share" => o.function_share = number(value("--function-share")?)?,
+            "--pronunciations" => {
+                o.all_pronunciations = pronunciations(&value("--pronunciations")?)?
+            }
+            "--lm-values" => o.lm_values = Some(numbers(&value("--lm-values")?)?),
+            "--penalty-values" => o.penalty_values = Some(numbers(&value("--penalty-values")?)?),
+            "--pron-values" => {
+                o.pron_values = Some(
+                    value("--pron-values")?
+                        .split(',')
+                        .map(pronunciations)
+                        .collect::<Result<_, _>>()?,
+                )
+            }
             "--vocab" => {
                 o.vocab = value("--vocab")?
                     .parse()
@@ -161,6 +210,20 @@ fn parse(args: Vec<String>) -> Result<Options, String> {
     Ok(o)
 }
 
+fn pronunciations(s: &str) -> Result<bool, String> {
+    match s.trim() {
+        "all" => Ok(true),
+        "first" => Ok(false),
+        other => Err(format!("pronunciations {other:?}: expected first or all")),
+    }
+}
+
+fn numbers(s: &str) -> Result<Vec<f32>, String> {
+    s.split(',')
+        .map(|x| x.trim().parse::<f32>().map_err(|e| format!("{x}: {e}")))
+        .collect()
+}
+
 fn crate_path(relative: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
 }
@@ -168,7 +231,11 @@ fn crate_path(relative: &str) -> PathBuf {
 /// The system word list that keeps names and brands out of the lexicon.
 const COMMON_WORDS: &str = "/usr/share/dict/words";
 
-fn engine(vocab: usize, all_words: bool) -> Result<Engine, String> {
+fn engine(o: &Options) -> Result<Engine, String> {
+    engine_with(o, o.vocab, o.all_pronunciations)
+}
+
+fn engine_with(o: &Options, vocab: usize, all_pronunciations: bool) -> Result<Engine, String> {
     let frequencies = crate_path("data/wordfreq-en.tsv");
     if !frequencies.exists() {
         return Err(format!(
@@ -176,7 +243,7 @@ fn engine(vocab: usize, all_words: bool) -> Result<Engine, String> {
             frequencies.display()
         ));
     }
-    let common = if all_words || !Path::new(COMMON_WORDS).exists() {
+    let common = if o.all_words || !Path::new(COMMON_WORDS).exists() {
         None
     } else {
         Some(CommonWords::read(Path::new(COMMON_WORDS))?)
@@ -185,11 +252,12 @@ fn engine(vocab: usize, all_words: bool) -> Result<Engine, String> {
         &crate_path("../../data/CMUdict/cmudict-0.7b"),
         &frequencies,
         vocab,
+        all_pronunciations,
         common.as_ref(),
     )?;
     let bigrams = crate_path("data/bigrams-en.tsv");
     if bigrams.exists() {
-        engine.lexicon.load_bigrams(&bigrams)?;
+        engine.lexicon.load_bigrams(&bigrams, o.bigram_prior)?;
     }
     Ok(engine)
 }
@@ -199,6 +267,7 @@ fn search_config(o: &Options) -> SearchConfig {
         results: o.results,
         bound: o.within.unwrap_or(2.0),
         lm_weight: o.lm,
+        word_penalty: o.word_penalty,
         bigrams: !o.unigram,
         ..SearchConfig::default()
     }
@@ -208,9 +277,9 @@ fn mishear_config(o: &Options) -> MishearConfig {
     MishearConfig {
         search: search_config(o),
         novelty: o.novelty,
+        function_word_share: o.function_share,
         // `--within X` fixes the bound; otherwise it grows to the top N.
         max_bound: o.within.unwrap_or(30.0),
-        ..MishearConfig::default()
     }
 }
 
@@ -331,7 +400,7 @@ fn run(o: Options) -> Result<(), String> {
         "search" => {
             let input =
                 Ph::parse_all(&o.positional.join(" ")).ok_or("expected ARPAbet phonemes")?;
-            let engine = engine(o.vocab, o.all_words)?;
+            let engine = engine(&o)?;
             let config = search_config(&o);
             let (matches, stats) = match o.within {
                 Some(_) => search::search(&input, &engine.lexicon, &engine.cost, &config),
@@ -356,7 +425,7 @@ fn run(o: Options) -> Result<(), String> {
             );
         }
         "hear" | "mishear" => {
-            let engine = engine(o.vocab, o.all_words)?;
+            let engine = engine(&o)?;
             let text = o.positional.join(" ");
             let o = if o.command == "hear" {
                 Options {
@@ -369,7 +438,7 @@ fn run(o: Options) -> Result<(), String> {
             print_mishearing(&engine, &text, &o)?;
         }
         "deform" => {
-            let engine = engine(o.vocab, o.all_words)?;
+            let engine = engine(&o)?;
             let text = o.positional.join(" ");
             let reading = engine.read(&text)?;
             let after = o
@@ -381,7 +450,7 @@ fn run(o: Options) -> Result<(), String> {
             }
         }
         "examples" => {
-            let engine = engine(o.vocab, o.all_words)?;
+            let engine = engine(&o)?;
             for (poem, line) in sample_lines(&engine, o.lines, o.line_seed, o.public_only) {
                 println!("— {poem}");
                 print_mishearing(&engine, &line, &o)?;
@@ -389,7 +458,58 @@ fn run(o: Options) -> Result<(), String> {
             }
         }
         "cost" => cost_report(&o)?,
+        "sweep" => sweep(&o)?,
         other => return Err(format!("unknown command {other:?}\n\n{USAGE}")),
+    }
+    Ok(())
+}
+
+/// Mishears one line at every combination of the prior's settings.
+fn sweep(o: &Options) -> Result<(), String> {
+    let text = o.positional.join(" ");
+    let lms = o.lm_values.clone().unwrap_or_else(|| vec![o.lm]);
+    let penalties = o
+        .penalty_values
+        .clone()
+        .unwrap_or_else(|| vec![o.word_penalty]);
+    let prons = o
+        .pron_values
+        .clone()
+        .unwrap_or_else(|| vec![o.all_pronunciations]);
+    println!("{text}");
+    if !o.deformation.steps.is_empty() {
+        println!("  [{}]", o.deformation.name);
+    }
+    for &all in &prons {
+        let engine = engine_with(o, o.vocab, all)?;
+        for &lm in &lms {
+            for &penalty in &penalties {
+                let options = Options {
+                    command: String::new(),
+                    positional: Vec::new(),
+                    deformation: o.deformation.clone(),
+                    lm_values: None,
+                    penalty_values: None,
+                    pron_values: None,
+                    lm,
+                    word_penalty: penalty,
+                    all_pronunciations: all,
+                    ..*o
+                };
+                let m = engine.mishear(&text, &options.deformation, &mishear_config(&options))?;
+                let heard: Vec<String> = m
+                    .heard
+                    .iter()
+                    .map(|h| format!("{} ({:.2})", h.text, h.phonetic))
+                    .collect();
+                println!(
+                    "  lm {lm:<5} penalty {penalty:<4} {:<5} │ {}  [{}]",
+                    if all { "all" } else { "first" },
+                    heard.join(" · "),
+                    ms(m.stats.elapsed)
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -397,7 +517,7 @@ fn run(o: Options) -> Result<(), String> {
 /// Times the exact top-N search and the bounded search on corpus lines.
 fn cost_report(o: &Options) -> Result<(), String> {
     for vocab in [20_000, 50_000, 100_000] {
-        let engine = engine(vocab, o.all_words)?;
+        let engine = engine_with(o, vocab, o.all_pronunciations)?;
         let lines = sample_lines(&engine, o.lines.max(20), o.line_seed, o.public_only);
         println!(
             "== vocabulary {} words ({} trie nodes), {} lines",
