@@ -60,7 +60,7 @@ struct Bigrams {
 }
 
 /// The default smoothing strength `μ`.
-pub const BIGRAM_PRIOR: f32 = 100.0;
+pub const BIGRAM_PRIOR: f32 = 1000.0;
 
 /// A word with its Zipf frequency (log10 occurrences per billion words).
 pub struct Frequency {

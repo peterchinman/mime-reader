@@ -45,7 +45,7 @@ SEARCH OPTIONS
                      match words under every CMUdict pronunciation or only
                      the first (default all)
   --bigram-prior F   bigram smoothing μ: how many words of evidence the
-                     unigram frequencies are worth (default 100; larger
+                     unigram frequencies are worth (default 1000; larger
                      trusts word pairs less)
   --function-share F the share of --novelty (and --root) a shared function
                      word costs (default 0.2)
@@ -65,9 +65,11 @@ SEARCH OPTIONS
                      sound the same are merged, keeping the cheapest
                      spelling
   --vocab N          lexicon size: most frequent words (default 50000)
-  --unigram          score words alone, not by the previous word too (the
-                     bigram model, from data/bigrams-en.tsv, makes output
-                     more fluent, at the cost of exactness: see search.rs)
+  --bigrams          score each word by the previous word too, with word-pair
+                     counts from contemporary subtitles (data/bigrams-en.tsv;
+                     see scripts/bigrams.py). More fluent; no longer exact
+                     (see search.rs), and slower. Off by default.
+  --bigram-file PATH other word-pair counts (implies --bigrams)
   --all-words        keep names and brands (by default the lexicon keeps only
                      words /usr/share/dict/words has in lowercase, or whose
                      base form it has)
@@ -113,7 +115,8 @@ struct Options {
     lines: usize,
     line_seed: u64,
     all_words: bool,
-    unigram: bool,
+    bigrams: bool,
+    bigram_file: Option<PathBuf>,
     public_only: bool,
     word_penalty: f32,
     all_pronunciations: bool,
@@ -149,7 +152,8 @@ fn parse(args: Vec<String>) -> Result<Options, String> {
         lines: 6,
         line_seed: 1,
         all_words: false,
-        unigram: false,
+        bigrams: false,
+        bigram_file: None,
         public_only: false,
         word_penalty: 0.1,
         all_pronunciations: true,
@@ -227,7 +231,11 @@ fn parse(args: Vec<String>) -> Result<Options, String> {
             "--vowels" => steps.push(StepSpec::Vowels(value("--vowels")?)),
             "--intensity" => intensity = number(value("--intensity")?)?,
             "--all-words" => o.all_words = true,
-            "--unigram" => o.unigram = true,
+            "--bigrams" => o.bigrams = true,
+            "--bigram-file" => {
+                o.bigram_file = Some(PathBuf::from(value("--bigram-file")?));
+                o.bigrams = true;
+            }
             "--seed" => {
                 seed = value("--seed")?
                     .parse()
@@ -289,9 +297,18 @@ fn engine_with(o: &Options, vocab: usize, all_pronunciations: bool) -> Result<En
         all_pronunciations,
         common.as_ref(),
     )?;
-    let bigrams = crate_path("data/bigrams-en.tsv");
-    if bigrams.exists() {
-        engine.lexicon.load_bigrams(&bigrams, o.bigram_prior)?;
+    if o.bigrams {
+        let path = o
+            .bigram_file
+            .clone()
+            .unwrap_or_else(|| crate_path("data/bigrams-en.tsv"));
+        if !path.exists() {
+            return Err(format!(
+                "{}: no word-pair counts (run scripts/bigrams.py)",
+                path.display()
+            ));
+        }
+        engine.lexicon.load_bigrams(&path, o.bigram_prior)?;
     }
     engine.cost = cost_model(o);
     Ok(engine)
@@ -311,7 +328,7 @@ fn search_config(o: &Options) -> SearchConfig {
         bound: o.within.unwrap_or(2.0),
         lm_weight: o.lm,
         word_penalty: o.word_penalty,
-        bigrams: !o.unigram,
+        bigrams: o.bigrams,
         distinct_sounds: !o.all_spellings,
         ..SearchConfig::default()
     }

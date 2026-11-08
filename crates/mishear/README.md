@@ -45,10 +45,9 @@ which is gitignored.
 python3 -m venv /tmp/wfenv && /tmp/wfenv/bin/pip install wordfreq
 /tmp/wfenv/bin/python -I crates/mishear/scripts/wordfreq_list.py 100000
 
-# Bigram counts from NLTK's packaging of public-domain Project Gutenberg texts
-curl -sSLo /tmp/gutenberg.zip \
-  https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/corpora/gutenberg.zip
-python3 -I crates/mishear/scripts/bigrams.py /tmp/gutenberg.zip
+# Word-pair counts for --bigrams (optional): streams the first ~300 MB of
+# OpenSubtitles v2024 (English) from OPUS and counts 200M tokens, ~3 min
+python3 -I crates/mishear/scripts/bigrams.py
 ```
 
 `/usr/share/dict/words` (Webster's 2nd, present on macOS) is used when it
@@ -114,7 +113,9 @@ What the page has:
 `npm run data` symlinks CMUdict, the generated word lists and
 `/usr/share/dict/words` into `public/data`, which is gitignored. A build
 copies them into `dist/`. That copy includes the wordfreq list, which is CC
-BY-SA 4.0, so a hosted build has to carry that license's attribution.
+BY-SA 4.0, so a hosted build has to carry that license's attribution. It
+also includes the subtitle word-pair counts (see "Bigrams"), whose source
+text OPUS distributes without owning; check that before hosting them.
 
 ## Search
 
@@ -123,9 +124,10 @@ of the input. Its cost adds up three things:
 
 - **Phonetic cost.** A weighted edit distance whose substitution costs come
   from mime-reader's vowel and consonant distance engines, on a 0–1 scale.
-- **Language-model cost.** `0.05 × −ln P(word | previous word)` plus `0.1`
-  per word. The bigram model is Dirichlet-smoothed toward wordfreq's
-  unigram frequencies.
+- **Language-model cost.** `0.05 × −ln P(word)` plus `0.1` per word, with
+  P from wordfreq. With `--bigrams`, `P(word | previous word)` instead:
+  word-pair counts from contemporary subtitles, Dirichlet-smoothed toward
+  wordfreq's frequencies (see "Bigrams" below).
 - **Extra costs.** The mishearing engine charges 1.0 for each word the
   original line contains, and a fifth of that for function words. Two more
   are off by default: a charge for words sharing a stem with the line's
@@ -151,8 +153,8 @@ and runs a grid of them.
 | `--lm` | 0.05 | sound against word frequency |
 | `--word-penalty` | 0.1 | many short words against few long ones |
 | `--pronunciations first\|all` | all | more ways to hear a word, against more chance matches |
-| `--bigram-prior` | 100 | trusting word pairs (small) against unigram frequency (large) |
-| `--unigram` | off | exactness and speed, against fluency |
+| `--bigram-prior` | 1000 | with `--bigrams`: trusting word pairs (small) against unigram frequency (large) |
+| `--bigrams` | off | fluency, against exactness and speed |
 | `--vocab`, `--all-words` | 50k, filtered | coverage against obscure words, names and brands |
 | `--novelty`, `--function-share` | 1.0, 0.2 | departing from the original's words |
 | `--root` | 0 | departing from the original's roots too ("flying" for "fly in") |
@@ -161,22 +163,65 @@ and runs a grid of them.
 | `--swap` | off | adjacent consonants exchanged as one edit ("ask" ↔ "aks") |
 | `--all-spellings` | off | listing homophone spellings separately, rather than merging hearings that sound the same |
 
-What the sweep showed (`hear "kiss the sky"`, and two public-domain lines):
+What the sweep showed (`hear "kiss the sky"`, and two public-domain lines:
+"Sleep rounds with equal zest" in `new-zealand`, "Cried on his shoulder but"
+in `cockney`), with the unigram model:
 
 - **`--lm 0`: sound alone.** Near-exact, obscure words: "kish thus chi",
-  "slip round's withe equals ast". The word penalty changes nothing at this
-  setting.
+  "slee browned swathe equals iced". The word penalty changes nothing at
+  this setting.
 - **`--lm` 0.02–0.1: the useful band.**
-  - At 0.05: "case thus guy", "case this guy", "crow don is so to be".
-  - At 0.1: more fluent, but further from the sound: "slip round the sequel
-    just", "written is so to be".
-- **`--lm` 0.2 and up: frequency alone.** "of the", "the ground the sequel
-  just". Add a word penalty of 0.3 and the line collapses into one common
-  long word: "inevitable", "scientifically".
-- **`--pronunciations first`** changes a few results ("crow donna's soda by"
-  rather than "crow don is so to be"), with no clear winner.
-- **`--bigram-prior`.** At 10 the model trusts sparse pairs ("cretin is so to
-  be"); at 1000 it acts like the unigram model.
+  - At 0.05: "case this guy", "slip round's with equals east", "grow don is
+    should a by".
+  - At 0.1: commoner words, further from the sound: "case this to", "slip
+    round the sequel just", "written is should a by". A word penalty of 0.3
+    here gives fewer, longer words: "rebounds with equalized".
+- **`--lm` 0.2 and up: frequency alone.** "cases to", "philosophical just".
+- **`--pronunciations first`** changed nothing on these lines.
+- **`--bigram-prior`** (with `--bigrams`): at 30, "cretin is shut up a"
+  comes first; from 300, "crew don is shut up a". See "Bigrams" below for
+  how the default was chosen.
+
+### Bigrams
+
+`--bigrams` scores each word by the one before it, with counts from film and
+TV subtitles: the first 200M tokens of OpenSubtitles v2024 (English), via
+OPUS. Subtitles are the nearest freely available thing to everyday spoken
+English, which is what a mishearing should sound like. The counts are
+smoothed toward wordfreq's frequencies,
+`P(w | v) = (count(v, w) + μ·P(w)) / (count(v) + μ)`, and pairs seen fewer
+than 3 times are dropped (2.3M pairs remain, 35 MB).
+
+They replace counts from 1.2M words of Gutenberg books (Austen, Milton,
+Shakespeare, Melville). `scripts/bigrams.py` holds out every 100th subtitle
+line and reports cross-entropy (nats per word, lower is better) of the
+model the search uses. `--eval` adds a second test set, here the WikiText-103
+test split: written English that neither source has seen. `--compare`
+scores another counts file on the same pairs.
+
+| test set | unigram | Gutenberg, μ 100 (old default) | Gutenberg, best μ | subtitles, μ 1000 |
+|---|---|---|---|---|
+| held-out subtitles (1.66M pairs) | 7.11 | 6.69 | 6.48 | **5.10** |
+| WikiText-103 test (159k pairs) | 7.80 | 8.29 | 7.76 | **7.62** |
+
+- **The subtitle counts win at every μ on both sets.** On Wikipedia, the old
+  configuration was worse than no bigram model at all.
+- **μ trades the two sets.** Held-out subtitles do best at 300 (5.096);
+  Wikipedia keeps improving up to 3000 (7.51). At 1000 the subtitles lose
+  0.005 nats against their best, and Wikipedia is 0.18 better than unigram.
+- **Pruning pairs seen fewer than 3 times** costs 0.07 nats on subtitles and
+  0.13 on Wikipedia (at μ 1000), and halves the file. Fewer than 5 would
+  cost nearly twice that.
+- **What it sounds like.** "Kiss the sky": unigram "case this guy", "case
+  thus guy", "case this chi"; with `--bigrams`, "case this guy", "guess this
+  guy", "does this guy", "give this guy" (Gutenberg had "kisses guy", "case
+  this gay"). "Since Persia fell at Marathon" gains "…at me rough on".
+- **Cost.** Over 12 public lines, a mishearing averages 137 ms with the
+  unigram model and 370 ms with bigrams (Gutenberg's took 318). Loading the
+  counts adds about 0.35 s to the command line, and about 2 s in the web
+  page, which fetches them only when bigrams are turned on.
+- OPUS distributes the subtitles without owning them. The counts are
+  generated locally and gitignored, like the wordfreq list.
 
 ### Evaluating against known mondegreens
 
@@ -193,15 +238,16 @@ cargo run --release -p mishear -- eval --all-words --all-spellings \
 
 At its best (`--lm 0.02`, `--novelty 0`), only 2 of the 12 reachable
 mishearings make the top 50: "hark the harold angels sing" at rank 1 and
-"gladly the cross eyed bear" at rank 2.
+"gladly the cross eyed bear" at rank 2 (MRR 0.125). With `--bigrams`, both
+are at rank 1 (MRR 0.167), and both stay in the top 10 at `--novelty 0.1`,
+where the unigram model keeps only "harold" there (rank 6).
 
 The others lose to closer neighbours. "Bringing in the thieves" (sound
 cost 0.30) beats "bringing in the sheep" (0.94), and "while shepherds
 washed their socks" needs two changes at once. Famous mondegreens are
 famous for their meaning, not for being the nearest sound. So this set
 can't tune the weights toward anything but "stay close to the original",
-which pulls against `--novelty`; any novelty at all drops both hits. Stress
-and swaps don't change it.
+which pulls against `--novelty`. Stress and swaps barely change it.
 
 Tuning on taste needs labels: hearings someone has marked good or bad.
 
@@ -264,7 +310,7 @@ The remaining ~45% needs a walk that resumes from the previous round's
 pruned frontier. That means keeping each frontier node's column, on the
 order of 100 MB per line, which isn't worth it at 0.1–0.5 s per line.
 
-**Exactness.** With the unigram model (`--unigram`), the search is exact. It
+**Exactness.** With the unigram model (the default), the search is exact. It
 returns every match within the bound with its exact cost, and a test checks
 it against brute force. The argument:
 
@@ -275,7 +321,7 @@ it against brute force. The argument:
 `best_matches` raises the bound geometrically until it holds N matches, which
 gives the exact top N.
 
-With bigrams, the best word for a span depends on the word before it. Pruning
+With `--bigrams`, the best word for a span depends on the word before it. Pruning
 still uses an admissible lower bound, so it is safe. But the per-span
 shortlist (30 words) makes the result approximate.
 
@@ -292,9 +338,9 @@ Finding the exact best is barely more expensive than the top 10. Both cost
 about one bounded trie walk per input position, which grows linearly with
 the vocabulary and the line's length. The bounded search ("N within X") is
 about 1.5× cheaper, because it skips the bound-raising rounds. An
-approximate search isn't needed. Mishearings, with bigrams, typically take
-0.1–0.25 s per line, because the penalty on shared words pushes the bound
-out. Accents that lengthen the line take longer; Japanese epenthesis, for
+approximate search isn't needed. Mishearings typically take 0.1–0.3 s per
+line (with `--bigrams`, 0.2–0.8 s), because the penalty on shared words
+pushes the bound out. Accents that lengthen the line take longer; Japanese epenthesis, for
 example, takes about 1 s.
 
 ## Deformations
@@ -358,27 +404,31 @@ splits of the *bird* vowel, and "tay".
 ## Examples
 
 These use public-domain lines from `data/echo/public` (`examples --public
---line-seed 7`). Each shows the top match.
+--line-seed 7`). Each shows the top match, with the default (unigram) model
+and with `--bigrams`.
 
-| line | deformation | heard |
-|---|---|---|
-| Thought gets dry in the brain. | irish | taught gates troy and a plain |
-| Sleep rounds with equal zest | new-zealand | slip round the sequel just |
-| Cried on his shoulder but | cockney | crow don is so to be |
-| Don' know's I'd mind his goin' | southern | done no judgment he's going |
-| Such a maid as was never seen! | reverse-vowel-shift | such an odd as was never sane |
-| Such a maid as was never seen! | rotate:-60 | sesame days was neither soon |
-| Sleep rounds with equal zest | mirror:front-back | sloop rinds without will just |
-| Sleep rounds with equal zest | spanish | asleep round swathe equals asked |
-| Sly, musical, a jewel in rhyme, | japanese | sure i muse ecology ruin limo |
-| Sly, musical, a jewel in rhyme, | pull:1,1,0.5 | slow music ritual own room |
+| line | deformation | heard | heard, `--bigrams` |
+|---|---|---|---|
+| Thought gets dry in the brain. | irish | taught get straw into plane | taught get straw into plain |
+| Sleep rounds with equal zest | new-zealand | slip round's with equals east | slip round the sequel just |
+| Cried on his shoulder but | cockney | grow don is should a by | crew don is shut up a |
+| Don' know's I'd mind his goin' | southern | done no judgment his going | done no judgment he's going |
+| Such a maid as was never seen! | reverse-vowel-shift | such images was never sane | the tomatoes was never sign |
+| Such a maid as was never seen! | rotate:-60 | sesame days was never soon | sesame days whenever soon |
+| Sleep rounds with equal zest | mirror:front-back | sloop rinds without will just | sloop rinds without will just |
+| Sleep rounds with equal zest | spanish | asleep round swathe equals asked | asleep round swathe equals asked |
+| Sly, musical, a jewel in rhyme, | japanese | sure i music a usual on limo | sure i knew you gigolo issue a ruin limo |
+| Sly, musical, a jewel in rhyme, | pull:1,1,0.5 | slow music a ritual in room | slow music a ritual in room |
 
 ## Limitations and next steps
 
-- **Fluency is the weak point.** The bigram model comes from 1.3M words of
-  Gutenberg prose and verse, and is too small to rule out word salad. A
-  larger n-gram model, or a small neural rescorer over the top 50, would
-  help most.
+- **Fluency.** The unigram default scores each word alone, so hearings can
+  be word salad (or poetry). `--bigrams` adds word-pair counts from
+  subtitles, which helps locally ("guess this guy") but can't see past the
+  previous word ("the tomatoes was never sign"). A longer-range model, such
+  as a trigram model or a small neural rescorer over the top 50, would go
+  further. The backoff could also try Kneser–Ney's continuation counts
+  rather than wordfreq's frequencies.
 - **Names still leak through the common-word filter** ("sri", "elaine").
 - **Snapping chooses one vowel.** The research suggests emitting the
   near-ties as weighted alternatives, which is exactly where mishearings come

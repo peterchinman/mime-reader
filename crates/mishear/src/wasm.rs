@@ -256,7 +256,8 @@ pub struct MishearApp {
 #[wasm_bindgen]
 impl MishearApp {
     /// Builds the engine from CMUdict's bytes, the word-frequency list, and
-    /// optionally the bigram counts and the system word list.
+    /// optionally the bigram counts (or later, with `loadBigrams`) and the
+    /// system word list.
     #[wasm_bindgen(constructor)]
     pub fn new(
         cmudict: &[u8],
@@ -286,6 +287,14 @@ impl MishearApp {
         };
         app.load_bigrams()?;
         Ok(app)
+    }
+
+    /// Adds word-pair counts (`scripts/bigrams.py`'s TSV), smoothed with
+    /// the lexicon options' `bigram_prior`.
+    #[wasm_bindgen(js_name = loadBigrams)]
+    pub fn set_bigrams(&mut self, text: String) -> Result<(), JsError> {
+        self.bigrams = Some(text);
+        self.load_bigrams()
     }
 
     fn load_bigrams(&mut self) -> Result<(), JsError> {

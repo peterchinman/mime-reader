@@ -7,6 +7,21 @@ const post = (message: FromWorker) => self.postMessage(message);
 
 let app: MishearApp | null = null;
 let lexicon: LexiconOptions | null = null;
+let data = '';
+let bigramsLoaded = false;
+
+/** Word-pair counts are big and off by default: fetched on first use. */
+async function ensureBigrams(): Promise<void> {
+  if (bigramsLoaded || !app) return;
+  post({ type: 'status', message: 'Fetching word-pair counts…' });
+  const text = await fetchText(data + 'bigrams-en.tsv', false);
+  if (text === undefined) {
+    throw new Error('No word-pair counts at data/bigrams-en.tsv: run crates/mishear/scripts/bigrams.py, then `npm run data`.');
+  }
+  post({ type: 'status', message: 'Loading word-pair counts…' });
+  app.loadBigrams(text);
+  bigramsLoaded = true;
+}
 
 async function fetchText(url: string, required: boolean): Promise<string | undefined> {
   const res = await fetch(url);
@@ -20,19 +35,18 @@ async function start(overrides: Partial<LexiconOptions>): Promise<void> {
   post({ type: 'status', message: 'Loading the engine…' });
   await init();
   const options: LexiconOptions = { ...defaults().lexicon, ...overrides };
-  const data = import.meta.env.BASE_URL + 'data/';
-  post({ type: 'status', message: 'Fetching CMUdict, word frequencies and bigrams…' });
-  const [dict, frequencies, bigrams, words] = await Promise.all([
+  data = import.meta.env.BASE_URL + 'data/';
+  post({ type: 'status', message: 'Fetching CMUdict and word frequencies…' });
+  const [dict, frequencies, words] = await Promise.all([
     fetch(data + 'cmudict-0.7b').then((r) => {
       if (!r.ok) throw new Error(`${data}cmudict-0.7b: HTTP ${r.status} (run \`npm run data\`)`);
       return r.arrayBuffer();
     }),
     fetchText(data + 'wordfreq-en.tsv', true),
-    fetchText(data + 'bigrams-en.tsv', false),
     fetchText(data + 'words', false),
   ]);
   post({ type: 'status', message: 'Building the lexicon…' });
-  app = new MishearApp(new Uint8Array(dict), frequencies ?? '', bigrams, words, options);
+  app = new MishearApp(new Uint8Array(dict), frequencies ?? '', undefined, words, options);
   lexicon = options;
   post({
     type: 'ready',
@@ -53,6 +67,7 @@ self.onmessage = async (event: MessageEvent<ToWorker>) => {
     }
     if (!app) throw new Error('the engine is not loaded yet');
     if (message.type === 'run') {
+      if (message.request.search.bigrams) await ensureBigrams();
       let rebuildMs = 0;
       if (!sameLexicon(message.lexicon, lexicon)) {
         const t = performance.now();

@@ -67,7 +67,7 @@ const SEARCH_KNOBS: Knob[] = [
     type: 'bool',
     key: 'bigrams',
     label: 'bigrams',
-    hint: 'Score each word given the one before (Gutenberg counts). Approximate: exact only up to the shortlist and 400 partial hearings per position. Off: unigram, and exact.',
+    hint: 'Score each word given the one before, from word-pair counts in contemporary film and TV subtitles. More fluent, but approximate (exact only up to the shortlist and 400 partial hearings per position) and slower. Off: each word alone (unigram), and exact.',
   },
   { type: 'number', key: 'shortlist', label: 'bigram shortlist', hint: 'Words kept per input span when bigrams are on.', min: 5, max: 200, step: 1 },
   {
@@ -264,7 +264,9 @@ interface State {
   sweepValues: string;
 }
 
-const STORAGE_KEY = 'mishear-web-state-v1';
+// Only knobs changed from their defaults are saved, so a change of default
+// reaches everyone who hadn't touched that knob.
+const STORAGE_KEY = 'mishear-web-state-v2';
 const FIRST_LINE = 'Since Persia fell at Marathon';
 let defaults: DefaultsDto;
 let catalog: CatalogDto;
@@ -301,10 +303,10 @@ function loadState(): State {
   return {
     ...base,
     ...saved,
-    deformation: { ...base.deformation, ...saved.deformation },
-    search: { ...base.search, ...saved.search },
-    cost: { ...base.cost, ...saved.cost },
-    lexicon: { ...base.lexicon, ...saved.lexicon },
+    deformation: { ...base.deformation, ...unsaved(saved.deformation) },
+    search: { ...base.search, ...unsaved(saved.search) },
+    cost: { ...base.cost, ...unsaved(saved.cost) },
+    lexicon: { ...base.lexicon, ...unsaved(saved.lexicon) },
     steps: (saved.steps ?? base.steps).filter(validStep),
   };
 }
@@ -315,8 +317,31 @@ function validStep(step: Step): boolean {
   return step.move in MOVES && step.params.length === MOVES[step.move].params.length;
 }
 
+/** `state` minus the knobs at their defaults (`null` marks an optional knob turned off). */
+function savedState(): Partial<State> {
+  const base = defaultState();
+  const changed = (values: object, defaults: object) =>
+    Object.fromEntries(
+      Object.entries({ ...defaults, ...values })
+        .filter(([k, v]) => v !== (defaults as Record<string, unknown>)[k])
+        .map(([k, v]) => [k, v ?? null]),
+    );
+  return {
+    ...state,
+    deformation: changed(state.deformation, base.deformation) as State['deformation'],
+    search: changed(state.search, base.search) as unknown as SearchDto,
+    cost: changed(state.cost, base.cost) as unknown as CostDto,
+    lexicon: changed(state.lexicon, base.lexicon) as unknown as LexiconOptions,
+  };
+}
+
 function saveState(): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(savedState()));
+}
+
+/** Undoes `savedState`'s `null`s. */
+function unsaved<T extends object>(values: T | undefined): Partial<T> {
+  return Object.fromEntries(Object.entries(values ?? {}).map(([k, v]) => [k, v ?? undefined])) as Partial<T>;
 }
 
 function groupValues(group: Group): Record<string, unknown> {
@@ -1036,7 +1061,7 @@ function renderLexiconInfo(): void {
   if (!lexiconInfo) return;
   const i = lexiconInfo;
   $('lexicon-info').textContent =
-    `${thousands(i.words)} words, ${thousands(i.trie_nodes)} trie nodes; bigrams ${i.bigrams ? 'loaded' : 'not loaded'}; ` +
+    `${thousands(i.words)} words, ${thousands(i.trie_nodes)} trie nodes; word-pair counts ${i.bigrams ? 'loaded' : 'not loaded (fetched when bigrams are turned on)'}; ` +
     `system word list ${i.common_words_available ? 'found' : 'not found'}.`;
 }
 
@@ -1125,7 +1150,7 @@ function onReady(m: Extract<FromWorker, { type: 'ready' }>): void {
     deformationChanged();
   };
   $('copy-link').onclick = async () => {
-    const url = `${location.origin}${location.pathname}#${encodeURIComponent(JSON.stringify(state))}`;
+    const url = `${location.origin}${location.pathname}#${encodeURIComponent(JSON.stringify(savedState()))}`;
     await navigator.clipboard.writeText(url);
     setStatus('Link copied.');
   };

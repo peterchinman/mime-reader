@@ -57,8 +57,9 @@ pub struct SearchConfig {
     /// nothing. Depending only on where a word starts, it leaves the search
     /// exact.
     pub boundary_cost: Vec<f32>,
-    /// Score words by the previous word too, when the lexicon has bigrams.
-    /// The search is then exact only up to its per-span shortlist of
+    /// Score words by the previous word too, when the lexicon has bigrams
+    /// (off by default). The search is then exact only up to its per-span
+    /// shortlist of
     /// `shortlist` words (the best word for a span depends on its
     /// predecessor) and its cap of 400 partial matches per position.
     pub bigrams: bool,
@@ -77,7 +78,7 @@ impl Default for SearchConfig {
             word_penalty: 0.1,
             extra: HashMap::new(),
             boundary_cost: Vec::new(),
-            bigrams: true,
+            bigrams: false,
             shortlist: 30,
             distinct_sounds: true,
         }
