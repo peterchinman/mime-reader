@@ -6,7 +6,9 @@ use std::path::Path;
 
 use mime_reader::PronouncingDictionary;
 
+use crate::bigrams::{BigramTable, dequantize};
 use crate::phone::Ph;
+use std::sync::Arc;
 
 /// A word id: an index into [`Lexicon::words`].
 pub type WordId = u32;
@@ -47,28 +49,30 @@ pub fn stem(word: &str) -> String {
         .into_owned()
 }
 
-/// Word-pair counts, smoothed toward the unigram frequencies:
-/// `P(w | v) = (count(v, w) + μ·P(w)) / (count(v) + μ)`, so a pair seen often
-/// is likely, and a rarely seen left word says little.
+/// The bigram model over this lexicon: a [`BigramTable`] seen through the
+/// lexicon's words, smoothed toward the unigram frequencies:
+/// `P(w | v) = (count(v, w) + (μ + r(v))·P(w)) / (count(v) + μ)`, so a pair
+/// seen often is likely, a rarely seen left word says little, and the mass
+/// of pairs left out of the table (`r(v)`: pruned, or with words outside
+/// the lexicon) is spread by `P(w)` rather than lost.
 struct Bigrams {
+    table: Arc<BigramTable>,
     /// The smoothing strength `μ`: how many words of evidence the unigram
     /// prior is worth.
     prior: f32,
+    /// Each lexicon word's index in the table (`u32::MAX`: not there).
+    in_table: Vec<u32>,
     /// `count(v)`: how often `v` is followed by any word.
     totals: Vec<f32>,
-    /// Keyed by `pair(v, w)`, hashed fast: pass 2 looks pairs up a lot.
-    pairs: rustc_hash::FxHashMap<u64, f32>,
+    /// `μ + r(v)`: the prior's weight after `v`.
+    backoff: Vec<f32>,
     /// The cheapest `−ln P(w | ·)` over every context, the start included.
     best: Vec<f32>,
 }
 
-/// A word pair's key in [`Bigrams::pairs`].
-fn pair(v: WordId, w: WordId) -> u64 {
-    (u64::from(v) << 32) | u64::from(w)
-}
-
-/// The default smoothing strength `μ`.
-pub const BIGRAM_PRIOR: f32 = 1000.0;
+/// The default smoothing strength `μ`, chosen for the Google Books counts:
+/// with their billions of words, pairs need a strong prior to say little.
+pub const BIGRAM_PRIOR: f32 = 100_000.0;
 
 /// A word with its Zipf frequency (log10 occurrences per billion words).
 pub struct Frequency {
@@ -294,49 +298,90 @@ impl Lexicon {
         self.surprisal[id as usize]
     }
 
-    /// Reads word-pair counts (`left<TAB>right<TAB>count`, with
-    /// `left<TAB>*<TAB>total` lines for the left words' totals), for
+    /// Reads word-pair counts (a [`BigramTable`] file, text or packed) for
     /// [`Self::surprisal_after`], smoothed with strength `prior` (μ; see
     /// [`BIGRAM_PRIOR`]).
     pub fn load_bigrams(&mut self, path: &Path, prior: f32) -> Result<(), String> {
-        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        self.parse_bigrams(&text, prior)
-            .map_err(|e| format!("{}: {e}", path.display()))
+        self.attach_bigrams(Arc::new(BigramTable::read(path)?), prior);
+        Ok(())
     }
 
-    /// [`Self::load_bigrams`] from the counts' text.
+    /// [`Self::load_bigrams`] from the text format.
     pub fn parse_bigrams(&mut self, text: &str, prior: f32) -> Result<(), String> {
-        let mut totals = vec![0.0f32; self.len()];
-        let mut pairs = rustc_hash::FxHashMap::default();
-        for line in text.lines() {
-            let mut fields = line.split('\t');
-            let (Some(left), Some(right), Some(count)) =
-                (fields.next(), fields.next(), fields.next())
-            else {
-                return Err(format!("malformed line {line:?}"));
-            };
-            let count: f32 = count.parse().map_err(|e| format!("{line:?}: {e}"))?;
-            let Some(v) = self.id(left) else { continue };
-            if right == "*" {
-                totals[v as usize] = count;
-            } else if let Some(w) = self.id(right) {
-                pairs.insert(pair(v, w), count);
+        self.attach_bigrams(Arc::new(BigramTable::parse_text(text)?), prior);
+        Ok(())
+    }
+
+    /// Scores words by the previous word too, with `table`'s counts
+    /// smoothed with strength `prior`.
+    pub fn attach_bigrams(&mut self, table: Arc<BigramTable>, prior: f32) {
+        let n = self.len();
+        let in_table: Vec<u32> = self
+            .words
+            .iter()
+            .map(|w| table.id(w).unwrap_or(u32::MAX))
+            .collect();
+        let mut in_lexicon = vec![u32::MAX; table.words().len()];
+        for (v, &t) in in_table.iter().enumerate() {
+            if t != u32::MAX {
+                in_lexicon[t as usize] = v as u32;
             }
         }
+        let totals: Vec<f32> = in_table
+            .iter()
+            .map(|&t| {
+                if t == u32::MAX {
+                    0.0
+                } else {
+                    table.total(t) as f32
+                }
+            })
+            .collect();
+        let mut backoff = vec![prior; n];
+        for (v, &t) in in_table.iter().enumerate() {
+            if t == u32::MAX {
+                continue;
+            }
+            let (rights, counts) = table.row(t);
+            let listed: f64 = rights
+                .iter()
+                .zip(counts)
+                .filter(|&(&w, _)| in_lexicon[w as usize] != u32::MAX)
+                .map(|(_, &q)| f64::from(dequantize(q)))
+                .sum();
+            backoff[v] = prior + (f64::from(totals[v]) - listed).max(0.0) as f32;
+        }
+        // Unseen pairs get at most `P(w)`, since `r(v) ≤ count(v)`: the
+        // cheapest context is the unigram or a listed pair.
         let mut best: Vec<f32> = self.surprisal.clone();
-        for (&key, &count) in &pairs {
-            let (v, w) = ((key >> 32) as WordId, key as WordId);
-            let p = (count + prior * (-self.surprisal[w as usize]).exp())
-                / (totals[v as usize] + prior);
-            best[w as usize] = best[w as usize].min(-p.ln());
+        for (v, &t) in in_table.iter().enumerate() {
+            if t == u32::MAX {
+                continue;
+            }
+            let (rights, counts) = table.row(t);
+            for (&w, &q) in rights.iter().zip(counts) {
+                let w = in_lexicon[w as usize];
+                if w == u32::MAX {
+                    continue;
+                }
+                let p = (dequantize(q) + backoff[v] * (-self.surprisal[w as usize]).exp())
+                    / (totals[v] + prior);
+                best[w as usize] = best[w as usize].min(-p.ln());
+            }
         }
         self.bigrams = Some(Bigrams {
+            table,
             prior,
+            in_table,
             totals,
-            pairs,
+            backoff,
             best,
         });
-        Ok(())
+    }
+
+    /// The word-pair counts in use, and their smoothing strength.
+    pub fn bigram_table(&self) -> Option<(Arc<BigramTable>, f32)> {
+        self.bigrams.as_ref().map(|b| (b.table.clone(), b.prior))
     }
 
     pub fn has_bigrams(&self) -> bool {
@@ -349,8 +394,14 @@ impl Lexicon {
         let unigram = self.surprisal[word as usize];
         match (&self.bigrams, previous) {
             (Some(b), Some(v)) => {
-                let count = b.pairs.get(&pair(v, word)).copied().unwrap_or(0.0);
-                let p = (count + b.prior * (-unigram).exp()) / (b.totals[v as usize] + b.prior);
+                let (tv, tw) = (b.in_table[v as usize], b.in_table[word as usize]);
+                let count = if tv == u32::MAX || tw == u32::MAX {
+                    0.0
+                } else {
+                    b.table.count(tv, tw).unwrap_or(0.0)
+                };
+                let p = (count + b.backoff[v as usize] * (-unigram).exp())
+                    / (b.totals[v as usize] + b.prior);
                 -p.ln()
             }
             _ => unigram,

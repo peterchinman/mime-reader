@@ -67,7 +67,7 @@ const SEARCH_KNOBS: Knob[] = [
     type: 'bool',
     key: 'bigrams',
     label: 'bigrams',
-    hint: 'Score each word given the one before, from word-pair counts in contemporary film and TV subtitles. More fluent, but approximate (exact only up to the shortlist and 400 partial hearings per position) and slower. Off: each word alone (unigram), and exact.',
+    hint: 'Score each word given the one before, from word-pair counts in Google Books fiction (21.6M pairs, a 29 MB download). More fluent, but approximate (exact only up to the shortlist and the beam) and slower. Their pull is the word-prior weight’s: at 0.005 they change little, at 0.05 a lot. Off: each word alone (unigram), and exact.',
   },
   { type: 'number', key: 'shortlist', label: 'bigram shortlist', hint: 'Words kept per input span when bigrams are on.', min: 5, max: 200, step: 1 },
   {
@@ -174,10 +174,10 @@ const LEXICON_KNOBS: Knob[] = [
     type: 'number',
     key: 'bigram_prior',
     label: 'bigram smoothing μ',
-    hint: 'Dirichlet smoothing: how far a rarely seen word pair falls back on the single-word frequency.',
-    min: 1,
-    max: 1000,
-    step: 1,
+    hint: 'Dirichlet smoothing: how far a rarely seen word pair falls back on the single-word frequency. The Google Books counts run to billions, so this is large; scores on held-out text barely change between 10,000 and 1,000,000.',
+    min: 1000,
+    max: 1000000,
+    step: 1000,
     heavy: true,
   },
 ];
@@ -1101,6 +1101,7 @@ async function run(): Promise<void> {
     if (rerun) continue; // Stale: the knobs moved while it ran.
     if (reply.type === 'result') {
       lexiconInfo = reply.info;
+      engineMemoryMb = reply.memoryMb;
       renderLexiconInfo();
       renderResult(reply.result, reply.ms, reply.rebuildMs);
       setStatus(reply.notice ? `Heard in ${thousands(reply.ms)} ms. ${reply.notice}` : `Heard in ${thousands(reply.ms)} ms`);
@@ -1113,12 +1114,15 @@ async function run(): Promise<void> {
   running = false;
 }
 
+let engineMemoryMb = 0;
+
 function renderLexiconInfo(): void {
   if (!lexiconInfo) return;
   const i = lexiconInfo;
   $('lexicon-info').textContent =
-    `${thousands(i.words)} words, ${thousands(i.trie_nodes)} trie nodes; word-pair counts ${i.bigrams ? 'loaded' : 'not loaded'}; ` +
-    `ENABLE word list ${i.common_words_available ? 'loaded' : 'not found'}.`;
+    `${thousands(i.words)} words, ${thousands(i.trie_nodes)} trie nodes; ${i.bigrams ? `${thousands(i.bigram_pairs)} word pairs loaded` : 'word-pair counts not loaded'}; ` +
+    `ENABLE word list ${i.common_words_available ? 'loaded' : 'not found'}` +
+    (engineMemoryMb ? `; engine memory ${Math.round(engineMemoryMb)} MB.` : '.');
 }
 
 // ---------------------------------------------------------------- setup ----

@@ -45,7 +45,7 @@ SEARCH OPTIONS
                      match words under every CMUdict pronunciation or only
                      the first (default all)
   --bigram-prior F   bigram smoothing μ: how many words of evidence the
-                     unigram frequencies are worth (default 1000; larger
+                     unigram frequencies are worth (default 100000; larger
                      trusts word pairs less)
   --function-share F the share of --novelty (and --root) a shared function
                      word costs (default 0.2)
@@ -70,9 +70,9 @@ SEARCH OPTIONS
   --vocab N          lexicon size: most frequent words (default 50000)
   --unigram          score each word alone, not by the previous word too:
                      exact and faster, less fluent. By default words are
-                     scored with word-pair counts from contemporary
-                     subtitles (data/bigrams-en.tsv; see scripts/bigrams.py),
-                     or alone if that file is missing.
+                     scored with word-pair counts from Google Books fiction
+                     (data/bigrams-en.bin; see scripts/google_bigrams.sh), or
+                     alone if that file is missing.
   --bigrams          require the word-pair counts (an error without them)
   --beam N           with bigrams, partial hearings kept per position: wider
                      is closer to exact, and slower (default 100)
@@ -329,20 +329,25 @@ fn engine_with(o: &Options, vocab: usize, all_pronunciations: bool) -> Result<En
         common.as_ref(),
     )?;
     if o.bigrams {
-        let path = o
-            .bigram_file
-            .clone()
-            .unwrap_or_else(|| crate_path("data/bigrams-en.tsv"));
+        // The packed counts, else the text ones.
+        let path = o.bigram_file.clone().unwrap_or_else(|| {
+            let packed = crate_path("data/bigrams-en.bin");
+            if packed.exists() {
+                packed
+            } else {
+                crate_path("data/bigrams-en.tsv")
+            }
+        });
         if path.exists() {
             engine.lexicon.load_bigrams(&path, o.bigram_prior)?;
         } else if o.bigrams_required {
             return Err(format!(
-                "{}: no word-pair counts (run scripts/bigrams.py)",
+                "{}: no word-pair counts (run scripts/google_bigrams.sh)",
                 path.display()
             ));
         } else {
             eprintln!(
-                "note: no word-pair counts at {}: scoring words alone (see scripts/bigrams.py)",
+                "note: no word-pair counts at {}: scoring words alone (see scripts/google_bigrams.sh)",
                 path.display()
             );
         }

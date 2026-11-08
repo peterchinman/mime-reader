@@ -168,7 +168,7 @@ impl Engine {
         Self::with_lexicon(dict, lexicon)
     }
 
-    /// Rebuilds the lexicon (dropping any bigrams: reload them after).
+    /// Rebuilds the lexicon, keeping its word-pair counts.
     pub fn rebuild_lexicon(
         &mut self,
         frequencies: &[Frequency],
@@ -176,6 +176,7 @@ impl Engine {
         all_pronunciations: bool,
         common: Option<&CommonWords>,
     ) {
+        let bigrams = self.lexicon.bigram_table();
         self.lexicon = Lexicon::build(
             &self.dict,
             frequencies,
@@ -183,6 +184,9 @@ impl Engine {
             all_pronunciations,
             |w| common.is_none_or(|c| c.contains(w)),
         );
+        if let Some((table, prior)) = bigrams {
+            self.lexicon.attach_bigrams(table, prior);
+        }
     }
 
     /// An engine over an already-built lexicon.

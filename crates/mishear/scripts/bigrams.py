@@ -1,7 +1,10 @@
-"""Writes data/bigrams-en.tsv: word-pair counts from contemporary film and TV
-subtitles (OpenSubtitles v2024, English, via OPUS), for the search's bigram
-model. Subtitles are the nearest freely available thing to everyday spoken
-English, which is what a mishearing should sound like.
+"""Writes data/bigrams-subtitles.tsv: word-pair counts from contemporary film
+and TV subtitles (OpenSubtitles v2024, English, via OPUS), an alternative to
+the default Google Books counts (scripts/google_bigrams.sh), and the harness
+that compared them. To search with them, pack them over the default:
+
+    cargo run --release -p mishear --example pack_bigrams -- \
+      crates/mishear/data/bigrams-subtitles.tsv crates/mishear/data/bigrams-en.bin
 
     python3 -I crates/mishear/scripts/bigrams.py [--tokens N] [--min-count K]
 
@@ -16,13 +19,17 @@ any word, rarer pairs and unlisted words included. Pairs don't span
 sentence punctuation; bracketed sound cues ("[laughing]") and speaker
 labels are dropped.
 
-Every 100th line is held out. On those, the script reports the cross-entropy
-(and on --eval FILE, any other text) of the model the search uses,
+The first 1M lines are never counted: every 10th of them is the test set.
+On it (and on --eval FILE, any other text) the script reports the
+cross-entropy of the model the search uses,
     P(w | v) = (count(v, w) + mu * P(w)) / (count(v) + mu),
 with P(w) from wordfreq, for a range of smoothing strengths mu, for pruning
 at several K, and (with --compare FILE) for another bigram file, so sources
 can be compared on the same pairs. Lower is better; the unigram model is the
-baseline.
+baseline. --checkpoints 25e6,50e6,… reports along the way: a learning curve.
+It also reports how many test lines recur verbatim in what was counted
+(subtitle sites carry several versions of a film), which flatters the
+subtitle test set but not --eval.
 
 OPUS distributes the subtitles without owning them (see opus.nlpl.eu). The
 counts stay local, in the gitignored data directory.
@@ -52,7 +59,9 @@ parser.add_argument("--min-count", type=int, default=3)
 parser.add_argument("--source", default=SOURCE, help="URL or path of a .txt or .txt.gz")
 parser.add_argument("--compare", type=pathlib.Path, help="another bigrams TSV to score")
 parser.add_argument("--eval", type=pathlib.Path, help="a text file to score on too")
-parser.add_argument("--out", type=pathlib.Path, default=DATA / "bigrams-en.tsv")
+parser.add_argument("--out", type=pathlib.Path, default=DATA / "bigrams-subtitles.tsv")
+parser.add_argument("--held-out-lines", type=int, default=1_000_000)
+parser.add_argument("--checkpoints", default="", help="token counts to report at, e.g. 25e6,50e6")
 args = parser.parse_args()
 
 # The vocabulary, and P(w) as the search computes it: 10^(zipf - 9).
@@ -89,32 +98,13 @@ def chunks(line):
             yield [vocab.get(t, -1) for t in tokens]
 
 
-pairs: dict[int, int] = {}
-totals = [0] * len(vocab)
-held_out: list[tuple[int, int]] = []
-tokens = 0
-start = time.time()
-for n, line in enumerate(lines()):
-    for ids in chunks(line):
-        if n % 100 == 99:
-            held_out.extend((v, w) for v, w in zip(ids, ids[1:]) if v >= 0 and w >= 0)
-            continue
-        tokens += len(ids)
-        for v, w in zip(ids, ids[1:]):
-            if v >= 0:
-                totals[v] += 1
-                if w >= 0:
-                    key = v << 20 | w
-                    pairs[key] = pairs.get(key, 0) + 1
-    if n % 1_000_000 == 0 and n:
-        rate = tokens / (time.time() - start)
-        print(f"  {n:,} lines, {tokens:,} tokens, {len(pairs):,} pairs ({rate:,.0f} tokens/s)", file=sys.stderr)
-    if tokens >= args.tokens:
-        break
-print(f"{n + 1:,} lines, {tokens:,} tokens counted, {len(held_out):,} held-out pairs", file=sys.stderr)
-test_sets = {"held-out subtitles": held_out}
+def normalized(line):
+    return " ".join(WORD.findall(CUES.sub(" ", line).lower()))
+
+
+eval_pairs = []
 if args.eval:
-    test_sets[args.eval.name] = [
+    eval_pairs = [
         (v, w)
         for line in args.eval.read_text().splitlines()
         for ids in chunks(line)
@@ -122,9 +112,103 @@ if args.eval:
         if v >= 0 and w >= 0
     ]
 
+pairs: dict[int, int] = {}
+totals = [0] * len(vocab)
+held_out: list[tuple[int, int]] = []
+test_lines: set[int] = set()  # hashes of test lines of 6+ words
+recurring: set[int] = set()
+checkpoints = sorted(int(float(c)) for c in args.checkpoints.split(",") if c)
+curve = []
+
+
+def evaluate(test, ks, mus):
+    """Cross-entropy (nats per word) at each (min count, mu)."""
+    counts = [pairs.get(v << 20 | w, 0) for v, w in test]
+    context = [totals[v] for v, _ in test]
+    prior = [unigram[w] for _, w in test]
+    out = {}
+    for k in ks:
+        kept = [c if c >= k else 0 for c in counts]
+        for mu in mus:
+            s = 0.0
+            for c, n, p in zip(kept, context, prior):
+                s -= math.log((c + mu * p) / (n + mu))
+            out[k, mu] = s / len(test)
+    return out
+
+
+def checkpoint():
+    ks, mus = (1, 3, 5, 10), (300, 1000, 3000, 10000)
+    sizes = {k: 0 for k in ks}
+    for c in pairs.values():
+        for k in ks:
+            if c >= k:
+                sizes[k] += 1
+    row = {"tokens": tokens, "sizes": sizes, "subs": evaluate(held_out, ks, mus)}
+    if eval_pairs:
+        row["eval"] = evaluate(eval_pairs, ks, mus)
+    curve.append(row)
+    best = lambda r: min(r.items(), key=lambda kv: kv[1])
+    line = f"  @ {tokens / 1e6:,.0f}M tokens: pairs {sizes[1]:,} (3+: {sizes[3]:,})"
+    for name in ("subs", "eval"):
+        if name in row:
+            (k, mu), x = best({km: v for km, v in row[name].items() if km[0] == 3})
+            line += f"; {name} {x:.3f} (K=3, mu {mu})"
+    print(line, file=sys.stderr, flush=True)
+
+
+tokens = 0
+start = time.time()
+for n, line in enumerate(lines()):
+    if n < args.held_out_lines:
+        if n % 10 == 0:
+            for ids in chunks(line):
+                held_out.extend((v, w) for v, w in zip(ids, ids[1:]) if v >= 0 and w >= 0)
+            text = normalized(line)
+            if text.count(" ") >= 5:
+                test_lines.add(hash(text))
+        continue
+    if test_lines:
+        h = hash(normalized(line))
+        if h in test_lines:
+            recurring.add(h)
+    for ids in chunks(line):
+        tokens += len(ids)
+        for v, w in zip(ids, ids[1:]):
+            if v >= 0:
+                totals[v] += 1
+                if w >= 0:
+                    key = v << 20 | w
+                    pairs[key] = pairs.get(key, 0) + 1
+    if n % 1_000_000 == 0:
+        rate = tokens / (time.time() - start)
+        print(f"  {n:,} lines, {tokens:,} tokens, {len(pairs):,} pairs ({rate:,.0f} tokens/s)", file=sys.stderr, flush=True)
+    if checkpoints and tokens >= checkpoints[0]:
+        checkpoints.pop(0)
+        checkpoint()
+    if tokens >= args.tokens:
+        break
+print(f"{n + 1:,} lines, {tokens:,} tokens counted, {len(held_out):,} test pairs", file=sys.stderr)
+print(f"{len(recurring):,} of {len(test_lines):,} test lines of 6+ words recur verbatim in the counted text ({len(recurring) / max(1, len(test_lines)):.1%})")
+test_sets = {"held-out subtitles": held_out}
+if args.eval:
+    test_sets[args.eval.name] = eval_pairs
+
+if curve:
+    print("\nlearning curve: cross-entropy at the best mu, for pairs seen K+ times")
+    print(f"{'tokens':>8}  {'pairs 3+':>10}  " + "  ".join(f"{name} K={k}" for name in ("subs", "eval") if name in curve[0] for k in (1, 3, 10)))
+    for row in curve:
+        cells = []
+        for name in ("subs", "eval"):
+            if name not in row:
+                continue
+            for k in (1, 3, 10):
+                cells.append(f"{min(x for (kk, _), x in row[name].items() if kk == k):>10.3f}")
+        print(f"{row['tokens'] / 1e6:>7,.0f}M  {row['sizes'][3]:>10,}  " + "  ".join(cells))
+
 # ---- held-out cross-entropy ----
 
-MUS = [10, 30, 100, 300, 1000, 3000]
+MUS = [10, 30, 100, 300, 1000, 3000, 10000, 30000]
 KS = (1, 2, 3, 5, 10)
 
 

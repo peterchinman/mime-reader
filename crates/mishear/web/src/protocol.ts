@@ -34,6 +34,8 @@ export type FromWorker =
       ms: number;
       info: LexiconInfoDto;
       rebuildMs: number;
+      /** The engine's memory, in MB. */
+      memoryMb: number;
       /** Something the page should say, such as missing word-pair counts. */
       notice?: string;
     }

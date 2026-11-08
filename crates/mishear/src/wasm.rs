@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use tsify::Tsify;
 use wasm_bindgen::prelude::*;
 
+use crate::bigrams::BigramTable;
 use crate::cost::{CostConfig, CostModel};
 use crate::deform::VowelChart;
 use crate::engine::{Engine, MishearConfig, Variety};
@@ -14,6 +15,7 @@ use crate::phone::Ph;
 use crate::search::SearchConfig;
 use crate::spec::{self, StepSpec};
 use crate::{accents, knobs};
+use std::sync::Arc;
 
 /// What the lexicon is built from; changing any of these rebuilds it.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Tsify)]
@@ -203,6 +205,8 @@ pub struct LexiconInfoDto {
     pub words: usize,
     pub trie_nodes: usize,
     pub bigrams: bool,
+    /// Word pairs in the loaded counts.
+    pub bigram_pairs: usize,
     pub common_words_available: bool,
 }
 
@@ -254,7 +258,6 @@ fn spelled(phonemes: &[Ph]) -> Vec<String> {
 pub struct MishearApp {
     engine: Engine,
     frequencies: Vec<Frequency>,
-    bigrams: Option<String>,
     common: Option<CommonWords>,
     lexicon: LexiconOptions,
     cost: Option<CostDto>,
@@ -263,13 +266,13 @@ pub struct MishearApp {
 #[wasm_bindgen]
 impl MishearApp {
     /// Builds the engine from CMUdict's bytes, the word-frequency list, and
-    /// optionally the bigram counts (or later, with `loadBigrams`) and the
-    /// system word list.
+    /// optionally the word-pair counts (or later, with `loadBigrams`) and
+    /// the word list that filters the lexicon.
     #[wasm_bindgen(constructor)]
     pub fn new(
         cmudict: &[u8],
         frequencies: &str,
-        bigrams: Option<String>,
+        bigrams: Option<Vec<u8>>,
         common_words: Option<String>,
         lexicon: LexiconOptions,
     ) -> Result<MishearApp, JsError> {
@@ -287,30 +290,24 @@ impl MishearApp {
         let mut app = Self {
             engine,
             frequencies,
-            bigrams,
             common,
             lexicon,
             cost: None,
         };
-        app.load_bigrams()?;
+        if let Some(bytes) = bigrams {
+            app.set_bigrams(&bytes)?;
+        }
         Ok(app)
     }
 
-    /// Adds word-pair counts (`scripts/bigrams.py`'s TSV), smoothed with
-    /// the lexicon options' `bigram_prior`.
+    /// Adds word-pair counts (a `BigramTable` file, packed or text),
+    /// smoothed with the lexicon options' `bigram_prior`.
     #[wasm_bindgen(js_name = loadBigrams)]
-    pub fn set_bigrams(&mut self, text: String) -> Result<(), JsError> {
-        self.bigrams = Some(text);
-        self.load_bigrams()
-    }
-
-    fn load_bigrams(&mut self) -> Result<(), JsError> {
-        if let Some(text) = &self.bigrams {
-            self.engine
-                .lexicon
-                .parse_bigrams(text, self.lexicon.bigram_prior)
-                .map_err(|e| JsError::new(&e))?;
-        }
+    pub fn set_bigrams(&mut self, bytes: &[u8]) -> Result<(), JsError> {
+        let table = BigramTable::parse(bytes).map_err(|e| JsError::new(&e))?;
+        self.engine
+            .lexicon
+            .attach_bigrams(Arc::new(table), self.lexicon.bigram_prior);
         Ok(())
     }
 
@@ -333,7 +330,13 @@ impl MishearApp {
                 filter,
             );
         }
-        self.load_bigrams()
+        // The table stays; only the smoothing may have changed.
+        if let Some((table, _)) = self.engine.lexicon.bigram_table() {
+            self.engine
+                .lexicon
+                .attach_bigrams(table, lexicon.bigram_prior);
+        }
+        Ok(())
     }
 
     #[wasm_bindgen(js_name = lexiconInfo)]
@@ -342,6 +345,11 @@ impl MishearApp {
             words: self.engine.lexicon.len(),
             trie_nodes: self.engine.lexicon.node_count(),
             bigrams: self.engine.lexicon.has_bigrams(),
+            bigram_pairs: self
+                .engine
+                .lexicon
+                .bigram_table()
+                .map_or(0, |(table, _)| table.len()),
             common_words_available: self.common.is_some(),
         }
     }

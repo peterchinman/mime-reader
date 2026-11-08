@@ -46,9 +46,10 @@ python3 -m venv /tmp/wfenv && /tmp/wfenv/bin/pip install wordfreq
 /tmp/wfenv/bin/python -I crates/mishear/scripts/wordfreq_list.py 100000
 
 # Word-pair counts for the bigram model (without them, words are scored
-# alone): streams the first ~300 MB of OpenSubtitles v2024 (English) from
-# OPUS and counts 200M tokens, ~3 min
-python3 -I crates/mishear/scripts/bigrams.py
+# alone): streams Google Books' English Fiction 2-grams (~30 GB, not stored,
+# ~16 min), keeps pairs of lexicon words, and packs them into
+# data/bigrams-en.bin (45 MB; 29 MB gzipped). Needs ~1 GB of temporary space.
+crates/mishear/scripts/google_bigrams.sh
 ```
 
 The ENABLE word list ([`data/ENABLE`](../../data/ENABLE), public domain,
@@ -119,11 +120,12 @@ What the page has:
   the URL.
 
 `npm run data` symlinks CMUdict, ENABLE and the generated word lists into
-`public/data`, which is gitignored. A build
+`public/data`, which is gitignored, and gzips the packed word-pair counts
+there; the page unzips them as they arrive. A build
 copies them into `dist/`. That copy includes the wordfreq list, which is CC
 BY-SA 4.0, so a hosted build has to carry that license's attribution. It
-also includes the subtitle word-pair counts (see "Bigrams"), whose source
-text OPUS distributes without owning; check that before hosting them.
+also includes the Google Books word-pair counts (`bigrams-en.bin.gz`, CC BY
+3.0; see "Bigrams"), which need crediting too.
 
 ## Search
 
@@ -133,7 +135,7 @@ of the input. Its cost adds up three things:
 - **Phonetic cost.** A weighted edit distance whose substitution costs come
   from mime-reader's vowel and consonant distance engines, on a 0–1 scale.
 - **Language-model cost.** `0.005 × −ln P(word | previous word)` plus `0.4`
-  per word, from word-pair counts in contemporary subtitles,
+  per word, from word-pair counts in Google Books fiction,
   Dirichlet-smoothed toward wordfreq's frequencies (see "Bigrams" below).
   With `--unigram`, `P(word)` from wordfreq alone.
 - **Extra costs.** The mishearing engine charges 0.9 for each word the
@@ -203,50 +205,67 @@ in `cockney`), with the unigram model:
 ### Bigrams
 
 By default the search scores each word by the one before it (`--unigram`
-turns this off), with counts from film and TV subtitles: the first 200M tokens of OpenSubtitles v2024 (English), via
-OPUS. Subtitles are the nearest freely available thing to everyday spoken
-English, which is what a mishearing should sound like. The counts are
-smoothed toward wordfreq's frequencies,
-`P(w | v) = (count(v, w) + μ·P(w)) / (count(v) + μ)`, and pairs seen fewer
-than 3 times are dropped (2.3M pairs remain, 35 MB).
+turns this off), with word-pair counts from Google Books' English Fiction
+2-grams (2020): 21.6M pairs of lexicon words, summed over all years, from
+about 200 million 2-gram lines. The model is
+`P(w | v) = (count(v, w) + (μ + r(v))·P(w)) / (count(v) + μ)`, smoothed
+toward wordfreq's `P(w)` with μ = 100,000 (the counts run to billions).
+`r(v)` is the part of `v`'s count no listed pair accounts for (pairs pruned
+or left out, words outside the lexicon), which goes to the backoff instead
+of vanishing.
 
-They replace counts from 1.2M words of Gutenberg books (Austen, Milton,
-Shakespeare, Melville). `scripts/bigrams.py` holds out every 100th subtitle
-line and reports cross-entropy (nats per word, lower is better) of the
-model the search uses. `--eval` adds a second test set, here the WikiText-103
-test split: written English that neither source has seen. `--compare`
-scores another counts file on the same pairs.
+**Why these counts.** `examples/bigram_eval.rs` scores a counts file by
+cross-entropy (nats per word, lower is better) on word pairs it never
+counted: every 10th line from the first 1M lines of OpenSubtitles, and the
+WikiText-103 test split. Restricted to pairs of lexicon words, the only
+ones a hearing can contain:
 
-| test set | unigram | Gutenberg, μ 100 (old default) | Gutenberg, best μ | subtitles, μ 1000 |
-|---|---|---|---|---|
-| held-out subtitles (1.66M pairs) | 7.11 | 6.69 | 6.48 | **5.10** |
-| WikiText-103 test (159k pairs) | 7.80 | 8.29 | 7.76 | **7.62** |
+| counts | pairs | subtitles | Wikipedia |
+|---|---|---|---|
+| unigram | – | 7.02 | 7.41 |
+| subtitles, 200M tokens (the previous default) | 2.3M | 5.29* | 6.93 |
+| Google Books fiction, 2.5M most informative pairs | 2.5M | 5.71 | 6.36 |
+| Google Books fiction, 10M | 10M | 5.66 | 6.24 |
+| **Google Books fiction, all** | **21.6M** | **5.64** | **6.20** |
 
-- **The subtitle counts win at every μ on both sets.** On Wikipedia, the old
-  configuration was worse than no bigram model at all.
-- **μ trades the two sets.** Held-out subtitles do best at 300 (5.096);
-  Wikipedia keeps improving up to 3000 (7.51). At 1000 the subtitles lose
-  0.005 nats against their best, and Wikipedia is 0.18 better than unigram.
-- **Pruning pairs seen fewer than 3 times** costs 0.07 nats on subtitles and
-  0.13 on Wikipedia (at μ 1000), and halves the file. Fewer than 5 would
-  cost nearly twice that.
-- **What it sounds like.** "Kiss the sky", plain top hearings
-  (`--variety 0`): unigram "case this guy", "case thus guy", "case this
-  chi"; with `--bigrams`, "case this guy", "guess this guy", "does this
-  guy", "keys this guy" (Gutenberg had "kisses guy", "case this gay").
-  "Since Persia fell at Marathon" gains "…at me rough on".
-- **Cost.** Over 12 public lines, a plain list (`--variety 0`) averages
-  137 ms with the unigram model and 370 ms with bigrams (Gutenberg's took
-  318). Variety costs more with bigrams than without (see "Variety").
-  Loading the counts adds about 0.35 s to the command line, and about 2 s
-  in the web page, which fetches them on first use.
-- **At the default weight they matter little.** At `--lm 0.005` the
-  language model adds only about 0.01–0.03 per word, so with or without
-  bigrams the top hearing is the same for 7 of the 10 lines in "Examples",
-  while bigrams make the search about 1.6× slower (see "Speed" below).
-  Their effect grows with `--lm`: at 0.1, "sisters of a lot more than".
-- OPUS distributes the subtitles without owning them. The counts are
-  generated locally and gitignored, like the wordfreq list.
+\*Flattered: that file was counted from the lines this test set uses.
+
+- **On general English, Google wins by 0.7 nats.** The subtitle counts keep
+  their edge on subtitle dialogue. An earlier comparison, before Google:
+  subtitle counts beat 1.2M words of Gutenberg books (Austen, Milton,
+  Shakespeare) at every μ.
+- **More subtitles don't close the gap.** `scripts/bigrams.py
+  --checkpoints` counted up to 1.6B subtitle tokens: each doubling gained
+  about 0.1 nats on Wikipedia and less on subtitles, where 13% of the test
+  lines recur verbatim in what was counted.
+- **Giving pruned mass to the backoff matters.** Without `r(v)`, a pair cut
+  from the table looked less likely than its word alone: the top 2.5M
+  Google pairs scored 7.35 on Wikipedia rather than 6.92 (on all test
+  pairs), and the best μ ran off the scale.
+- **Pruning by information beats pruning by count**, slightly: a pair's
+  information is `c·ln(1 + c/(μ·P(w)))`, how much its count beats backing
+  off.
+- **Where the gain shows.** At the default `--lm 0.005` the model adds only
+  about 0.01–0.03 per word, so bigrams change about a third of the hearings
+  and rarely the best; the hearings' word pairs are mostly unseen ("toothy
+  rub"), as they should be. At `--lm 0.05`, two thirds change, toward
+  pairs the counts know: "velodrome watchful of people", "societies was
+  never scene", "case this guy".
+
+**Packed.** As text the counts are 514 MB, and compress only to 134–167 MB.
+`examples/pack_bigrams.rs` keeps the pairs of lexicon words and writes each
+left word's pairs as gaps between right-word ids (varints) and each count as
+one byte, `round(8·ln c)`, within 6%, which the scores don't notice. That is
+45 MB, 29 MB gzipped (25.6 MB with brotli). The engine holds it as one array
+per field (about 5 bytes a pair) and finds a pair by binary search in its
+left word's row: the command line starts in 0.4 s at 226 MB, the web page
+has its first hearings in 1.5 s, with 208 MB of memory. A lexicon is a view
+of the table, so rebuilding one doesn't reread it.
+
+The Google Books Ngram data is CC BY 3.0: a hosted build must credit it.
+`scripts/bigrams.py` still builds subtitle counts
+(`data/bigrams-subtitles.tsv`), and `pack_bigrams` makes them the default
+instead.
 
 ### Evaluating against known mondegreens
 
@@ -409,11 +428,11 @@ approximate search isn't needed. The penalties on shared words, the line's
 and earlier hearings', push the bound out. Accents that lengthen the line
 take longer.
 
-**Speed.** With the current defaults, mishearings over 12 public lines take
-130 ms on average (median 94 ms, up to 277 ms), and 80 ms with
-`--unigram`; the web page takes about twice that (150–430 ms a line). They
-took 721 and 168 ms before these changes, which leave the results as they
-were:
+**Speed.** With the current defaults (the Google counts), mishearings over
+12 public lines take 167 ms on average, and 83 ms with `--unigram`; the
+web page about 250 ms (500 ms at `--lm 0.05`). With the previous, smaller
+subtitle counts they took 130 ms, and 721 ms before the changes below,
+which leave the results as they were:
 
 - **The bound jumps to where the hearings are.** The search starts with a
   bound of 2 and raises it until enough hearings fit, rebuilding pass 1
@@ -505,9 +524,9 @@ These use public-domain lines from `data/echo/public` (`examples --public
 | Sleep rounds with equal zest | new-zealand | sri browned swathe equals east | sri browned swathe equals east |
 | Cried on his shoulder but | cockney | crow donna's shout abba | crow donna's shout abba |
 | Don' know's I'd mind his goin' | southern | done no sod monde hiss going | done no sod monde hiss going |
-| Such a maid as was never seen! | reverse-vowel-shift | succumb aga swathe nether sane | saw sonata swathe nether sane |
-| Such a maid as was never seen! | rotate:-60 | sesame day sway sniffer soon | sesame days yeah sniffer soon |
-| Sleep rounds with equal zest | mirror:front-back | slew blinds wow sequels asked | slew blinds without will just |
+| Such a maid as was never seen! | reverse-vowel-shift | saw sonata swathe nether sane | saw sonata swathe nether sane |
+| Such a maid as was never seen! | rotate:-60 | sesame de sway sniffer soon | sesame days yeah sniffer soon |
+| Sleep rounds with equal zest | mirror:front-back | slew blinds without will just | slew blinds without will just |
 | Sleep rounds with equal zest | spanish | asleep round sway sequels asked | asleep round sway sequels asked |
 | Sly, musical, a jewel in rhyme, | japanese | sue lima huge acreage ooh uh ruin lima | sue lima huge acreage ooh uh ruin lima |
 | Sly, musical, a jewel in rhyme, | pull:1,1,0.5 | slim use ecology align room | slim use ecology align room |
@@ -515,7 +534,7 @@ These use public-domain lines from `data/echo/public` (`examples --public
 ## Limitations and next steps
 
 - **Fluency.** Scoring words alone (`--unigram`) makes hearings word salad
-  (or poetry). Bigrams, the default, add word-pair counts from subtitles,
+  (or poetry). Bigrams, the default, add word-pair counts from Google Books,
   which help locally ("guess this guy") but can't see past the previous
   word ("the tomatoes was never sign"), and at the default `--lm` they
   weigh little. A longer-range model, such
