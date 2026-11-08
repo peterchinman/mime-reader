@@ -69,6 +69,21 @@
         min-width: 9.5rem;
         padding: 0.1rem 0.25rem;
       }
+      .threshold-hint {
+        color: color-mix(in srgb, currentColor 60%, transparent);
+      }
+      .normalization-control {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.4rem;
+        font-size: 0.8rem;
+        margin-bottom: 0.6rem;
+      }
+      .normalization-control select {
+        min-width: 8rem;
+        padding: 0.1rem 0.25rem;
+      }
       .normalization-label {
         display: inline-flex;
         align-items: baseline;
@@ -273,7 +288,8 @@
       }
       .config-switch {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        margin-bottom: 0.6rem;
         border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
         border-radius: 0.25rem;
         overflow: hidden;
@@ -434,12 +450,6 @@
         border-style: dashed;
         border-color: color-mix(in srgb, currentColor 30%, transparent);
       }
-      .ph.reused,
-      .legend .reused {
-        border-color: #cd2b31;
-        border-width: 1px;
-        border-style: solid;
-      }
       .segment {
         display: flex;
         align-items: center;
@@ -470,26 +480,23 @@
           <button id="save" type="button">Save pair</button>
         </div>
         <div class="threshold-row">
-          <label>
-            Threshold
-            <input id="threshold" type="number" min="0" max="1" step="0.01" value="0.5" />
-          </label>
-          <label id="normalization-control" class="normalization-control">
-            <span class="normalization-label">
-              Normalization
-              <small id="normalization-modified" class="config-modified" hidden>changed</small>
-            </span>
-            <select id="normalization">
-              <option value="shorter_self_similarity">shorter line</option>
-              <option value="mean_self_similarity">mean of both</option>
+          <label title="How closely the repeats are expected to match: picks each aligner's measured threshold">
+            Strictness
+            <select id="strictness">
+              <option value="strict">strict (near-verbatim)</option>
+              <option value="loose">loose (reworded)</option>
             </select>
           </label>
+          <label title="Leave empty to use each aligner's measured threshold for the strictness">
+            Threshold
+            <input id="threshold" type="number" min="0" max="1" step="0.01" placeholder="measured" />
+          </label>
+          <small id="threshold-hint" class="threshold-hint"></small>
           <span class="aligner-choice" role="radiogroup" aria-label="aligner">
             Aligner
             <label><input type="radio" name="aligner" value="semi_global" /> semi-global</label>
             <label><input type="radio" name="aligner" value="waterman_eggert" /> Waterman–Eggert</label>
-            <label><input type="radio" name="aligner" value="jump" /> jump</label>
-            <label><input type="radio" name="aligner" value="all" checked /> all</label>
+            <label><input type="radio" name="aligner" value="all" checked /> both</label>
           </span>
         </div>
         <div
@@ -501,7 +508,6 @@
           <span class="in_place">in place</span>
           <span class="moved">moved</span>
           <span class="unaligned">unaligned</span>
-          <span class="reused">reused</span>
           <span class="match">match</span>
           <span class="substitution">substitution</span>
           <span class="indel">gap</span>
@@ -514,11 +520,25 @@
           <button
             id="restore-defaults"
             type="button"
-            title="Restore the echo config to its codebase defaults"
+            title="Restore this aligner's config to its tuned preset"
           >
             Restore defaults
           </button>
         </div>
+        <div id="config-aligner" class="config-switch" role="tablist" aria-label="config for">
+          <button type="button" role="tab" data-kind="semi_global">semi-global</button>
+          <button type="button" role="tab" data-kind="waterman_eggert">Waterman–Eggert</button>
+        </div>
+        <label id="normalization-control" class="normalization-control">
+          <span class="normalization-label">
+            Normalization
+            <small id="normalization-modified" class="config-modified" hidden>changed</small>
+          </span>
+          <select id="normalization">
+            <option value="shorter_self_similarity">shorter line</option>
+            <option value="mean_self_similarity">mean of both</option>
+          </select>
+        </label>
         <div id="config-controls"></div>
       </aside>
     </main>

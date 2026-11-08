@@ -1,10 +1,12 @@
 import init, {
 	Analyzer,
-	defaultEchoConfig,
+	echoConfigFor,
+	echoThreshold,
 	type AlignerKindDto,
 	type EchoAlignmentDto,
 	type EchoConfigDto,
 	type EchoNormalizationDto,
+	type EchoStrictnessDto,
 } from "mime-reader";
 import echoPairTests from "../../../echo_pair_tests.json";
 import {
@@ -18,15 +20,14 @@ import { fixtureGroupsFrom, type FixtureGroup, type PairTuple } from "./fixtures
 
 // The dictionary is served as a static asset (see web/tuning/public/).
 const DICT_URL = "/cmudict-0.7b";
-const STORAGE_KEY = "mime_reader:tuning:echo-config:v1";
-const DEFAULT_THRESHOLD = 0.5; // DEFAULT_ECHO_THRESHOLD, a placeholder
+const STORAGE_KEY = "mime_reader:tuning:echo-config:v2";
 
 const ALIGNERS: Array<{ kind: AlignerKindDto; short: string }> = [
 	{ kind: "semi_global", short: "SG" },
 	{ kind: "waterman_eggert", short: "WE" },
-	{ kind: "jump", short: "J" },
 ];
 type AlignerChoice = AlignerKindDto | "all";
+type PerAligner<T> = Record<AlignerKindDto, T>;
 
 type NumericField = Exclude<keyof EchoConfigDto, "normalization" | "aligner">;
 
@@ -44,7 +45,6 @@ const ECHO_CONFIG_FIELDS: NumericField[] = [
 	"move_cost",
 	"run_open",
 	"min_run",
-	"reuse_penalty",
 	"max_runs",
 	"max_variants_per_line",
 	"max_variant_pairs",
@@ -57,9 +57,9 @@ const ECHO_CONFIG_DOCS: Record<NumericField, string> = {
 		"Multiplier on vowel similarity. Echo's own coefficient: it never reads the rhyme config's 7:1.",
 	consonant_coefficient: "Multiplier on consonant similarity.",
 	vowel_zero_point:
-		"Vowel distance (0-1000) at which a vowel pair scores 0: the expected distance between two random CMUdict vowels. Closer pairs score positive, farther ones negative.",
+		"Vowel distance (0-1000) at which a vowel pair scores 0. The default is chance: the expected distance between two random CMUdict vowels (376). Closer pairs score positive, farther ones negative.",
 	consonant_zero_point:
-		"Consonant distance (0-1000) at which a consonant pair scores 0, calibrated the same way. A high value makes mismatched consonants cheap.",
+		"Consonant distance (0-1000) at which a consonant pair scores 0. Tuned to 300, well below chance (789): at chance, alignments that skip material collect chance consonant matches. A high value makes mismatched consonants cheap.",
 	primary_weight:
 		"Weight of a primary-stressed vowel (and of every consonant). A pair takes the smaller weight of its two vowels, so nothing beats a verbatim repeat.",
 	secondary_weight: "Weight of a secondary-stressed vowel.",
@@ -70,13 +70,10 @@ const ECHO_CONFIG_DOCS: Record<NumericField, string> = {
 		"Thousandths of a unit, per gapped phoneme. 0 makes an insertion one event however long.",
 	gap_open_repeated_consonant:
 		"Thousandths of a unit. Opening a gap at a consonant that repeats its predecessor.",
-	move_cost:
-		"Thousandths of a unit. A moved block (Waterman–Eggert) or a jump (jump DP).",
+	move_cost: "Thousandths of a unit. A moved block (Waterman–Eggert).",
 	run_open: "Thousandths of a unit. Each local run after the first (Waterman–Eggert).",
 	min_run:
 		"Thousandths of a unit. After the first, local runs scoring less end the search (Waterman–Eggert).",
-	reuse_penalty:
-		"Thousandths of a unit, per extra use of a phoneme (jump DP). 0 lets jump re-use material freely, which can push similarity above 1.",
 	max_runs: "At most this many local runs (Waterman–Eggert).",
 	max_variants_per_line:
 		"A line with more pronunciation combinations is compared under its first pronunciations only.",
@@ -113,39 +110,59 @@ function isExpected(value: unknown): value is Expected {
 	return value === "echo" || value === "not" || value === "unlabeled";
 }
 
+// Each aligner has its own tuned config (its preset) and its own thresholds;
+// the config aside edits one of them at a time.
 let analyzer: Analyzer;
-let defaults: EchoConfigDto;
-let config: EchoConfigDto;
+let presets: PerAligner<EchoConfigDto>;
+let configs: PerAligner<EchoConfigDto>;
+let editing: AlignerKindDto = "semi_global";
 let alignerChoice: AlignerChoice = "all";
+let strictness: EchoStrictnessDto = "strict";
 const expanded = new Set<number>();
 const savedPairs: Pair[] = FIXTURE_GROUPS.flatMap(({ key, pairs }) =>
 	pairs.map(([a, b]: PairTuple) => ({ a, b, group: key })),
 );
+
+function perAligner<T>(value: (kind: AlignerKindDto) => T): PerAligner<T> {
+	return Object.fromEntries(ALIGNERS.map(({ kind }) => [kind, value(kind)])) as PerAligner<T>;
+}
 
 async function main(): Promise<void> {
 	await init();
 	const res = await fetch(DICT_URL);
 	if (!res.ok) throw new Error(`failed to fetch dictionary (HTTP ${res.status})`);
 	analyzer = new Analyzer(new Uint8Array(await res.arrayBuffer()), "allow_derived");
-	defaults = defaultEchoConfig();
+	presets = perAligner((kind) => echoConfigFor(kind));
 
 	const stored = loadStored();
-	config = restoreConfig(defaults, ECHO_CONFIG_FIELDS, stored?.config);
-	if (isNormalization(stored?.normalization)) config.normalization = stored.normalization;
+	const storedConfigs = isRecord(stored?.configs) ? stored.configs : {};
+	configs = perAligner((kind) => {
+		const saved = storedConfigs[kind];
+		const config = restoreConfig(presets[kind], ECHO_CONFIG_FIELDS, saved);
+		if (isRecord(saved) && isNormalization(saved.normalization)) {
+			config.normalization = saved.normalization;
+		}
+		return config;
+	});
 	if (isAlignerChoice(stored?.aligner)) alignerChoice = stored.aligner;
+	if (isAligner(stored?.editing)) editing = stored.editing;
+	if (isStrictness(stored?.strictness)) strictness = stored.strictness;
 	if (typeof stored?.threshold === "number") {
 		$<HTMLInputElement>("#threshold").value = String(stored.threshold);
 	}
-	analyzer.setEchoConfig(config);
 
 	buildAlignerChoice();
+	buildStrictnessControl();
+	buildConfigAligner();
 	buildNormalizationControl();
 	buildConfigControls();
 	$<HTMLButtonElement>("#restore-defaults").addEventListener("click", restoreDefaults);
 	syncRestoreDefaults();
+	syncThresholdHint();
 	for (const sel of ["#line-a", "#line-b"]) $(sel).addEventListener("input", render);
 	$("#threshold").addEventListener("input", () => {
 		persist();
+		syncThresholdHint();
 		render();
 	});
 	$<HTMLButtonElement>("#save").addEventListener("click", savePair);
@@ -161,8 +178,16 @@ function isNormalization(value: unknown): value is EchoNormalizationDto {
 	return value === "shorter_self_similarity" || value === "mean_self_similarity";
 }
 
+function isAligner(value: unknown): value is AlignerKindDto {
+	return ALIGNERS.some(({ kind }) => kind === value);
+}
+
 function isAlignerChoice(value: unknown): value is AlignerChoice {
-	return value === "all" || ALIGNERS.some(({ kind }) => kind === value);
+	return value === "all" || isAligner(value);
+}
+
+function isStrictness(value: unknown): value is EchoStrictnessDto {
+	return value === "strict" || value === "loose";
 }
 
 function loadStored(): Record<string, unknown> | null {
@@ -170,10 +195,23 @@ function loadStored(): Record<string, unknown> | null {
 		const raw = window.localStorage.getItem(STORAGE_KEY);
 		if (!raw) return null;
 		const parsed: unknown = JSON.parse(raw);
-		return isRecord(parsed) && parsed.version === 1 ? parsed : null;
+		return isRecord(parsed) && parsed.version === 2 ? parsed : null;
 	} catch {
 		return null;
 	}
+}
+
+// What differs from `kind`'s preset: its numeric overrides, plus the
+// normalization when changed.
+function overridesOf(kind: AlignerKindDto): Record<string, number | string> {
+	const config = configs[kind];
+	const preset = presets[kind];
+	return {
+		...configOverrides(config, preset, ECHO_CONFIG_FIELDS),
+		...(config.normalization === preset.normalization
+			? {}
+			: { normalization: config.normalization }),
+	};
 }
 
 function persist(): void {
@@ -181,12 +219,12 @@ function persist(): void {
 		window.localStorage.setItem(
 			STORAGE_KEY,
 			JSON.stringify({
-				version: 1,
-				config: configOverrides(config, defaults, ECHO_CONFIG_FIELDS),
-				normalization:
-					config.normalization === defaults.normalization ? undefined : config.normalization,
+				version: 2,
+				configs: perAligner(overridesOf),
 				aligner: alignerChoice,
-				threshold: threshold(),
+				editing,
+				strictness,
+				threshold: thresholdOverride(),
 			}),
 		);
 	} catch {
@@ -194,30 +232,34 @@ function persist(): void {
 	}
 }
 
-function configModified(): boolean {
+function configModified(kind: AlignerKindDto): boolean {
 	return (
-		configIsModified(config, defaults, ECHO_CONFIG_FIELDS) ||
-		config.normalization !== defaults.normalization
+		configIsModified(configs[kind], presets[kind], ECHO_CONFIG_FIELDS) ||
+		configs[kind].normalization !== presets[kind].normalization
 	);
 }
 
 function syncRestoreDefaults(): void {
-	$<HTMLButtonElement>("#restore-defaults").disabled = !configModified();
+	$<HTMLButtonElement>("#restore-defaults").disabled = !configModified(editing);
 }
 
 function restoreDefaults(): void {
-	config = { ...defaults };
-	analyzer.setEchoConfig(config);
-	persist();
+	configs[editing] = { ...presets[editing] };
+	onConfigChange();
 	buildConfigControls();
 	syncNormalization();
-	syncRestoreDefaults();
-	render();
 }
 
-function threshold(): number {
-	const value = Number($<HTMLInputElement>("#threshold").value.trim());
-	return Number.isFinite(value) ? value : DEFAULT_THRESHOLD;
+// The typed threshold, or null to use each aligner's measured one.
+function thresholdOverride(): number | null {
+	const raw = $<HTMLInputElement>("#threshold").value.trim();
+	if (raw === "") return null;
+	const value = Number(raw);
+	return Number.isFinite(value) ? value : null;
+}
+
+function thresholdFor(kind: AlignerKindDto): number {
+	return thresholdOverride() ?? echoThreshold(strictness, kind);
 }
 
 function selectedAligners(): AlignerKindDto[] {
@@ -232,18 +274,70 @@ function buildAlignerChoice(): void {
 		input.addEventListener("change", () => {
 			if (!input.checked || !isAlignerChoice(input.value)) return;
 			alignerChoice = input.value;
-			persist();
+			// Choosing one aligner edits its config too.
+			if (alignerChoice === "all") persist();
+			else setEditing(alignerChoice);
 			render();
 		});
 	}
+}
+
+function buildStrictnessControl(): void {
+	const select = $<HTMLSelectElement>("#strictness");
+	select.value = strictness;
+	select.addEventListener("change", () => {
+		if (!isStrictness(select.value)) return;
+		strictness = select.value;
+		persist();
+		syncThresholdHint();
+		render();
+	});
+}
+
+// Which thresholds apply: the measured ones, which assume the tuned configs,
+// or the typed override.
+function syncThresholdHint(): void {
+	const hint = $("#threshold-hint");
+	if (thresholdOverride() !== null) {
+		hint.textContent = "for every aligner";
+		hint.title = "";
+		return;
+	}
+	hint.textContent = ALIGNERS.map(
+		({ kind, short }) => `${short} ${echoThreshold(strictness, kind).toFixed(2)}`,
+	).join(" · ");
+	hint.title = "Measured on the labeled corpus under each aligner's tuned config";
+}
+
+function buildConfigAligner(): void {
+	for (const button of document.querySelectorAll<HTMLButtonElement>("#config-aligner button")) {
+		button.addEventListener("click", () => {
+			if (isAligner(button.dataset.kind)) setEditing(button.dataset.kind);
+		});
+	}
+	syncConfigAligner();
+}
+
+function syncConfigAligner(): void {
+	for (const button of document.querySelectorAll<HTMLButtonElement>("#config-aligner button")) {
+		button.setAttribute("aria-selected", String(button.dataset.kind === editing));
+	}
+}
+
+function setEditing(kind: AlignerKindDto): void {
+	editing = kind;
+	persist();
+	syncConfigAligner();
+	buildConfigControls();
+	syncNormalization();
+	syncRestoreDefaults();
 }
 
 function buildNormalizationControl(): void {
 	const select = $<HTMLSelectElement>("#normalization");
 	select.addEventListener("change", () => {
 		if (!isNormalization(select.value)) return;
-		config.normalization = select.value;
-		analyzer.setEchoConfig(config);
+		configs[editing].normalization = select.value;
 		onConfigChange();
 		syncNormalization();
 	});
@@ -251,8 +345,8 @@ function buildNormalizationControl(): void {
 }
 
 function syncNormalization(): void {
-	const modified = config.normalization !== defaults.normalization;
-	$<HTMLSelectElement>("#normalization").value = config.normalization;
+	const modified = configs[editing].normalization !== presets[editing].normalization;
+	$<HTMLSelectElement>("#normalization").value = configs[editing].normalization;
 	$("#normalization-control").classList.toggle("modified", modified);
 	$("#normalization-modified").hidden = !modified;
 }
@@ -266,13 +360,12 @@ function onConfigChange(): void {
 function buildConfigControls(): void {
 	renderConfigControls(
 		$("#config-controls"),
-		config,
-		defaults,
+		configs[editing],
+		presets[editing],
 		ECHO_CONFIG_FIELDS,
 		ECHO_CONFIG_DOCS,
 		(field, value) => {
-			config[field] = value;
-			analyzer.setEchoConfig(config);
+			configs[editing][field] = value;
 		},
 		onConfigChange,
 	);
@@ -306,6 +399,16 @@ function score(pair: Pair, kind: AlignerKindDto): Outcome {
 	}
 }
 
+// Scores `pairs` with each of `kinds` under that aligner's config:
+// result[pair][aligner].
+function scoreAll(pairs: Pair[], kinds: AlignerKindDto[]): Outcome[][] {
+	const columns = kinds.map((kind) => {
+		analyzer.setEchoConfig(configs[kind]);
+		return pairs.map((pair) => score(pair, kind));
+	});
+	return pairs.map((_, i) => columns.map((column) => column[i]));
+}
+
 function expectedOf(pair: Pair): Expected | null {
 	if (!pair.group) return null;
 	return FIXTURE_GROUPS.find(({ key }) => key === pair.group)?.expected ?? null;
@@ -323,17 +426,17 @@ function verdict(outcome: Outcome, expected: Expected | null, t: number): boolea
 // ---- rendering ---------------------------------------------------------------
 
 function render(): void {
-	const t = threshold();
 	const kinds = selectedAligners();
-	const scores = savedPairs.map((pair) => kinds.map((kind) => score(pair, kind)));
-	renderOverview(scores, kinds, t);
+	const thresholds = kinds.map(thresholdFor);
+	const live = currentPair();
+	const hasLive = Boolean(live.a && live.b);
+	const scored = scoreAll(hasLive ? [live, ...savedPairs] : savedPairs, kinds);
+	const scores = hasLive ? scored.slice(1) : scored;
+	renderOverview(scores, kinds, thresholds);
 
 	const out = $("#output");
 	out.replaceChildren();
-	const live = currentPair();
-	if (live.a && live.b) {
-		out.append(pairRow(live, null, kinds.map((k) => score(live, k)), kinds, t));
-	}
+	if (hasLive) out.append(pairRow(live, null, scored[0], kinds, thresholds));
 	const groups: Array<{ label: string; detail: string; key: string | undefined }> = [
 		{ label: "saved", detail: "", key: undefined },
 		...FIXTURE_GROUPS.map((g) => ({
@@ -357,12 +460,16 @@ function render(): void {
 		}
 		out.append(heading);
 		for (const [pair, index] of members) {
-			out.append(pairRow(pair, index, scores[index], kinds, t));
+			out.append(pairRow(pair, index, scores[index], kinds, thresholds));
 		}
 	}
 }
 
-function renderOverview(scores: Outcome[][], kinds: AlignerKindDto[], t: number): void {
+function shortName(kind: AlignerKindDto): string {
+	return ALIGNERS.find((a) => a.kind === kind)?.short ?? kind;
+}
+
+function renderOverview(scores: Outcome[][], kinds: AlignerKindDto[], thresholds: number[]): void {
 	const overview = $("#section-overview");
 	overview.replaceChildren();
 	for (const group of FIXTURE_GROUPS) {
@@ -373,11 +480,14 @@ function renderOverview(scores: Outcome[][], kinds: AlignerKindDto[], t: number)
 		const stat = document.createElement("span");
 		stat.className = "section-stat";
 		const counts = kinds.map((_, k) =>
-			indexes.filter((i) => verdict(scores[i][k], group.expected, t) === true).length,
+			indexes.filter((i) => verdict(scores[i][k], group.expected, thresholds[k]) === true)
+				.length,
 		);
-		const short = (kind: AlignerKindDto) => ALIGNERS.find((a) => a.kind === kind)?.short ?? kind;
 		stat.textContent = `${group.label}: ${kinds
-			.map((kind, k) => `${kinds.length > 1 ? `${short(kind)} ` : ""}${counts[k]}/${indexes.length}`)
+			.map(
+				(kind, k) =>
+					`${kinds.length > 1 ? `${shortName(kind)} ` : ""}${counts[k]}/${indexes.length}`,
+			)
 			.join(" · ")}`;
 		if (counts.every((c) => c === indexes.length)) stat.classList.add("all-pass");
 		else if (counts.every((c) => c === 0)) stat.classList.add("all-fail");
@@ -391,7 +501,7 @@ function pairRow(
 	index: number | null,
 	outcomes: Outcome[],
 	kinds: AlignerKindDto[],
-	t: number,
+	thresholds: number[],
 ): HTMLLIElement {
 	const li = document.createElement("li");
 	li.className = index === null ? "pair current" : "pair";
@@ -403,7 +513,7 @@ function pairRow(
 	words.textContent = `${pair.a} → ${pair.b}`;
 	head.append(words);
 	const expected = expectedOf(pair);
-	outcomes.forEach((outcome, k) => head.append(chip(outcome, kinds[k], expected, t)));
+	outcomes.forEach((outcome, k) => head.append(chip(outcome, kinds[k], expected, thresholds[k])));
 
 	const open = index === null || expanded.has(index);
 	if (index !== null) {
@@ -440,7 +550,7 @@ function pairRow(
 function chip(outcome: Outcome, kind: AlignerKindDto, expected: Expected | null, t: number): HTMLElement {
 	const b = document.createElement("span");
 	b.className = "badge";
-	const short = ALIGNERS.find((a) => a.kind === kind)?.short ?? kind;
+	const short = shortName(kind);
 	if (!outcome.ok) {
 		b.textContent = `${short} ⚠ ${outcome.message}`;
 		b.classList.add("bad");
@@ -450,27 +560,26 @@ function chip(outcome: Outcome, kind: AlignerKindDto, expected: Expected | null,
 	const mark = right === null ? "·" : right ? "✓" : "✗";
 	b.textContent = `${short} ${mark} ${outcome.dto.similarity.toFixed(3)}`;
 	if (right !== null) b.classList.add(right ? "ok" : "bad");
-	b.title = `${kind}: raw ${outcome.dto.raw} / self ${outcome.dto.self_a}, ${outcome.dto.self_b}`;
+	b.title =
+		`${kind}: raw ${outcome.dto.raw} / self ${outcome.dto.self_a}, ${outcome.dto.self_b}` +
+		` · threshold ${t.toFixed(2)}`;
 	return b;
 }
 
 // One aligner's alignment: both lines as words of phoneme chips, tinted by
-// the segment that aligned them (in place / moved), greyed when unaligned and
-// outlined when reused; then each segment's steps, a over b with scores.
+// the segment that aligned them (in place / moved) and greyed when
+// unaligned; then each segment's steps, a over b with scores.
 function alignmentEl(dto: EchoAlignmentDto): HTMLElement {
 	const box = document.createElement("div");
 	box.className = "echo-alignment";
 
 	const moved = dto.segments.filter((s) => s.placement === "moved").length;
-	const reused =
-		dto.a_coverage.reduce((n, c) => n + Math.max(0, c - 1), 0) +
-		dto.b_coverage.reduce((n, c) => n + Math.max(0, c - 1), 0);
 	const title = document.createElement("div");
 	title.className = "echo-title";
 	title.textContent =
 		`${dto.aligner} · similarity ${dto.similarity.toFixed(3)} · raw ${dto.raw} ` +
 		`(self ${dto.self_a} / ${dto.self_b}) · ${dto.segments.length} segment(s), ${moved} moved` +
-		`${reused ? `, ${reused} reused` : ""} · ${dto.variant_pairs_tried} variant pair(s)`;
+		` · ${dto.variant_pairs_tried} variant pair(s)`;
 	box.append(title);
 
 	const segmentOf = (side: "a" | "b"): Map<number, number> => {
@@ -553,10 +662,6 @@ function lineEl(
 				ph.classList.add(dto.segments[segment].placement);
 				ph.dataset.segment = String(segment + 1);
 				ph.title = `segment ${segment + 1} (${dto.segments[segment].placement.replace("_", " ")})`;
-			}
-			if (coverage[i] > 1) {
-				ph.classList.add("reused");
-				ph.title += ` · used ${coverage[i]}×`;
 			}
 			chips.append(ph);
 		}
