@@ -5,9 +5,69 @@ use crate::line::Line;
 
 use super::{AlignerKind, EchoDetector, EchoMatch, EchoTemplate};
 
-/// A placeholder pass mark for normalized echo similarity, until the
-/// comparison harness picks one per aligner.
-pub const DEFAULT_ECHO_THRESHOLD: f32 = 0.5;
+/// How closely a poem's repeated lines are expected to match. This is an
+/// expectation about the poem, not a property of its form: traditional
+/// villanelles and pantoums repeat lines nearly verbatim, while many
+/// contemporary ones (and most duplexes) rework them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum EchoStrictness {
+    /// Near-verbatim: a word or an inflection may change.
+    #[default]
+    Strict,
+    /// Reworded: phrases dropped, swapped, or rearranged.
+    Loose,
+}
+
+impl EchoStrictness {
+    pub const ALL: [Self; 2] = [Self::Strict, Self::Loose];
+
+    /// The snake_case name used in JSON and corpus headers.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Strict => "strict",
+            Self::Loose => "loose",
+        }
+    }
+
+    /// The pass mark for `aligner`, measured on the labeled corpus under its
+    /// tuned config ([`super::EchoConfig::for_aligner`]); with another config
+    /// these don't apply. Loose marks are each aligner's best balanced
+    /// accuracy on loose poems. Strict poems separate almost perfectly over
+    /// a wide range (semi-global 0.41–0.68 across resamples), so strict
+    /// marks sit above the best point, for margin. On the corpus:
+    ///
+    /// | aligner | strictness | threshold | echoes caught | false positives |
+    /// |---|---|---|---|---|
+    /// | semi-global | strict | 0.50 | 99.1% | 0.3% |
+    /// | semi-global | loose | 0.28 | 91.5% | 4.0% |
+    /// | Waterman–Eggert | strict | 0.45 | 99.1% | 0.2% |
+    /// | Waterman–Eggert | loose | 0.24 | 94.7% | 5.8% |
+    pub fn threshold(self, aligner: AlignerKind) -> f32 {
+        match (aligner, self) {
+            (AlignerKind::SemiGlobal, Self::Strict) => 0.50,
+            (AlignerKind::SemiGlobal, Self::Loose) => 0.28,
+            (AlignerKind::WatermanEggert, Self::Strict) => 0.45,
+            (AlignerKind::WatermanEggert, Self::Loose) => 0.24,
+        }
+    }
+}
+
+impl std::fmt::Display for EchoStrictness {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+impl std::str::FromStr for EchoStrictness {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|strictness| strictness.name() == s)
+            .ok_or_else(|| format!("unknown strictness {s:?} (expected strict or loose)"))
+    }
+}
 
 /// A template plus how to judge it: the minimum similarity a follower must
 /// reach against its leader, and the aligner that measures it.
@@ -46,7 +106,22 @@ pub struct EchoFormResult {
 }
 
 impl RepetitionScheme {
-    pub fn new(template: EchoTemplate, threshold: f32, aligner: AlignerKind) -> Self {
+    /// Judged at `strictness`'s threshold for `aligner`. The detector passed
+    /// to [`Self::check`] should use `EchoConfig::for_aligner(aligner)`.
+    pub fn new(template: EchoTemplate, strictness: EchoStrictness, aligner: AlignerKind) -> Self {
+        Self::with_threshold(template, strictness.threshold(aligner), aligner)
+    }
+
+    /// Judged at the template's conventional strictness
+    /// ([`EchoTemplate::conventional_strictness`]) with the default aligner.
+    pub fn conventional(template: EchoTemplate) -> Self {
+        let strictness = template.conventional_strictness();
+        Self::new(template, strictness, AlignerKind::default())
+    }
+
+    /// Judged at an explicit `threshold`, e.g. for a config the measured
+    /// thresholds don't apply to.
+    pub fn with_threshold(template: EchoTemplate, threshold: f32, aligner: AlignerKind) -> Self {
         Self {
             template,
             threshold,
@@ -114,6 +189,7 @@ impl RepetitionScheme {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::echo::EchoConfig;
     use crate::echo::test_support::{detector, dict};
 
     fn lines(texts: &[&str]) -> Vec<Line> {
@@ -138,9 +214,50 @@ mod tests {
     ];
 
     #[test]
-    fn a_duplex_passes_its_template() {
+    fn thresholds_follow_strictness_for_every_aligner() {
+        for kind in AlignerKind::ALL {
+            let (strict, loose) = (
+                EchoStrictness::Strict.threshold(kind),
+                EchoStrictness::Loose.threshold(kind),
+            );
+            assert!(0.0 < loose && loose < strict && strict < 1.0, "{kind}");
+        }
+        for strictness in EchoStrictness::ALL {
+            assert_eq!(strictness.name().parse(), Ok(strictness));
+        }
+        assert!("lax".parse::<EchoStrictness>().is_err());
+    }
+
+    #[test]
+    fn schemes_take_the_measured_threshold_or_an_explicit_one() {
+        let scheme = RepetitionScheme::conventional(EchoTemplate::duplex());
+        assert_eq!(scheme.aligner, AlignerKind::SemiGlobal);
+        assert_eq!(
+            scheme.threshold,
+            EchoStrictness::Loose.threshold(AlignerKind::SemiGlobal)
+        );
+        let scheme = RepetitionScheme::conventional(EchoTemplate::villanelle());
+        assert_eq!(
+            scheme.threshold,
+            EchoStrictness::Strict.threshold(AlignerKind::SemiGlobal)
+        );
+        let scheme = RepetitionScheme::new(
+            EchoTemplate::pantoum(4),
+            EchoStrictness::Loose,
+            AlignerKind::WatermanEggert,
+        );
+        assert_eq!(
+            scheme.threshold,
+            EchoStrictness::Loose.threshold(AlignerKind::WatermanEggert)
+        );
         let scheme =
-            RepetitionScheme::new(EchoTemplate::duplex(), 0.6, AlignerKind::WatermanEggert);
+            RepetitionScheme::with_threshold(EchoTemplate::blues(3), 0.7, AlignerKind::SemiGlobal);
+        assert_eq!(scheme.threshold, 0.7);
+    }
+
+    #[test]
+    fn a_duplex_passes_its_template() {
+        let scheme = RepetitionScheme::conventional(EchoTemplate::duplex());
         let result = scheme.check(&lines(&DUPLEX), detector());
         assert!(result.line_count_matches);
         assert!(result.missing_pairs.is_empty());
@@ -157,8 +274,32 @@ mod tests {
     }
 
     #[test]
+    fn a_duplex_passes_strictly_too_and_under_waterman_eggert() {
+        // These followers change one word each, so they are strict echoes.
+        let scheme = RepetitionScheme::new(
+            EchoTemplate::duplex(),
+            EchoStrictness::Strict,
+            AlignerKind::SemiGlobal,
+        );
+        assert!(scheme.check(&lines(&DUPLEX), detector()).passed);
+        let lenient =
+            EchoDetector::with_config(EchoConfig::for_aligner(AlignerKind::WatermanEggert));
+        for strictness in EchoStrictness::ALL {
+            let scheme = RepetitionScheme::new(
+                EchoTemplate::duplex(),
+                strictness,
+                AlignerKind::WatermanEggert,
+            );
+            assert!(
+                scheme.check(&lines(&DUPLEX), &lenient).passed,
+                "{strictness}"
+            );
+        }
+    }
+
+    #[test]
     fn a_short_duplex_is_missing_its_closing_pair() {
-        let scheme = RepetitionScheme::new(EchoTemplate::duplex(), 0.6, AlignerKind::SemiGlobal);
+        let scheme = RepetitionScheme::conventional(EchoTemplate::duplex());
         let result = scheme.check(&lines(&DUPLEX[..13]), detector());
         assert_eq!(result.missing_pairs, [(0, 13)]);
         assert!(!result.line_count_matches);
@@ -169,7 +310,7 @@ mod tests {
     fn unrelated_followers_fail() {
         let mut texts = DUPLEX;
         texts[2] = "potatoes boil in copper pots";
-        let scheme = RepetitionScheme::new(EchoTemplate::duplex(), 0.6, AlignerKind::Jump);
+        let scheme = RepetitionScheme::conventional(EchoTemplate::duplex());
         let result = scheme.check(&lines(&texts), detector());
         let pair = result.pairs.iter().find(|p| p.follower == 2).unwrap();
         assert!(!pair.outcome.as_ref().unwrap().passed);
@@ -180,7 +321,7 @@ mod tests {
     fn an_empty_line_is_an_error_not_a_failure() {
         let mut texts = DUPLEX;
         texts[4] = "";
-        let scheme = RepetitionScheme::new(EchoTemplate::duplex(), 0.6, AlignerKind::SemiGlobal);
+        let scheme = RepetitionScheme::conventional(EchoTemplate::duplex());
         let result = scheme.check(&lines(&texts), detector());
         let pair = result.pairs.iter().find(|p| p.follower == 4).unwrap();
         assert_eq!(pair.outcome, Err(EchoError::EmptyLine));

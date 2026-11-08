@@ -8,28 +8,32 @@ use crate::phoneme::Phoneme;
 use super::EchoNormalization;
 
 /// Which alignment strategy scores an echo.
+///
+/// Their scores are on different scales: each has its own tuned config
+/// ([`super::EchoConfig::for_aligner`]) and thresholds
+/// ([`super::EchoStrictness::threshold`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum AlignerKind {
-    /// (1) One semi-global alignment: free end gaps, strict order.
-    SemiGlobal,
-    /// (3) Repeated local alignment with masking: disjoint shared runs,
-    /// assembled in or out of order.
+    /// One semi-global alignment: free end gaps, strict order. The default:
+    /// on real poems it is as accurate as Waterman–Eggert with fewer false
+    /// positives at high recall, and several times faster.
     #[default]
+    SemiGlobal,
+    /// Repeated local alignment with masking: disjoint shared runs,
+    /// assembled in or out of order. Opt-in, for echoes that keep only a
+    /// fragment of their line or re-order its phrases; it also finds more
+    /// chance fragments in unrelated lines.
     WatermanEggert,
-    /// (5) Jump DP: all of one line against regions of the other, resuming
-    /// anywhere (reuse allowed) for a move cost.
-    Jump,
 }
 
 impl AlignerKind {
-    pub const ALL: [Self; 3] = [Self::SemiGlobal, Self::WatermanEggert, Self::Jump];
+    pub const ALL: [Self; 2] = [Self::SemiGlobal, Self::WatermanEggert];
 
     /// The snake_case name used on the command line and in JSON.
     pub fn name(self) -> &'static str {
         match self {
             Self::SemiGlobal => "semi_global",
             Self::WatermanEggert => "waterman_eggert",
-            Self::Jump => "jump",
         }
     }
 }
@@ -48,7 +52,7 @@ impl std::str::FromStr for AlignerKind {
             .into_iter()
             .find(|kind| kind.name() == s)
             .ok_or_else(|| {
-                format!("unknown aligner {s:?} (expected semi_global, waterman_eggert or jump)")
+                format!("unknown aligner {s:?} (expected semi_global or waterman_eggert)")
             })
     }
 }
@@ -67,15 +71,13 @@ pub enum Placement {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EchoCosts {
     pub gaps: GapModel,
-    /// Charged per moved segment (aligner 3) or per jump (aligner 5).
+    /// Charged per moved segment (Waterman–Eggert).
     pub move_cost: i64,
-    /// Charged per local run after the first (aligner 3).
+    /// Charged per local run after the first (Waterman–Eggert).
     pub run_open: i64,
-    /// Local runs scoring below this end the search (aligner 3).
+    /// Local runs scoring below this end the search (Waterman–Eggert).
     pub min_run: i64,
-    /// Charged per extra use of a `b` phoneme (aligner 5).
-    pub reuse_penalty: i64,
-    /// At most this many local runs (aligner 3).
+    /// At most this many local runs (Waterman–Eggert).
     pub max_runs: usize,
 }
 
@@ -90,8 +92,7 @@ pub struct EchoStep {
     pub score: i64,
 }
 
-/// A contiguous aligned stretch: a semi-global alignment, one local run, or
-/// the stretch between two jumps.
+/// A contiguous aligned stretch: a semi-global alignment or one local run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EchoSegment {
     /// The positions of `a` the segment's steps consume.
@@ -103,7 +104,7 @@ pub struct EchoSegment {
     pub steps: Range<usize>,
     /// The sum of its steps' scores.
     pub score: i64,
-    /// What it cost to start this segment (run open, move, jump).
+    /// What it cost to start this segment (run open, move).
     pub open_cost: i64,
     pub placement: Placement,
 }
@@ -112,15 +113,15 @@ pub struct EchoSegment {
 ///
 /// Invariants: `steps` are exactly the segments' steps, segments in `a`
 /// order; `Σ steps.score == Σ segments.score`; `raw = Σ segments.score −
-/// Σ segments.open_cost − reuse_penalty × reused`.
+/// Σ segments.open_cost`; no phoneme takes part in more than one pair.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RawAlignment {
     pub raw: i64,
     pub steps: Vec<EchoStep>,
     pub segments: Vec<EchoSegment>,
-    /// How many pairs each phoneme of `a` takes part in.
+    /// How many pairs each phoneme of `a` takes part in (0 or 1).
     pub a_coverage: Vec<u8>,
-    /// How many pairs each phoneme of `b` takes part in.
+    /// How many pairs each phoneme of `b` takes part in (0 or 1).
     pub b_coverage: Vec<u8>,
 }
 
@@ -134,16 +135,6 @@ impl RawAlignment {
             a_coverage: vec![0; n],
             b_coverage: vec![0; m],
         }
-    }
-
-    /// Extra uses of `a` phonemes beyond the first.
-    pub fn reused_a(&self) -> usize {
-        reused(&self.a_coverage)
-    }
-
-    /// Extra uses of `b` phonemes beyond the first.
-    pub fn reused_b(&self) -> usize {
-        reused(&self.b_coverage)
     }
 
     /// The same alignment with the roles of `a` and `b` exchanged, its
@@ -181,13 +172,6 @@ impl RawAlignment {
             b_coverage: self.a_coverage,
         }
     }
-}
-
-fn reused(coverage: &[u8]) -> usize {
-    coverage
-        .iter()
-        .map(|&uses| usize::from(uses.saturating_sub(1)))
-        .sum()
 }
 
 fn swap_sides(step: &OwnedAlignmentStep) -> OwnedAlignmentStep {
@@ -232,8 +216,8 @@ pub trait EchoAligner {
 pub struct EchoAlignment {
     pub raw: i64,
     /// `raw` over the normalization's denominator; 1 for a verbatim repeat,
-    /// around 0 for unrelated lines. Unclamped: it can dip below 0, and
-    /// exceed 1 when the jump aligner reuses material.
+    /// around 0 for unrelated lines, never above 1. Unclamped below: it can
+    /// dip under 0.
     pub similarity: f32,
     pub self_similarity_a: i64,
     pub self_similarity_b: i64,
@@ -253,16 +237,6 @@ impl EchoAlignment {
         self.segments
             .iter()
             .filter(|segment| segment.placement == Placement::Moved)
-    }
-
-    /// Extra uses of `a` phonemes beyond the first.
-    pub fn reused_a(&self) -> usize {
-        reused(&self.a_coverage)
-    }
-
-    /// Extra uses of `b` phonemes beyond the first.
-    pub fn reused_b(&self) -> usize {
-        reused(&self.b_coverage)
     }
 }
 
@@ -319,10 +293,10 @@ pub(crate) fn mark_in_place_weighted(segments: &mut [EchoSegment], weights: &[i6
     chain[end] > 0
 }
 
-/// Splits a trace into segments at its jumps and scores every step: pairs
-/// from `table`, gaps from the per-position gap costs (open on a gap's first
-/// phoneme). Segment ranges and step ranges are filled in; placement and
-/// open costs are left to the aligner.
+/// Scores every step of a trace as one segment (none for an empty trace):
+/// pairs from `table`, gaps from the per-position gap costs (open on a gap's
+/// first phoneme). Segment ranges and step ranges are filled in; placement
+/// and open costs are left to the aligner.
 pub(crate) fn segments_from_trace(
     trace: &Trace,
     a: &[Phoneme],
@@ -332,7 +306,7 @@ pub(crate) fn segments_from_trace(
     gaps_b: &GapScores,
 ) -> Vec<(EchoSegment, Vec<EchoStep>)> {
     let indexed = trace.indexed_steps(a, b);
-    let mut runs: Vec<Vec<EchoStep>> = vec![Vec::new()];
+    let mut run: Vec<EchoStep> = Vec::with_capacity(indexed.len());
     let mut previous: Option<TraceEvent> = None;
     let mut steps = indexed.into_iter();
     for &event in &trace.events {
@@ -346,15 +320,10 @@ pub(crate) fn segments_from_trace(
                 let opens = !matches!(previous, Some(TraceEvent::GapB { .. }));
                 -(if opens { gaps_b.open[j] } else { 0 }) - gaps_b.extend[j]
             }
-            TraceEvent::Jump => {
-                runs.push(Vec::new());
-                previous = Some(event);
-                continue;
-            }
             TraceEvent::Swap { .. } => unreachable!("echo aligners never swap"),
         };
-        let indexed = steps.next().expect("one indexed step per non-jump event");
-        runs.last_mut().expect("at least one run").push(EchoStep {
+        let indexed = steps.next().expect("one indexed step per event");
+        run.push(EchoStep {
             step: indexed.step.into(),
             a_index: indexed.a_index,
             b_index: indexed.b_index,
@@ -362,10 +331,11 @@ pub(crate) fn segments_from_trace(
         });
         previous = Some(event);
     }
-    runs.into_iter()
-        .filter(|steps| !steps.is_empty())
-        .map(|steps| (segment_of(&steps), steps))
-        .collect()
+    if run.is_empty() {
+        Vec::new()
+    } else {
+        vec![(segment_of(&run), run)]
+    }
 }
 
 /// A segment spanning `steps` (step range left at 0..len).
@@ -479,7 +449,7 @@ mod tests {
 
     #[test]
     fn overlapping_b_ranges_do_not_chain() {
-        // Reuse: every segment against the same b region.
+        // Every segment against the same b region.
         let mut segments = [
             segment(0..2, 0..2, 5),
             segment(2..4, 0..2, 5),

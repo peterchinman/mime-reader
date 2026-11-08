@@ -11,7 +11,7 @@
 //!   alignment is the same one the cost-minimizing DP picks.
 //! - **Echo** scores similarity: alike phonemes score positive, unrelated
 //!   ones negative, so alignments may leave material unaligned (local and
-//!   semi-global modes, masking, jumps) without paying for it.
+//!   semi-global modes, masking) without paying for it.
 //!
 //! For *global* alignment the two conventions are equivalent (Smith,
 //! Waterman & Beyer 1981). Every phoneme is consumed exactly once, so give
@@ -39,8 +39,8 @@
 //!   [`AlignmentStep`]s.
 //! - `linear`: the single-state recurrence with optional adjacent-consonant
 //!   swaps (rhyme's DP).
-//! - `affine`: the three-state Gotoh recurrence in global, semi-global, local
-//!   and jump modes, with masks (echo's aligners).
+//! - `affine`: the three-state Gotoh recurrence in global, semi-global and
+//!   local modes, with masks (echo's aligners).
 
 use crate::phoneme::{Consonant, ConsonantPhoneme, Phoneme, Stress, Vowel, VowelPhoneme};
 

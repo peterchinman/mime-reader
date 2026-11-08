@@ -107,18 +107,6 @@ const RUNS: [Param; 3] = [
         hi: 1500,
     },
 ];
-const JUMPS: [Param; 2] = [
-    Param {
-        name: "move_cost",
-        lo: 0,
-        hi: 1500,
-    },
-    Param {
-        name: "reuse_penalty",
-        lo: 0,
-        hi: 1500,
-    },
-];
 
 /// The parameters that affect `kind`.
 fn params(kind: AlignerKind) -> Vec<&'static Param> {
@@ -126,7 +114,6 @@ fn params(kind: AlignerKind) -> Vec<&'static Param> {
     match kind {
         AlignerKind::SemiGlobal => {}
         AlignerKind::WatermanEggert => all.extend(&RUNS),
-        AlignerKind::Jump => all.extend(&JUMPS),
     }
     all
 }
@@ -145,7 +132,6 @@ fn slot<'o>(o: &'o mut ConfigOverride, name: &str) -> &'o mut Option<u32> {
         "move_cost" => &mut o.move_cost,
         "run_open" => &mut o.run_open,
         "min_run" => &mut o.min_run,
-        "reuse_penalty" => &mut o.reuse_penalty,
         other => unreachable!("unknown search parameter {other}"),
     }
 }
@@ -233,7 +219,6 @@ fn override_of(kind: AlignerKind, config: &EchoConfig) -> ConfigOverride {
             "move_cost" => config.structure.move_cost,
             "run_open" => config.structure.run_open,
             "min_run" => config.structure.min_run,
-            "reuse_penalty" => config.structure.reuse_penalty,
             other => unreachable!("{other}"),
         }
     };
@@ -491,8 +476,11 @@ pub fn run(
     std::fs::create_dir_all(repo_path("target/echo")).map_err(|e| e.to_string())?;
     for &kind in &args.aligners {
         let mut rng = Rng::new(args.search_seed.wrapping_add(kind as u64 * 7919));
+        // Overrides apply on top of the aligner's tuned config, which is
+        // also the baseline ("defaults") every trial is compared with.
+        let tuned = EchoConfig::for_aligner(kind);
         let detector_for = |o: &ConfigOverride| -> Result<EchoDetector, String> {
-            let mut config = EchoConfig::default();
+            let mut config = tuned;
             o.apply(&mut config)?;
             Ok(EchoDetector::with_config(config))
         };
@@ -537,7 +525,7 @@ pub fn run(
         };
 
         let start = Instant::now();
-        let (baseline, baseline_screen) = evaluate(&override_of(kind, &EchoConfig::default()))?;
+        let (baseline, baseline_screen) = evaluate(&override_of(kind, &tuned))?;
         let per_trial = start.elapsed();
         println!(
             "== {kind}: {trials} random (screened on fold {SCREEN_FOLD}) + {} refinement trials (~{:.1}s per full trial)",
@@ -610,7 +598,7 @@ pub fn run(
         let (nested, per_fold) = nested_estimate(&tried, k);
         let default_trial = tried
             .iter()
-            .find(|t| t.config == override_of(kind, &EchoConfig::default()))
+            .find(|t| t.config == override_of(kind, &tuned))
             .expect("the defaults are among the trials");
         let per_fold: Vec<String> = per_fold.iter().map(|x| fmt(*x)).collect();
         println!(
@@ -706,7 +694,7 @@ mod tests {
                 }
                 assert!(o.unstressed_weight <= o.secondary_weight);
                 assert!(o.gap_open_repeated_consonant <= o.gap_open);
-                let mut config = EchoConfig::default();
+                let mut config = EchoConfig::for_aligner(kind);
                 o.apply(&mut config).unwrap();
             }
         }
@@ -719,13 +707,17 @@ mod tests {
     }
 
     #[test]
-    fn defaults_round_trip_through_an_override() {
+    fn tuned_configs_round_trip_through_an_override() {
         for kind in AlignerKind::ALL {
+            let tuned = EchoConfig::for_aligner(kind);
+            // Applied to the other aligner's config, an override still
+            // carries everything `kind` searches.
             let mut config = EchoConfig::default();
-            override_of(kind, &EchoConfig::default())
-                .apply(&mut config)
-                .unwrap();
-            assert_eq!(config, EchoConfig::default());
+            override_of(kind, &tuned).apply(&mut config).unwrap();
+            assert_eq!(override_of(kind, &config), override_of(kind, &tuned));
+            let mut config = tuned;
+            override_of(kind, &tuned).apply(&mut config).unwrap();
+            assert_eq!(config, tuned);
         }
     }
 

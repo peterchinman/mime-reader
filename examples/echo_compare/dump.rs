@@ -117,11 +117,15 @@ mod tests {
             },
             scores: vec![1.0, 0.5],
         }];
-        let text = csv(&scored, &[AlignerKind::SemiGlobal, AlignerKind::Jump], &[]);
+        let text = csv(
+            &scored,
+            &[AlignerKind::SemiGlobal, AlignerKind::WatermanEggert],
+            &[],
+        );
         let mut lines = text.lines();
         assert_eq!(
             lines.next(),
-            Some("source,group,label,poem,i,j,a,b,semi_global,jump")
+            Some("source,group,label,poem,i,j,a,b,semi_global,waterman_eggert")
         );
         assert_eq!(
             lines.next(),
@@ -131,10 +135,10 @@ mod tests {
         );
         let parsed: serde_json::Value = serde_json::from_str(&json(
             &scored,
-            &[AlignerKind::SemiGlobal, AlignerKind::Jump],
+            &[AlignerKind::SemiGlobal, AlignerKind::WatermanEggert],
             &[],
         ))
         .unwrap();
-        assert_eq!(parsed[0]["similarity"]["jump"], 0.5);
+        assert_eq!(parsed[0]["similarity"]["waterman_eggert"], 0.5);
     }
 }

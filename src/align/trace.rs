@@ -16,9 +16,6 @@ pub enum TraceEvent {
     /// Adjacent swap: `a[i], a[i+1]` crossed with `b[j], b[j+1]`
     /// (`a[i] = b[j+1]` and `a[i+1] = b[j]`).
     Swap { i: usize, j: usize },
-    /// The alignment resumes somewhere else in `b`: the pairs after this
-    /// event don't continue the diagonal of the pairs before it.
-    Jump,
 }
 
 /// A scored traceback.
@@ -40,7 +37,7 @@ pub struct IndexedStep<'a> {
 impl Trace {
     /// The trace as display steps: a pair is a `Match` when the phonemes are
     /// equal and a `Substitution` otherwise; a swap is a `Right` then a
-    /// `Left` transposition; jumps emit nothing.
+    /// `Left` transposition.
     pub fn steps<'a>(&self, a: &'a [Phoneme], b: &'a [Phoneme]) -> Vec<AlignmentStep<'a>> {
         self.indexed_steps(a, b)
             .into_iter()
@@ -109,7 +106,6 @@ impl Trace {
                         b_index: Some(j + 1),
                     });
                 }
-                TraceEvent::Jump => {}
             }
         }
         steps
@@ -134,7 +130,6 @@ mod tests {
                 TraceEvent::Pair { i: 0, j: 0 },
                 TraceEvent::Pair { i: 1, j: 1 },
                 TraceEvent::Swap { i: 2, j: 2 },
-                TraceEvent::Jump,
                 TraceEvent::GapA { i: 4 },
                 TraceEvent::GapB { j: 4 },
                 TraceEvent::GapB { j: 5 },

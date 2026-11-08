@@ -1,6 +1,5 @@
 //! The three-state Gotoh recurrence: affine gaps (`open + Σ extend`), in
-//! global, semi-global, local and jump modes, with optional row/column
-//! masks. Echo's aligners are all built on it.
+//! global, semi-global and local modes, with optional row/column masks. Echo's aligners are all built on it.
 //!
 //! States, for `a[..i]` vs `b[..j]`:
 //! - `M[i][j]`: the alignment ends pairing `a_i` with `b_j`;
@@ -38,11 +37,6 @@ pub enum Mode {
     /// Smith–Waterman: the best-scoring contiguous region of each, starting
     /// and ending on a pair (or nothing, scoring 0).
     Local,
-    /// All of `a` is aligned, against any regions of `b`: the alignment
-    /// starts and ends anywhere in `b`, and may resume pairing anywhere in
-    /// `b` — backwards (reusing `b`) or forwards (skipping it) — for
-    /// `move_cost` per jump.
-    Jump { move_cost: i64 },
 }
 
 /// Positions that may not take part in an alignment: a masked row `i`
@@ -83,8 +77,6 @@ const STATE_Y: u8 = 2;
 const START: u8 = 3;
 /// Local mode: the alignment starts fresh at this pair.
 const RESET: u8 = 4;
-/// Jump mode: the pair follows the best cell of the previous row.
-const JUMP: u8 = 5;
 
 /// Saturates at [`NEG_INF`]: anything at or below it is "impossible".
 #[inline]
@@ -106,10 +98,9 @@ fn best3(m: i64, x: i64, y: i64) -> (i64, u8) {
 }
 
 /// Aligns `a` with `b` (phoneme ids) under `mode`, maximizing pair scores
-/// minus affine gap costs (minus `move_cost` per jump).
+/// minus affine gap costs.
 ///
-/// Ties prefer, at every cell: a diagonal continuation over a jump; `M` over
-/// `X` over `Y`; and in local mode a fresh start over continuing an
+/// Ties prefer, at every cell: `M` over `X` over `Y`; and in local mode a fresh start over continuing an
 /// alignment that hasn't gained anything (score ≤ 0). The end cell prefers
 /// `(n, m)`; local mode takes the first best cell in row-major order.
 #[allow(clippy::too_many_arguments)]
@@ -139,9 +130,6 @@ pub(crate) fn align(
     } else {
         (Vec::new(), Vec::new(), Vec::new())
     };
-    // Jump mode: the best (score, column, state) of each finished row.
-    let mut row_best: Vec<(i64, usize, u8)> = Vec::new();
-
     // Borders.
     match mode {
         Mode::Global => {
@@ -170,19 +158,6 @@ pub(crate) fn align(
             }
         }
         Mode::Local => {}
-        Mode::Jump { .. } => {
-            for j in 0..=m {
-                sm[at(0, j)] = 0;
-            }
-            for i in 1..=n {
-                let (score, from) = x_entry(&sm, &sx, &sy, at(i - 1, 0), gaps_a, i);
-                sx[at(i, 0)] = score;
-                if trace {
-                    px[at(i, 0)] = from;
-                }
-            }
-            row_best.push((0, 0, STATE_M));
-        }
     }
 
     for i in 1..=n {
@@ -202,14 +177,6 @@ pub(crate) fn align(
                         (0, RESET)
                     }
                 }
-                Mode::Jump { move_cost } => {
-                    let jump = floor(row_best[i - 1].0 - move_cost);
-                    if entry >= jump {
-                        (entry, from)
-                    } else {
-                        (jump, JUMP)
-                    }
-                }
             };
             sm[here] = floor(table.get(a[i - 1], b[j - 1]) + entry);
 
@@ -223,16 +190,6 @@ pub(crate) fn align(
                 px[here] = x_from;
                 py[here] = y_from;
             }
-        }
-        if let Mode::Jump { .. } = mode {
-            let mut best = (NEG_INF, 0, STATE_M);
-            for j in 0..=m {
-                let (score, state) = best3(sm[at(i, j)], sx[at(i, j)], sy[at(i, j)]);
-                if score > best.0 {
-                    best = (score, j, state);
-                }
-            }
-            row_best.push(best);
         }
     }
 
@@ -268,18 +225,6 @@ pub(crate) fn align(
             }
             best
         }
-        Mode::Jump { .. } => {
-            let mut best = (NEG_INF, n, m, STATE_M);
-            for j in (0..=m).rev() {
-                if sm[at(n, j)] > best.0 {
-                    best = (sm[at(n, j)], n, j, STATE_M);
-                }
-                if sx[at(n, j)] > best.0 {
-                    best = (sx[at(n, j)], n, j, STATE_X);
-                }
-            }
-            Some(best)
-        }
     };
 
     let Some((score, end_i, end_j, end_state)) = end else {
@@ -289,7 +234,7 @@ pub(crate) fn align(
         };
     };
     let events = if trace {
-        traceback((end_i, end_j, end_state), width, &pm, &px, &py, &row_best)
+        traceback((end_i, end_j, end_state), width, &pm, &px, &py)
     } else {
         Vec::new()
     };
@@ -343,7 +288,6 @@ fn traceback(
     pm: &[u8],
     px: &[u8],
     py: &[u8],
-    row_best: &[(i64, usize, u8)],
 ) -> Vec<TraceEvent> {
     let (mut i, mut j, mut state) = end;
     let mut events = Vec::new();
@@ -357,13 +301,6 @@ fn traceback(
                 events.push(TraceEvent::Pair { i: i - 1, j: j - 1 });
                 match pm[here] {
                     RESET | START => break,
-                    JUMP => {
-                        events.push(TraceEvent::Jump);
-                        let (_, column, from) = row_best[i - 1];
-                        i -= 1;
-                        j = column;
-                        state = from;
-                    }
                     from => {
                         i -= 1;
                         j -= 1;
@@ -458,10 +395,9 @@ mod tests {
         )
     }
 
-    /// Re-scores a traceback from its events alone: pair scores, gap open
-    /// (when a gap of that side starts) plus extend, and the move cost per
-    /// jump.
-    fn rescore(trace: &Trace, a: &[Phoneme], b: &[Phoneme], mode: Mode, gaps: &GapModel) -> i64 {
+    /// Re-scores a traceback from its events alone: pair scores plus gap
+    /// open (when a gap of that side starts) plus extend.
+    fn rescore(trace: &Trace, a: &[Phoneme], b: &[Phoneme], gaps: &GapModel) -> i64 {
         let (ga, gb) = (GapScores::new(gaps, a, None), GapScores::new(gaps, b, None));
         let mut total = 0;
         let mut previous: Option<TraceEvent> = None;
@@ -476,10 +412,6 @@ mod tests {
                     let open = !matches!(previous, Some(TraceEvent::GapB { .. }));
                     -(if open { gb.open[j] } else { 0 }) - gb.extend[j]
                 }
-                TraceEvent::Jump => match mode {
-                    Mode::Jump { move_cost } => -move_cost,
-                    _ => panic!("jump outside jump mode"),
-                },
                 TraceEvent::Swap { .. } => panic!("affine never swaps"),
             };
             previous = Some(event);
@@ -487,9 +419,8 @@ mod tests {
         total
     }
 
-    /// The events consume `a` and `b` in order (except across a jump in
-    /// `b`), never touching masked positions, and satisfy the mode's
-    /// coverage rules.
+    /// The events consume `a` and `b` in order, never touching masked
+    /// positions, and satisfy the mode's coverage rules.
     fn assert_well_formed(trace: &Trace, n: usize, m: usize, mode: Mode, mask: Option<&Mask>) {
         let mut next_i = None;
         let mut next_j = None;
@@ -499,10 +430,6 @@ mod tests {
                 TraceEvent::Pair { i, j } => (Some(i), Some(j)),
                 TraceEvent::GapA { i } => (Some(i), None),
                 TraceEvent::GapB { j } => (None, Some(j)),
-                TraceEvent::Jump => {
-                    next_j = None;
-                    continue;
-                }
                 TraceEvent::Swap { .. } => unreachable!(),
             };
             if let Some(i) = i {
@@ -529,7 +456,7 @@ mod tests {
             }
         }
         match mode {
-            Mode::Global | Mode::Jump { .. } => {
+            Mode::Global => {
                 assert!(a_seen.iter().all(|&seen| seen), "all of a must be consumed")
             }
             Mode::SemiGlobal | Mode::Local => {
@@ -556,14 +483,8 @@ mod tests {
         }
     }
 
-    fn modes() -> [Mode; 5] {
-        [
-            Mode::Global,
-            Mode::SemiGlobal,
-            Mode::Local,
-            Mode::Jump { move_cost: 15 },
-            Mode::Jump { move_cost: 0 },
-        ]
+    fn modes() -> [Mode; 3] {
+        [Mode::Global, Mode::SemiGlobal, Mode::Local]
     }
 
     #[test]
@@ -587,7 +508,7 @@ mod tests {
                     let trace = run(&a, &b, mode, None, &gaps);
                     assert_eq!(trace.score, expected, "{mode:?} {a:?} vs {b:?}");
                     assert_eq!(
-                        rescore(&trace, &a, &b, mode, &gaps),
+                        rescore(&trace, &a, &b, &gaps),
                         trace.score,
                         "{mode:?} {a:?} vs {b:?}: {:?}",
                         trace.events
@@ -610,7 +531,7 @@ mod tests {
             let expected = oracle::affine(&a, &b, &table, &GAPS, Mode::Local, Some(&mask));
             let trace = run(&a, &b, Mode::Local, Some(&mask), &GAPS);
             assert_eq!(trace.score, expected, "{a:?} vs {b:?} masked {mask:?}");
-            assert_eq!(rescore(&trace, &a, &b, Mode::Local, &GAPS), trace.score);
+            assert_eq!(rescore(&trace, &a, &b, &GAPS), trace.score);
             assert_well_formed(&trace, a.len(), b.len(), Mode::Local, Some(&mask));
         }
     }
@@ -635,7 +556,7 @@ mod tests {
                     false,
                 );
                 assert_eq!(traced.score, untraced.score);
-                assert_eq!(rescore(&traced, &a, &b, mode, &GAPS), traced.score);
+                assert_eq!(rescore(&traced, &a, &b, &GAPS), traced.score);
                 assert_well_formed(&traced, a.len(), b.len(), mode, None);
             }
         }
@@ -657,33 +578,6 @@ mod tests {
             let linear = linear::align_global(&a, &b, &table(), &gaps, None, None, None, false);
             assert_eq!(affine.score, linear.score, "{a:?} vs {b:?}");
         }
-    }
-
-    #[test]
-    fn verbatim_jump_alignment_never_jumps() {
-        let a = parse("D AA1 R K D IH0 M AE1 N D Z AY1");
-        for move_cost in [0, 15] {
-            let trace = run(&a, &a, Mode::Jump { move_cost }, None, &GAPS);
-            assert!(
-                !trace.events.contains(&TraceEvent::Jump),
-                "{:?}",
-                trace.events
-            );
-            assert_eq!(trace.events.len(), a.len());
-        }
-    }
-
-    #[test]
-    fn jump_reuses_b_when_it_pays() {
-        let (a, b) = (parse("L AA1 L AA1 L AA1"), parse("L AA1"));
-        let trace = run(&a, &b, Mode::Jump { move_cost: 15 }, None, &GAPS);
-        let jumps = trace
-            .events
-            .iter()
-            .filter(|e| **e == TraceEvent::Jump)
-            .count();
-        assert_eq!(jumps, 2);
-        assert_eq!(trace.score, 3 * (22 + 40) - 2 * 15);
     }
 
     #[test]

@@ -14,8 +14,9 @@ USAGE: cargo run --release --example echo_compare -- [OPTIONS]
                      plus data/echo/private when present)
   --fixture FILE     synthetic pair fixture (default echo_pair_tests.json);
                      --no-fixture to skip
-  --config FILE      JSON echo-config override (also: ECHO_CONFIG='{...}')
-  --aligner NAME     semi_global | waterman_eggert | jump | all (default all)
+  --config FILE      JSON echo-config override, applied on top of each
+                     aligner's tuned config (also: ECHO_CONFIG='{...}')
+  --aligner NAME     semi_global | waterman_eggert | all (default all)
   --no-mutations     skip synthetic mutations of corpus lines
   --seed N           mutation seed (default 1)
   --max-lines N      skip poems longer than N lines
@@ -224,8 +225,6 @@ pub struct ConfigOverride {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_run: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reuse_penalty: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_runs: Option<usize>,
     /// "shorter" or "mean".
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -266,7 +265,6 @@ impl ConfigOverride {
         set(&mut t.move_cost, self.move_cost);
         set(&mut t.run_open, self.run_open);
         set(&mut t.min_run, self.min_run);
-        set(&mut t.reuse_penalty, self.reuse_penalty);
         set(&mut t.max_runs, self.max_runs);
         set(
             &mut config.max_variants_per_line,
@@ -284,15 +282,20 @@ impl ConfigOverride {
     }
 }
 
-/// The effective config: defaults, then `--config FILE`, then `ECHO_CONFIG`.
-pub fn effective_config(args: &Args, env: Option<String>) -> Result<EchoConfig, String> {
-    let mut config = EchoConfig::default();
+/// The effective config for `kind`: its tuned config, then `--config FILE`,
+/// then `ECHO_CONFIG`.
+pub fn effective_config(
+    args: &Args,
+    env: Option<&str>,
+    kind: AlignerKind,
+) -> Result<EchoConfig, String> {
+    let mut config = EchoConfig::for_aligner(kind);
     if let Some(path) = &args.config {
         let json = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         ConfigOverride::from_json(&json)?.apply(&mut config)?;
     }
     if let Some(json) = env {
-        ConfigOverride::from_json(&json)?.apply(&mut config)?;
+        ConfigOverride::from_json(json)?.apply(&mut config)?;
     }
     Ok(config)
 }
@@ -318,7 +321,7 @@ mod tests {
     fn options_parse() {
         let args = parse(&[
             "--aligner",
-            "jump",
+            "waterman_eggert",
             "--no-mutations",
             "--seed",
             "7",
@@ -334,7 +337,7 @@ mod tests {
             "--no-fixture",
         ])
         .unwrap();
-        assert_eq!(args.aligners, [AlignerKind::Jump]);
+        assert_eq!(args.aligners, [AlignerKind::WatermanEggert]);
         assert!(!args.mutations);
         assert_eq!((args.seed, args.max_lines), (7, Some(40)));
         assert_eq!(args.corpora, [PathBuf::from("a"), PathBuf::from("b")]);
@@ -346,16 +349,25 @@ mod tests {
     }
 
     #[test]
-    fn overrides_apply_on_top_of_defaults() {
+    fn overrides_apply_on_top_of_each_aligners_tuned_config() {
         let args = parse(&[]).unwrap();
-        let config = effective_config(
-            &args,
-            Some(r#"{"gap_open":250,"normalization":"mean"}"#.into()),
-        )
-        .unwrap();
-        assert_eq!(config.gaps.gap_open, 250);
-        assert_eq!(config.normalization, EchoNormalization::MeanSelfSimilarity);
-        assert_eq!(config.structure, EchoConfig::default().structure);
-        assert!(effective_config(&args, Some(r#"{"gap_opne":1}"#.into())).is_err());
+        for kind in AlignerKind::ALL {
+            let tuned = EchoConfig::for_aligner(kind);
+            assert_eq!(effective_config(&args, None, kind).unwrap(), tuned);
+            let config = effective_config(
+                &args,
+                Some(r#"{"gap_open":250,"normalization":"shorter"}"#),
+                kind,
+            )
+            .unwrap();
+            assert_eq!(config.gaps.gap_open, 250);
+            assert_eq!(
+                config.normalization,
+                EchoNormalization::ShorterSelfSimilarity
+            );
+            assert_eq!(config.structure, tuned.structure);
+            assert_eq!(config.aligner, kind);
+            assert!(effective_config(&args, Some(r#"{"gap_opne":1}"#), kind).is_err());
+        }
     }
 }

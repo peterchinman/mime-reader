@@ -2,27 +2,31 @@
 //!
 //! Villanelles, pantoums, duplexes and blues stanzas repeat lines — but
 //! loosely: a word changes, a phrase is inserted, the line is cut short, or
-//! its blocks are re-ordered ("dark demands I call my own" → "call my own
-//! dark demand sigh", which also moves a word boundary). Echo flattens each
+//! its blocks are re-ordered. Echo flattens each
 //! line to one phoneme sequence and aligns the two on the shared engine in
 //! [`crate::align`], in a *similarity* profile: alike phonemes score
-//! positive, unrelated ones negative, relative to zero points calibrated on
-//! CMUdict ([`similarity`]). Alignment can then choose which regions to
-//! compare, which rhyme's cost profile cannot.
+//! positive, unrelated ones negative, relative to zero points
+//! ([`similarity`]). Alignment can then choose which regions to compare,
+//! which rhyme's cost profile cannot.
 //!
-//! Three aligners compete behind [`EchoAligner`], to be chosen on data:
-//! [`SemiGlobalAligner`] (strict order, free ends), [`WatermanEggertAligner`]
-//! (disjoint local runs, assembled in or out of place) and [`JumpAligner`]
-//! (one optimal pass that may resume anywhere). A raw score is normalized
-//! by the shorter line's self-similarity, so a verbatim repeat is 1 and
-//! unrelated lines sit near 0.
+//! Two aligners implement [`EchoAligner`]:
+//! - [`SemiGlobalAligner`], the default: one alignment in strict order with
+//!   free ends.
+//! - [`WatermanEggertAligner`], opt-in: disjoint local runs, assembled in or
+//!   out of place, for echoes that keep only a fragment of their line or
+//!   re-order it.
+//!
+//! A raw score is normalized by the lines' self-similarity, so a verbatim
+//! repeat is 1 and unrelated lines sit near 0. Each aligner has a config
+//! tuned on a labeled corpus ([`EchoConfig::for_aligner`]) and pass marks
+//! for strict and loose forms ([`EchoStrictness::threshold`]); how they were
+//! chosen, with the numbers, is in `data/echo/README.md`.
 //!
 //! Echo keeps its own coefficients ([`SimilarityConfig`]); it never reads
 //! [`crate::RhymeDistanceConfig`].
 
 pub mod alignment;
 pub mod flatten;
-pub mod jump;
 pub mod scheme;
 pub mod semi_global;
 pub mod similarity;
@@ -34,14 +38,11 @@ pub use alignment::{
     RawAlignment, mark_in_place,
 };
 pub use flatten::{FlatLine, flatten, flatten_variants};
-pub use jump::JumpAligner;
-pub use scheme::{
-    DEFAULT_ECHO_THRESHOLD, EchoFormResult, EchoPairResult, EchoPairScore, RepetitionScheme,
-};
+pub use scheme::{EchoFormResult, EchoPairResult, EchoPairScore, EchoStrictness, RepetitionScheme};
 pub use semi_global::SemiGlobalAligner;
 pub use similarity::{
-    CONSONANT_ZERO_POINT, SimilarityConfig, StressWeights, VOWEL_ZERO_POINT, ZeroPoints,
-    calibrate_zero_points, similarity_table,
+    CALIBRATED_CONSONANT_ZERO_POINT, CALIBRATED_VOWEL_ZERO_POINT, SimilarityConfig, StressWeights,
+    TUNED_CONSONANT_ZERO_POINT, ZeroPoints, calibrate_zero_points, similarity_table,
 };
 pub use template::EchoTemplate;
 pub use waterman_eggert::WatermanEggertAligner;
@@ -75,19 +76,18 @@ impl Default for GapConfig {
     }
 }
 
-/// How re-ordering is charged, in thousandths of a unit (except `max_runs`).
+/// How Waterman–Eggert assembles local runs, in thousandths of a unit
+/// (except `max_runs`). Semi-global ignores it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StructureConfig {
-    /// A moved block (aligner 3) or a jump (aligner 5).
+    /// A moved block.
     pub move_cost: u32,
-    /// Each local run after the first (aligner 3).
+    /// Each local run after the first.
     pub run_open: u32,
-    /// After the first, local runs scoring less end the search (aligner 3).
-    /// ¾ unit: a lone primary vowel counts, a lone consonant doesn't.
+    /// After the first, local runs scoring less end the search. ¾ unit: a
+    /// lone primary vowel counts, a lone consonant doesn't.
     pub min_run: u32,
-    /// Each extra use of a `b` phoneme (aligner 5).
-    pub reuse_penalty: u32,
-    /// At most this many local runs (aligner 3).
+    /// At most this many local runs.
     pub max_runs: usize,
 }
 
@@ -97,7 +97,6 @@ impl Default for StructureConfig {
             move_cost: 500,
             run_open: 500,
             min_run: 750,
-            reuse_penalty: 0,
             max_runs: 16,
         }
     }
@@ -107,15 +106,20 @@ impl Default for StructureConfig {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum EchoNormalization {
     /// The smaller self-similarity: how much of the shorter line is echoed.
-    /// A truncation of a line is a full echo of it.
+    /// A truncation of a line is a full echo of it — but so is a short line
+    /// found inside a long one, which is where many of the default's false
+    /// positives come from.
     #[default]
     ShorterSelfSimilarity,
     /// The mean of both self-similarities: extra material on either side
-    /// counts against the echo.
+    /// counts against the echo, so a truncation scores below 1. Fewer false
+    /// positives from short lines; Waterman–Eggert's tuned config uses it.
     MeanSelfSimilarity,
 }
 
 /// Everything that shapes an echo score.
+///
+/// The default is semi-global's tuned config; see [`Self::for_aligner`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EchoConfig {
     pub similarity: SimilarityConfig,
@@ -142,6 +146,54 @@ impl Default for EchoConfig {
             aligner: AlignerKind::default(),
             max_variants_per_line: 64,
             max_variant_pairs: 256,
+        }
+    }
+}
+
+impl EchoConfig {
+    /// The config `aligner` was tuned with, by cross-validated search on the
+    /// labeled corpus (`data/echo/README.md`). [`EchoStrictness::threshold`]
+    /// was measured under these configs; another config needs its own
+    /// thresholds.
+    ///
+    /// - Semi-global: the defaults, which are the hand-set structure plus
+    ///   one tuned value, [`TUNED_CONSONANT_ZERO_POINT`]. The search's full
+    ///   optimum was not significantly better and its vowel-side values
+    ///   didn't agree across folds.
+    /// - Waterman–Eggert: the search's optimum. It needs its structural
+    ///   costs tuned (the zero point alone barely helps), and it uses mean
+    ///   normalization. Several of these values sit near the edge of the
+    ///   searched range (`run_open` at its maximum).
+    pub fn for_aligner(aligner: AlignerKind) -> Self {
+        match aligner {
+            AlignerKind::SemiGlobal => Self::default(),
+            AlignerKind::WatermanEggert => Self {
+                similarity: SimilarityConfig {
+                    vowel_coefficient: 6,
+                    consonant_coefficient: 8,
+                    vowel_zero_point: 261,
+                    consonant_zero_point: TUNED_CONSONANT_ZERO_POINT,
+                    stress_weights: StressWeights {
+                        primary: 4,
+                        secondary: 4,
+                        unstressed: 3,
+                    },
+                },
+                gaps: GapConfig {
+                    gap_open: 615,
+                    gap_extend: 116,
+                    gap_open_repeated_consonant: 425,
+                },
+                structure: StructureConfig {
+                    move_cost: 1277,
+                    run_open: 1500,
+                    min_run: 499,
+                    max_runs: 16,
+                },
+                normalization: EchoNormalization::MeanSelfSimilarity,
+                aligner: AlignerKind::WatermanEggert,
+                ..Self::default()
+            },
         }
     }
 }
@@ -189,7 +241,6 @@ fn derive_costs(config: &EchoConfig, unit: i64) -> EchoCosts {
         move_cost: scale(config.structure.move_cost, unit),
         run_open: scale(config.structure.run_open, unit),
         min_run: scale(config.structure.min_run, unit),
-        reuse_penalty: scale(config.structure.reuse_penalty, unit),
         max_runs: config.structure.max_runs,
     }
 }
@@ -199,7 +250,6 @@ pub fn aligner(kind: AlignerKind) -> &'static dyn EchoAligner {
     match kind {
         AlignerKind::SemiGlobal => &SemiGlobalAligner,
         AlignerKind::WatermanEggert => &WatermanEggertAligner,
-        AlignerKind::Jump => &JumpAligner,
     }
 }
 
@@ -210,7 +260,7 @@ impl Default for EchoDetector {
 }
 
 impl EchoDetector {
-    /// The default engines and config.
+    /// The default engines and config (semi-global's tuned config).
     pub fn new() -> Self {
         Self::with_config(EchoConfig::default())
     }
@@ -407,7 +457,7 @@ pub(crate) mod test_support {
 
     /// Three blocks, X Y Z ("golden apples", "under the moon", "shining"),
     /// chosen so no block's edge resembles another's: greedy local runs
-    /// (aligner 3) overextend across junctions where neighbors happen to
+    /// (Waterman–Eggert) overextend across junctions where neighbors happen to
     /// be alike, which would blur what these fixtures test.
     pub(crate) const BLOCK_X: &str = "G OW1 L D AH0 N AE1 P AH0 L Z";
     pub(crate) const BLOCK_Y: &str = "AH1 N D ER0 DH AH0 M UW1 N";
@@ -505,16 +555,14 @@ mod tests {
             "{}",
             context()
         );
-        // raw = Σ score − Σ open − reuse.
-        let reuse =
-            detector().costs().reuse_penalty * (alignment.reused_a() + alignment.reused_b()) as i64;
+        // raw = Σ score − Σ open.
         let assembled: i64 = alignment
             .segments
             .iter()
             .map(|s| s.score - s.open_cost)
             .sum();
-        assert_eq!(alignment.raw, assembled - reuse, "{}", context());
-        // Coverage counts pairs.
+        assert_eq!(alignment.raw, assembled, "{}", context());
+        // Coverage counts pairs, at most one per phoneme.
         let mut a_coverage = vec![0u8; a.len()];
         let mut b_coverage = vec![0u8; b.len()];
         for step in &alignment.steps {
@@ -525,6 +573,11 @@ mod tests {
         }
         assert_eq!(alignment.a_coverage, a_coverage, "{}", context());
         assert_eq!(alignment.b_coverage, b_coverage, "{}", context());
+        assert!(
+            a_coverage.iter().chain(&b_coverage).all(|&c| c <= 1),
+            "{}",
+            context()
+        );
         // Normalization.
         let denominator = alignment.self_similarity_a.min(alignment.self_similarity_b);
         if denominator > 0 {
@@ -537,10 +590,8 @@ mod tests {
         } else {
             assert_eq!(alignment.similarity, 0.0);
         }
-        // Without reuse, nothing beats a verbatim repeat.
-        if alignment.reused_a() + alignment.reused_b() == 0 {
-            assert!(alignment.similarity <= 1.0 + 1e-6, "{}", context());
-        }
+        // Nothing beats a verbatim repeat.
+        assert!(alignment.similarity <= 1.0 + 1e-6, "{}", context());
     }
 
     #[test]
@@ -587,16 +638,6 @@ mod tests {
     }
 
     #[test]
-    fn the_asymmetric_aligner_takes_the_better_orientation() {
-        // Consumed whole, the longer line must gap its extra material;
-        // consuming the shorter line is free at both ends of the longer.
-        let (short, long) = (parse("D AA1 R K"), parse("DH AH0 D AA1 R K N AY1 T"));
-        let alignment = detector().compare_phonemes_with(AlignerKind::Jump, &long, &short);
-        assert_eq!(alignment.similarity, 1.0);
-        assert_eq!(alignment.raw, detector().self_similarity(&short));
-    }
-
-    #[test]
     fn normalization_chooses_the_denominator() {
         let (dark, darker) = (parse("D AA1 R K"), parse("D AA1 R K ER0"));
         let shorter = detector().compare_phonemes(&dark, &darker);
@@ -616,7 +657,7 @@ mod tests {
     #[test]
     fn config_costs_scale_with_the_unit() {
         let d = detector();
-        assert_eq!(d.unit(), 3 * i64::from(VOWEL_ZERO_POINT) * 4);
+        assert_eq!(d.unit(), 3 * i64::from(CALIBRATED_VOWEL_ZERO_POINT) * 4);
         assert_eq!(d.costs().gaps.open * 2, d.unit());
         assert_eq!(d.costs().gaps.extend_vowel, 0);
         assert_eq!(d.costs().min_run * 4, d.unit() * 3);
@@ -643,14 +684,14 @@ mod tests {
         // Resegmentation is invisible: the flattened phonemes are compared.
         let a = Line::new("dark demands I call my own", dict());
         let b = Line::new("call my own dark demand sigh", dict());
-        for kind in [AlignerKind::WatermanEggert, AlignerKind::Jump] {
-            let echo = detector().compare_lines_with(kind, &a, &b).unwrap();
-            assert!(
-                echo.alignment.similarity > 0.85,
-                "{kind}: {}",
-                echo.alignment.similarity
-            );
-        }
+        let echo = detector()
+            .compare_lines_with(AlignerKind::WatermanEggert, &a, &b)
+            .unwrap();
+        assert!(
+            echo.alignment.similarity > 0.85,
+            "{}",
+            echo.alignment.similarity
+        );
         let strict = detector()
             .compare_lines_with(AlignerKind::SemiGlobal, &a, &b)
             .unwrap();

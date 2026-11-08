@@ -5,9 +5,16 @@
 //! *similarity* that is positive for alike phonemes and negative for
 //! unrelated ones, so that local and semi-global alignment can tell a shared
 //! region from noise. The zero point is where a pair stops counting as
-//! alike: the expected distance between two phonemes drawn at random from
-//! English (type-weighted over every CMUdict pronunciation). A pair closer
-//! than chance scores positive; a pair farther than chance, negative.
+//! alike.
+//!
+//! The natural zero point is chance: the expected distance between two
+//! phonemes drawn at random from English (type-weighted over every CMUdict
+//! pronunciation), so a random pair scores 0 on average. The vowel default
+//! is that calibrated value. The consonant default is tuned well below it
+//! ([`TUNED_CONSONANT_ZERO_POINT`]): at chance, an alignment that may skip
+//! material collects chance consonant matches, and on the labeled corpus a
+//! stricter consonant zero point separated echoes from non-echoes better
+//! than any other single change.
 
 use crate::align::{NEG_INF, ScoreTable, phoneme_id};
 use crate::consonant_distance::ConsonantDistanceScorer;
@@ -19,12 +26,20 @@ use crate::vowel_distance::VowelDistanceScorer;
 
 /// The expected [`crate::VowelHexGraph`] distance between two vowels drawn
 /// at random from CMUdict (stress included), under the default vowel config.
-/// Recomputed by `zero_points_match_cmudict`.
-pub const VOWEL_ZERO_POINT: u32 = 376;
+/// The default vowel zero point. Recomputed by `zero_points_match_cmudict`.
+pub const CALIBRATED_VOWEL_ZERO_POINT: u32 = 376;
 /// The expected [`crate::AnalyticConsonantDistance`] distance between two
 /// consonants drawn at random from CMUdict, under the default consonant
-/// config. Recomputed by `zero_points_match_cmudict`.
-pub const CONSONANT_ZERO_POINT: u32 = 789;
+/// config. A measurement, not the default (see
+/// [`TUNED_CONSONANT_ZERO_POINT`]). Recomputed by `zero_points_match_cmudict`.
+pub const CALIBRATED_CONSONANT_ZERO_POINT: u32 = 789;
+/// The default consonant zero point, tuned on the labeled echo corpus
+/// (`data/echo/README.md`). Every aligner's search preferred 300–540 to the
+/// calibrated 789, and this value alone recovered most of semi-global's
+/// tuning gain. With it most random consonant pairs score below 0, and an
+/// identical consonant is worth about a quarter of an identical primary
+/// vowel (at the default coefficients).
+pub const TUNED_CONSONANT_ZERO_POINT: u32 = 300;
 
 /// How much each vowel stress counts. Consonants are weighted flat, at
 /// `primary`.
@@ -69,13 +84,15 @@ pub struct SimilarityConfig {
     pub stress_weights: StressWeights,
 }
 
+/// Coefficients 3:1, the calibrated vowel zero point and the tuned consonant
+/// zero point.
 impl Default for SimilarityConfig {
     fn default() -> Self {
         Self {
             vowel_coefficient: 3,
             consonant_coefficient: 1,
-            vowel_zero_point: VOWEL_ZERO_POINT,
-            consonant_zero_point: CONSONANT_ZERO_POINT,
+            vowel_zero_point: CALIBRATED_VOWEL_ZERO_POINT,
+            consonant_zero_point: TUNED_CONSONANT_ZERO_POINT,
             stress_weights: StressWeights::default(),
         }
     }
@@ -204,8 +221,8 @@ mod tests {
         assert_eq!(
             calibrated,
             ZeroPoints {
-                vowel: VOWEL_ZERO_POINT,
-                consonant: CONSONANT_ZERO_POINT,
+                vowel: CALIBRATED_VOWEL_ZERO_POINT,
+                consonant: CALIBRATED_CONSONANT_ZERO_POINT,
             },
             "re-pin the zero-point constants to the calibrated values",
         );
@@ -267,9 +284,13 @@ mod tests {
                 * i64::from(config.consonant_zero_point)
                 * i64::from(config.stress_weights.primary)
         );
-        // An identical consonant is worth about half an identical primary vowel.
+        // With the tuned consonant zero point, an identical consonant is
+        // worth about a quarter of an identical primary vowel.
         let ratio = table.score(&p("T"), &p("T")) as f64 / unit as f64;
-        assert!((0.3..0.8).contains(&ratio), "consonant/vowel ratio {ratio}");
+        assert!(
+            (0.2..0.35).contains(&ratio),
+            "consonant/vowel ratio {ratio}"
+        );
         assert!(table.score(&p("M"), &p("F")) < 0);
         assert!(
             table.score(&p("Z"), &p("S")) > 0,

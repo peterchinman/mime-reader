@@ -33,7 +33,7 @@ pub use consonant_distance::{
 pub use dictionary::{CmuDictionary, PronouncingDictionary, Pronunciations};
 pub use echo::{
     AlignerKind, EchoAlignment, EchoConfig, EchoDetector, EchoMatch, EchoNormalization,
-    EchoTemplate, RepetitionScheme,
+    EchoStrictness, EchoTemplate, RepetitionScheme,
 };
 pub use error::{
     CmuDictionaryError, EchoError, MeterCheckError, ParseArpabetError, ParseEchoTemplateError,

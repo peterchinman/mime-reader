@@ -2,17 +2,17 @@
 
 use std::collections::BTreeMap;
 
-use mime_reader::echo::{AlignerKind, EchoConfig, EchoDetector};
+use mime_reader::echo::{AlignerKind, EchoConfig, EchoDetector, EchoStrictness};
 
 use crate::Scored;
 use crate::corpus::{Label, Poem};
 use crate::metrics::{self, Operating};
 
-pub fn config(config: &EchoConfig, detector: &EchoDetector) {
+pub fn config(kind: AlignerKind, config: &EchoConfig, detector: &EchoDetector) {
     let s = &config.similarity;
     let g = &config.gaps;
     let t = &config.structure;
-    println!("== effective echo config (costs in thousandths of a unit)");
+    println!("== {kind}: effective echo config (costs in thousandths of a unit)");
     println!(
         "similarity: vowel×{} consonant×{}  zero points vowel {} consonant {}  stress weights {}/{}/{}",
         s.vowel_coefficient,
@@ -28,8 +28,8 @@ pub fn config(config: &EchoConfig, detector: &EchoDetector) {
         g.gap_open, g.gap_extend, g.gap_open_repeated_consonant
     );
     println!(
-        "structure: move {} run_open {} min_run {} reuse {} max_runs {}",
-        t.move_cost, t.run_open, t.min_run, t.reuse_penalty, t.max_runs
+        "structure: move {} run_open {} min_run {} max_runs {}",
+        t.move_cost, t.run_open, t.min_run, t.max_runs
     );
     println!(
         "normalization {:?}  variants ≤{}/line, ≤{} pairs  unit = {}",
@@ -187,6 +187,64 @@ pub fn separation(
     }
     println!();
     best
+}
+
+/// Pass rates at [`EchoStrictness::threshold`]: corpus poems pooled by
+/// their strictness, and the fixture (judged at both). The thresholds were
+/// measured under the tuned configs, so an override makes these
+/// indicative only.
+pub fn shipped_thresholds(
+    scored: &[Scored],
+    poems: &[Poem],
+    aligners: &[AlignerKind],
+    overridden: bool,
+) {
+    println!(
+        "== at the shipped thresholds (echoes caught / non-echoes rejected){}",
+        if overridden {
+            " — config overridden: thresholds measured without the override"
+        } else {
+            ""
+        }
+    );
+    for (k, kind) in aligners.iter().enumerate() {
+        for strictness in EchoStrictness::ALL {
+            let threshold = strictness.threshold(*kind);
+            let rates = |pool: &dyn Fn(&Scored) -> bool| {
+                let (mut pos, mut neg) = (Vec::new(), Vec::new());
+                for row in scored.iter().filter(|r| pool(r)) {
+                    match row.pair.label {
+                        Label::Echo => pos.push(row.scores[k]),
+                        Label::Not => neg.push(row.scores[k]),
+                        Label::Unlabeled => {}
+                    }
+                }
+                if pos.is_empty() || neg.is_empty() {
+                    return format!("{:^28}", "—");
+                }
+                let op = metrics::at_threshold(&pos, &neg, threshold);
+                format!(
+                    "{:.3} / {:.3} ({} / {})",
+                    op.tpr,
+                    op.tnr,
+                    pos.len(),
+                    neg.len()
+                )
+            };
+            let corpus = rates(&|r: &Scored| {
+                r.pair
+                    .poem
+                    .is_some_and(|p| poems[p].strictness == strictness.name())
+            });
+            let fixture = rates(&|r: &Scored| r.pair.source == "fixture");
+            println!(
+                "{:<16} {:<7} {threshold:.2}  {strictness} poems {corpus}  fixture {fixture}",
+                kind.to_string(),
+                strictness.name(),
+            );
+        }
+    }
+    println!();
 }
 
 /// Each set's best threshold applied to the others.

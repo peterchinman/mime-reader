@@ -1,4 +1,4 @@
-//! Aligner (1): one semi-global alignment.
+//! One semi-global alignment: the default aligner.
 //!
 //! Free end gaps let one line be a truncation or extension of the other at
 //! either end; inside, everything stays in order and an inserted phrase is

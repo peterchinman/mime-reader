@@ -1,12 +1,12 @@
-//! Aligner (3): repeated local alignment with masking (Waterman–Eggert).
+//! Repeated local alignment with masking (Waterman–Eggert).
 //!
 //! Finds the best shared local alignment, splits it at its gaps into
 //! ungapped runs, walls off the phonemes those runs pair in both lines, and
 //! repeats until no further alignment scores at least `min_run` (the best
-//! one always counts, so a verbatim one-syllable line still echoes itself). The runs are then
-//! assembled: the heaviest chain that keeps its order in both lines is in
-//! place, the rest are moved blocks. Every phoneme is used at most once —
-//! the exact no-reuse model.
+//! one always counts, so a verbatim one-syllable line still echoes itself).
+//! The runs are then assembled: the heaviest chain that keeps its order in
+//! both lines is in place, the rest are moved blocks. Every phoneme is used
+//! at most once.
 //!
 //! Why split at gaps: a local alignment may bridge two in-order blocks with
 //! one cheap gap ("Y ⟨gap⟩ Z" when `a = X Y Z`, `b = Y X Z`). Walling off

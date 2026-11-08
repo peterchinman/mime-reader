@@ -81,9 +81,6 @@ enum Last {
 /// - SemiGlobal: start at the start of `a` or of `b`; stop on a pair (or
 ///   before any) once either sequence is exhausted.
 /// - Local: start on any pair; stop after any pair; or align nothing (0).
-/// - Jump: start anywhere in `b`; all of `a` is consumed; any pair may
-///   instead pair `a_i` with any `b_j` for `move_cost`; stop at the end of
-///   `a` (not right after a gap in `a`'s partner).
 ///
 /// Masked rows/columns may not be paired or gapped, nor gapped across.
 pub(crate) fn affine(
@@ -129,7 +126,6 @@ pub(crate) fn affine(
                 Mode::Global => i == n && j == m,
                 Mode::SemiGlobal => matches!(last, Last::Start | Last::Pair) && (i == n || j == m),
                 Mode::Local => last == Last::Pair,
-                Mode::Jump { .. } => i == n && last != Last::GapB,
             };
             if may_stop {
                 best = 0;
@@ -157,16 +153,6 @@ pub(crate) fn affine(
                 };
                 let cost = open + self.gaps.extend_cost(&self.b[j], prev(self.b, j));
                 best = best.max((self.go(i, j + 1, Last::GapB) - cost).max(NEG_INF));
-            }
-            if let Mode::Jump { move_cost } = self.mode
-                && i < n
-            {
-                for target in 0..m {
-                    if let Some(score) = self.pair(i, target) {
-                        let rest = self.go(i + 1, target + 1, Last::Pair);
-                        best = best.max((score - move_cost + rest).max(NEG_INF));
-                    }
-                }
             }
             self.memo.insert(key, best);
             best
@@ -206,9 +192,5 @@ pub(crate) fn affine(
             }
             best
         }
-        Mode::Jump { .. } => (0..=m)
-            .map(|j| search.go(0, j, Last::Start))
-            .max()
-            .unwrap_or(NEG_INF),
     }
 }

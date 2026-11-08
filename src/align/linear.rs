@@ -285,7 +285,6 @@ mod tests {
                 TraceEvent::GapA { i } => -ga.extend[i],
                 TraceEvent::GapB { j } => -gb.extend[j],
                 TraceEvent::Swap { .. } => -swap.unwrap(),
-                TraceEvent::Jump => unreachable!(),
             })
             .sum()
     }

@@ -1,4 +1,4 @@
-//! Times each echo aligner on representative line pairs (phoneme level, no
+//! Times each echo aligner (under its tuned config) on representative line pairs (phoneme level, no
 //! dictionary): a verbatim repeat, an insertion, a two-block swap, and an
 //! unrelated pair. Run with `cargo bench --bench echo_align`.
 
@@ -8,7 +8,10 @@ use std::{hint::black_box, time::Duration};
 #[cfg(not(target_arch = "wasm32"))]
 use criterion::{Criterion, criterion_group, criterion_main};
 #[cfg(not(target_arch = "wasm32"))]
-use mime_reader::{Phoneme, echo::AlignerKind, echo::EchoDetector};
+use mime_reader::{
+    Phoneme,
+    echo::{AlignerKind, EchoConfig, EchoDetector},
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn ph(s: &str) -> Vec<Phoneme> {
@@ -19,7 +22,6 @@ fn ph(s: &str) -> Vec<Phoneme> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn bench_echo_align(c: &mut Criterion) {
-    let detector = EchoDetector::new();
     let cases = [
         // "dark demands I call my own", against itself.
         (
@@ -54,6 +56,8 @@ fn bench_echo_align(c: &mut Criterion) {
     for (name, a, b) in cases {
         let (a, b) = (ph(a), ph(b));
         for kind in AlignerKind::ALL {
+            // Each aligner under its tuned config, as it would be used.
+            let detector = EchoDetector::with_config(EchoConfig::for_aligner(kind));
             group.bench_function(format!("{kind}/{name}"), |bench| {
                 bench.iter(|| detector.compare_phonemes_with(kind, black_box(&a), black_box(&b)))
             });

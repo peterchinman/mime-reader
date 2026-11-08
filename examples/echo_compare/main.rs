@@ -1,8 +1,9 @@
 //! Compares the echo aligners on labeled data: synthetic fixture pairs,
 //! real repeating-form poems (template echoes vs every other line pair),
 //! and mutations of corpus lines. Reports per-group similarity, separation
-//! (AUC, best threshold, margin), per-poem ranking and threshold transfer,
-//! so the default aligner and threshold can be chosen on data.
+//! (AUC, best threshold, margin), pass rates at the shipped thresholds,
+//! per-poem ranking and threshold transfer. Each aligner scores under its
+//! own tuned config (`EchoConfig::for_aligner`), plus any override.
 //!
 //! `cargo run --release --example echo_compare -- --help`
 
@@ -52,9 +53,15 @@ mod native {
             println!("{USAGE}");
             return Ok(());
         }
-        let config = effective_config(&args, std::env::var("ECHO_CONFIG").ok())?;
-        let detector = EchoDetector::with_config(config);
-        report::config(&config, &detector);
+        let env = std::env::var("ECHO_CONFIG").ok();
+        let mut detectors = Vec::with_capacity(args.aligners.len());
+        for &kind in &args.aligners {
+            let config = effective_config(&args, env.as_deref(), kind)?;
+            let detector = EchoDetector::with_config(config);
+            report::config(kind, &config, &detector);
+            detectors.push(detector);
+        }
+        let overridden = args.config.is_some() || env.is_some();
 
         let dict = CmuDictionary::load(repo_path("data/CMUdict/cmudict-0.7b"))
             .map_err(|e| format!("dictionary: {e}"))?
@@ -181,6 +188,7 @@ mod native {
         let mut scores = vec![Vec::with_capacity(kept.len()); args.aligners.len()];
         for (k, &kind) in args.aligners.iter().enumerate() {
             let start = Instant::now();
+            let detector = &detectors[k];
             for (pair, a, b) in &kept {
                 let similarity = match detector.compare_lines_with(kind, &lines[*a], &lines[*b]) {
                     Ok(echo) => echo.alignment.similarity,
@@ -212,6 +220,7 @@ mod native {
         report::groups(&scored, &args.aligners);
         let sets = report::eval_sets(&scored);
         let best = report::separation(&sets, &args.aligners);
+        report::shipped_thresholds(&scored, &poems, &args.aligners, overridden);
         report::transfer(&sets, &best, &args.aligners);
         report::poems(&scored, &poems, &args.aligners, args.by_poem);
         report::disagreements(&scored, &args.aligners, 12);

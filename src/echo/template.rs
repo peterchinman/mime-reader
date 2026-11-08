@@ -52,6 +52,18 @@ impl EchoTemplate {
         })
     }
 
+    /// How closely the form conventionally repeats its lines: loose for the
+    /// duplex, which reworks its echoes by design; strict for the rest. A
+    /// default only — a contemporary villanelle or pantoum may well be
+    /// loose.
+    pub fn conventional_strictness(&self) -> super::EchoStrictness {
+        if self.name == "duplex" {
+            super::EchoStrictness::Loose
+        } else {
+            super::EchoStrictness::Strict
+        }
+    }
+
     fn known(name: &str, groups: Vec<Vec<usize>>, lines: usize) -> Self {
         Self::new(name, groups, Some(lines)).expect("built-in templates are valid")
     }
