@@ -9,7 +9,9 @@ use mishear::accents;
 use mishear::knobs;
 use mishear::lexicon::CommonWords;
 use mishear::phone::spell;
-use mishear::{Deformation, Engine, MishearConfig, Ph, SearchConfig, search};
+use mishear::{
+    CostConfig, CostModel, Deformation, Engine, MishearConfig, Ph, SearchConfig, search,
+};
 
 const USAGE: &str = "\
 mishear — fuzzy phonetic search, accents and mishearings, on mime-reader
@@ -21,8 +23,10 @@ USAGE: cargo run --release -p mishear -- COMMAND [OPTIONS]
   deform TEXT        TEXT's phonemes before and after a deformation
   mishear TEXT       deform TEXT, then hear it back
   examples           mishear lines drawn from data/echo
-  sweep TEXT         mishear TEXT at every combination of --lm-values,
-                     --penalty-values and --pron-values (top -n each)
+  sweep TEXT         mishear TEXT at every combination of the *-values
+                     options below (top -n each)
+  eval               rank known mondegreens (mondegreens.tsv) at every
+                     combination of the *-values options
   cost               time the search on corpus lines
   list               accents and knobs
 
@@ -44,6 +48,15 @@ SEARCH OPTIONS
                      trusts word pairs less)
   --function-share F the share of --novelty a shared function word costs
                      (default 0.2)
+  --stress-mismatch F  extra cost for pairing a stressed vowel with an
+                     unstressed one: how much hearings keep the rhythm
+                     (default 0)
+  --swap F           allow exchanging two adjacent consonants as one edit
+                     at this cost (default off)
+  --all-spellings    list homophone spellings of a hearing separately
+                     (there / their / they're); by default hearings that
+                     sound the same are merged, keeping the cheapest
+                     spelling
   --vocab N          lexicon size: most frequent words (default 50000)
   --unigram          score words alone, not by the previous word too (the
                      bigram model, from data/bigrams-en.tsv, makes output
@@ -65,10 +78,13 @@ DEFORMATION OPTIONS (combine freely; applied in order)
   --intensity F      scale every step's rate (0–1; default 1)
   --seed N           which sites a partial rate picks (default 0)
 
-SWEEP OPTIONS
+SWEEP AND EVAL OPTIONS
   --lm-values A,B,…        (default: --lm)
   --penalty-values A,B,…   (default: --word-penalty)
   --pron-values first,all  (default: --pronunciations)
+  --stress-values A,B,…    (default: --stress-mismatch)
+  --swap-values A,B,…      (0 = off; default: --swap)
+  --novelty-values A,B,…   (default: --novelty)
 
 EXAMPLES OPTIONS
   --lines K          how many corpus lines (default 6)
@@ -96,6 +112,12 @@ struct Options {
     lm_values: Option<Vec<f32>>,
     penalty_values: Option<Vec<f32>>,
     pron_values: Option<Vec<bool>>,
+    stress_mismatch: f32,
+    swap: f32,
+    all_spellings: bool,
+    stress_values: Option<Vec<f32>>,
+    swap_values: Option<Vec<f32>>,
+    novelty_values: Option<Vec<f32>>,
 }
 
 fn parse(args: Vec<String>) -> Result<Options, String> {
@@ -122,6 +144,12 @@ fn parse(args: Vec<String>) -> Result<Options, String> {
         lm_values: None,
         penalty_values: None,
         pron_values: None,
+        stress_mismatch: 0.0,
+        swap: 0.0,
+        all_spellings: false,
+        stress_values: None,
+        swap_values: None,
+        novelty_values: None,
     };
     let mut intensity = 1.0;
     let mut seed = 0;
@@ -141,6 +169,12 @@ fn parse(args: Vec<String>) -> Result<Options, String> {
                 o.all_pronunciations = pronunciations(&value("--pronunciations")?)?
             }
             "--lm-values" => o.lm_values = Some(numbers(&value("--lm-values")?)?),
+            "--stress-mismatch" => o.stress_mismatch = number(value("--stress-mismatch")?)?,
+            "--swap" => o.swap = number(value("--swap")?)?,
+            "--all-spellings" => o.all_spellings = true,
+            "--stress-values" => o.stress_values = Some(numbers(&value("--stress-values")?)?),
+            "--swap-values" => o.swap_values = Some(numbers(&value("--swap-values")?)?),
+            "--novelty-values" => o.novelty_values = Some(numbers(&value("--novelty-values")?)?),
             "--penalty-values" => o.penalty_values = Some(numbers(&value("--penalty-values")?)?),
             "--pron-values" => {
                 o.pron_values = Some(
@@ -259,7 +293,16 @@ fn engine_with(o: &Options, vocab: usize, all_pronunciations: bool) -> Result<En
     if bigrams.exists() {
         engine.lexicon.load_bigrams(&bigrams, o.bigram_prior)?;
     }
+    engine.cost = cost_model(o);
     Ok(engine)
+}
+
+fn cost_model(o: &Options) -> CostModel {
+    CostModel::new(CostConfig {
+        stress_mismatch: o.stress_mismatch,
+        swap: (o.swap > 0.0).then_some(o.swap),
+        ..CostConfig::default()
+    })
 }
 
 fn search_config(o: &Options) -> SearchConfig {
@@ -269,6 +312,7 @@ fn search_config(o: &Options) -> SearchConfig {
         lm_weight: o.lm,
         word_penalty: o.word_penalty,
         bigrams: !o.unigram,
+        distinct_sounds: !o.all_spellings,
         ..SearchConfig::default()
     }
 }
@@ -458,58 +502,197 @@ fn run(o: Options) -> Result<(), String> {
             }
         }
         "cost" => cost_report(&o)?,
-        "sweep" => sweep(&o)?,
+        "sweep" => sweep(&o, false)?,
+        "eval" => sweep(&o, true)?,
         other => return Err(format!("unknown command {other:?}\n\n{USAGE}")),
     }
     Ok(())
 }
 
-/// Mishears one line at every combination of the prior's settings.
-fn sweep(o: &Options) -> Result<(), String> {
-    let text = o.positional.join(" ");
-    let lms = o.lm_values.clone().unwrap_or_else(|| vec![o.lm]);
-    let penalties = o
-        .penalty_values
-        .clone()
-        .unwrap_or_else(|| vec![o.word_penalty]);
-    let prons = o
+/// Every combination of the `*-values` options, as option sets.
+fn grid(o: &Options) -> Vec<Options> {
+    let or =
+        |values: &Option<Vec<f32>>, default: f32| values.clone().unwrap_or_else(|| vec![default]);
+    let mut out = Vec::new();
+    for &all in &o
         .pron_values
         .clone()
-        .unwrap_or_else(|| vec![o.all_pronunciations]);
-    println!("{text}");
+        .unwrap_or_else(|| vec![o.all_pronunciations])
+    {
+        for &lm in &or(&o.lm_values, o.lm) {
+            for &penalty in &or(&o.penalty_values, o.word_penalty) {
+                for &stress in &or(&o.stress_values, o.stress_mismatch) {
+                    for &swap in &or(&o.swap_values, o.swap) {
+                        for &novelty in &or(&o.novelty_values, o.novelty) {
+                            out.push(Options {
+                                command: String::new(),
+                                positional: Vec::new(),
+                                deformation: o.deformation.clone(),
+                                lm_values: None,
+                                penalty_values: None,
+                                pron_values: None,
+                                stress_values: None,
+                                swap_values: None,
+                                novelty_values: None,
+                                lm,
+                                word_penalty: penalty,
+                                all_pronunciations: all,
+                                stress_mismatch: stress,
+                                swap,
+                                novelty,
+                                ..*o
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn label(o: &Options) -> String {
+    format!(
+        "lm {:<4} pen {:<4} {:<5} stress {:<3} swap {:<3} nov {:<3}",
+        o.lm,
+        o.word_penalty,
+        if o.all_pronunciations { "all" } else { "first" },
+        o.stress_mismatch,
+        o.swap,
+        o.novelty
+    )
+}
+
+/// Normalized for comparing hearings: lowercase words, no punctuation.
+fn normalized(text: &str) -> String {
+    text.split_whitespace()
+        .map(|w| {
+            w.chars()
+                .filter(|c| c.is_alphanumeric() || *c == '\'')
+                .collect::<String>()
+                .to_lowercase()
+        })
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `sweep`: one line at every grid point. `eval`: the rank of each known
+/// mondegreen among the hearings of its original, at every grid point.
+fn sweep(o: &Options, eval: bool) -> Result<(), String> {
+    let pairs: Vec<(String, String)> = if eval {
+        let text =
+            std::fs::read_to_string(crate_path("mondegreens.tsv")).map_err(|e| e.to_string())?;
+        text.lines()
+            .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+            .map(|l| {
+                let mut f = l.split('\t');
+                (
+                    f.next().unwrap_or("").to_string(),
+                    f.next().unwrap_or("").to_string(),
+                )
+            })
+            .collect()
+    } else {
+        vec![(o.positional.join(" "), String::new())]
+    };
+    if !eval {
+        println!("{}", pairs[0].0);
+    }
     if !o.deformation.steps.is_empty() {
         println!("  [{}]", o.deformation.name);
     }
-    for &all in &prons {
-        let engine = engine_with(o, o.vocab, all)?;
-        for &lm in &lms {
-            for &penalty in &penalties {
-                let options = Options {
-                    command: String::new(),
-                    positional: Vec::new(),
-                    deformation: o.deformation.clone(),
-                    lm_values: None,
-                    penalty_values: None,
-                    pron_values: None,
-                    lm,
-                    word_penalty: penalty,
-                    all_pronunciations: all,
-                    ..*o
-                };
-                let m = engine.mishear(&text, &options.deformation, &mishear_config(&options))?;
-                let heard: Vec<String> = m
-                    .heard
-                    .iter()
-                    .map(|h| format!("{} ({:.2})", h.text, h.phonetic))
-                    .collect();
-                println!(
-                    "  lm {lm:<5} penalty {penalty:<4} {:<5} │ {}  [{}]",
-                    if all { "all" } else { "first" },
-                    heard.join(" · "),
-                    ms(m.stats.elapsed)
-                );
-            }
+    // One engine per pronunciation setting; the cost model per grid point.
+    let mut engines: Vec<(bool, Engine)> = Vec::new();
+    for options in grid(o) {
+        if !engines
+            .iter()
+            .any(|(all, _)| *all == options.all_pronunciations)
+        {
+            engines.push((
+                options.all_pronunciations,
+                engine_with(o, o.vocab, options.all_pronunciations)?,
+            ));
         }
+        let engine = &mut engines
+            .iter_mut()
+            .find(|(all, _)| *all == options.all_pronunciations)
+            .expect("loaded above")
+            .1;
+        engine.cost = cost_model(&options);
+        if !eval {
+            let m = engine.mishear(&pairs[0].0, &options.deformation, &mishear_config(&options))?;
+            let heard: Vec<String> = m
+                .heard
+                .iter()
+                .map(|h| format!("{} ({:.2})", h.text, h.phonetic))
+                .collect();
+            println!(
+                "  {} │ {}  [{}]",
+                label(&options),
+                heard.join(" · "),
+                ms(m.stats.elapsed)
+            );
+            continue;
+        }
+        // Eval: rank among the top 50 hearings, the original itself aside.
+        const DEPTH: usize = 50;
+        let config = MishearConfig {
+            search: SearchConfig {
+                results: DEPTH + 1,
+                ..search_config(&options)
+            },
+            ..mishear_config(&options)
+        };
+        let mut ranks = Vec::new();
+        let mut unreachable = Vec::new();
+        for (original, target) in &pairs {
+            let target = normalized(target);
+            if target.split(' ').any(|w| engine.lexicon.id(w).is_none()) {
+                unreachable.push(target);
+                continue;
+            }
+            let m = engine.mishear(original, &options.deformation, &config)?;
+            let original = normalized(original);
+            let rank = m
+                .heard
+                .iter()
+                .map(|h| normalized(&h.text))
+                .filter(|h| *h != original)
+                .position(|h| h == target)
+                .map(|r| r + 1);
+            ranks.push((target, rank));
+        }
+        let mrr = ranks
+            .iter()
+            .map(|(_, r)| r.map_or(0.0, |r| 1.0 / r as f64))
+            .sum::<f64>()
+            / ranks.len().max(1) as f64;
+        let top10 = ranks
+            .iter()
+            .filter(|(_, r)| r.is_some_and(|r| r <= 10))
+            .count();
+        let shown: Vec<String> = ranks
+            .iter()
+            .map(|(_, r)| r.map_or("—".to_string(), |r| r.to_string()))
+            .collect();
+        println!(
+            "  {} │ MRR {mrr:.3}  top-10 {top10}/{}  ranks [{}]{}",
+            label(&options),
+            ranks.len(),
+            shown.join(" "),
+            if unreachable.is_empty() {
+                String::new()
+            } else {
+                format!("  unreachable {}", unreachable.len())
+            }
+        );
+    }
+    if eval {
+        println!(
+            "  (ranks in mondegreens.tsv order, among the top {} hearings; — = not there)",
+            50
+        );
     }
     Ok(())
 }

@@ -28,6 +28,10 @@ pub struct Lexicon {
     index: HashMap<String, WordId>,
     max_depth: usize,
     bigrams: Option<Bigrams>,
+    /// `sound[w]`: an id shared by every word whose first pronunciation is
+    /// the same ("there", "their", "they're").
+    sound: Vec<u32>,
+    first: Vec<Vec<Ph>>,
 }
 
 /// Word-pair counts, smoothed toward the unigram frequencies:
@@ -143,7 +147,10 @@ impl Lexicon {
             index: HashMap::new(),
             max_depth: 0,
             bigrams: None,
+            sound: Vec::new(),
+            first: Vec::new(),
         };
+        let mut sounds: HashMap<Vec<Ph>, u32> = HashMap::new();
         for frequency in frequencies {
             if lexicon.words.len() >= max_words {
                 break;
@@ -164,6 +171,12 @@ impl Lexicon {
                 .surprisal
                 .push((9.0 - frequency.zipf) * std::f32::consts::LN_10);
             lexicon.index.insert(word.to_string(), id);
+            let first: Vec<Ph> = pronunciations[0].iter().map(Ph::from_phoneme).collect();
+            let next = sounds.len() as u32;
+            lexicon
+                .sound
+                .push(*sounds.entry(first.clone()).or_insert(next));
+            lexicon.first.push(first);
             let mut seen: Vec<Vec<Ph>> = Vec::new();
             let count = if all_pronunciations {
                 pronunciations.len()
@@ -205,6 +218,17 @@ impl Lexicon {
 
     pub fn is_empty(&self) -> bool {
         self.words.is_empty()
+    }
+
+    /// The word's sound class: equal for homophones (by first
+    /// pronunciation).
+    pub fn sound(&self, id: WordId) -> u32 {
+        self.sound[id as usize]
+    }
+
+    /// The word's first pronunciation.
+    pub fn first_pronunciation(&self, id: WordId) -> &[Ph] {
+        &self.first[id as usize]
     }
 
     pub fn word(&self, id: WordId) -> &str {

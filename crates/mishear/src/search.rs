@@ -55,6 +55,9 @@ pub struct SearchConfig {
     /// predecessor) and its cap of 400 partial matches per position.
     pub bigrams: bool,
     pub shortlist: usize,
+    /// Treat hearings that sound the same (homophones spelled differently:
+    /// "there" / "their") as one, keeping the cheapest spelling.
+    pub distinct_sounds: bool,
 }
 
 impl Default for SearchConfig {
@@ -67,6 +70,7 @@ impl Default for SearchConfig {
             extra: HashMap::new(),
             bigrams: true,
             shortlist: 30,
+            distinct_sounds: true,
         }
     }
 }
@@ -178,7 +182,11 @@ pub fn search(
             acc += cost.indel(input[s + k - 1]);
             walk.columns[k] = acc;
         }
-        walk.descend(0, 0);
+        let root_min = walk.columns[..span_max + 1]
+            .iter()
+            .copied()
+            .fold(f32::INFINITY, f32::min);
+        walk.descend(0, 0, None, root_min);
         stats.nodes += walk.nodes;
         stats.edges += walk.best.iter().map(Vec::len).sum::<usize>();
         edges.push(walk.best);
@@ -224,7 +232,14 @@ pub fn search(
                         word: edge.word,
                         start: s as u32,
                         prev: p,
-                        hash: mix(prev.hash, edge.word),
+                        hash: mix(
+                            prev.hash,
+                            if config.distinct_sounds {
+                                lexicon.sound(edge.word)
+                            } else {
+                                edge.word
+                            },
+                        ),
                     });
                 }
             }
@@ -240,7 +255,8 @@ pub fn search(
             if at[e].len() == cap {
                 break;
             }
-            // The same words ending here with other boundaries: the best
+            // The same words ending here with other boundaries (or, with
+            // `distinct_sounds`, the same sounds spelled otherwise): the best
             // one represents them all.
             if seen.contains(&candidate.hash) {
                 continue;
@@ -378,7 +394,9 @@ struct Walk<'a> {
 }
 
 impl Walk<'_> {
-    fn descend(&mut self, node: usize, depth: usize) {
+    /// Scores `node`'s children. `last` is the phoneme on the edge into
+    /// `node` and `node_min` the minimum of its column, for swaps.
+    fn descend(&mut self, node: usize, depth: usize, last: Option<Ph>, node_min: f32) {
         let w = self.width;
         let lexicon = self.lexicon;
         for &(q, child) in lexicon.children(node) {
@@ -386,20 +404,37 @@ impl Walk<'_> {
             self.nodes += 1;
             let (above, below) = self.columns.split_at_mut((depth + 1) * w);
             let parent = &above[depth * w..];
+            // The column before the parent's, for a swap of the parent's
+            // phoneme with this one.
+            let grandparent = depth.checked_sub(1).map(|d| &above[d * w..(d + 1) * w]);
             let column = &mut below[..w];
             let indel_q = self.cost.indel(q);
             column[0] = parent[0] + indel_q;
             let mut min = column[0];
             for k in 1..w {
                 let p = self.input[k - 1];
-                let value = (parent[k - 1] + self.cost.sub(p, q))
+                let mut value = (parent[k - 1] + self.cost.sub(p, q))
                     .min(parent[k] + indel_q)
                     .min(column[k - 1] + self.cost.indel(p));
+                if let (Some(grand), Some(l)) = (grandparent, last)
+                    && k >= 2
+                    && self.input[k - 2] == q
+                    && p == l
+                    && let Some(swap) = self.cost.swap(l, q)
+                {
+                    value = value.min(grand[k - 2] + swap);
+                }
                 column[k] = value;
                 min = min.min(value);
             }
+            // Below this child, a column comes from this one or, by a swap,
+            // from this node's: the lower bound is the cheaper of the two.
+            let below_bound = match self.cost.swap_cost() {
+                Some(swap) => min.min(node_min + swap),
+                None => min,
+            };
             // Nothing below can finish a word within the bound.
-            if min + self.subtree_min[child] > self.bound {
+            if below_bound.min(min) + self.subtree_min[child] > self.bound {
                 continue;
             }
             for &word in lexicon.words_at(child) {
@@ -413,7 +448,7 @@ impl Walk<'_> {
                 }
             }
             if depth + 1 < lexicon.max_depth() {
-                self.descend(child, depth + 1);
+                self.descend(child, depth + 1, Some(q), min);
             }
         }
     }
@@ -552,12 +587,28 @@ mod tests {
     #[test]
     fn search_matches_brute_force_within_its_bound() {
         let lexicon = tiny();
-        let cost = CostModel::default();
-        for (input, bound) in [
-            ("K IH1 S DH AH0 S K AY1", 3.0),
-            ("K EY1 S DH IH1 S", 4.0),
-            ("G AY1 S K AY1", 5.0),
-        ] {
+        // The default edits, and with rhythm and swaps: "K S AY1" is "sky"
+        // with S K swapped, which the walk reaches only through the swap's
+        // two-level step (and its pruning bound).
+        let costs = [
+            CostModel::default(),
+            CostModel::new(crate::cost::CostConfig {
+                stress_mismatch: 0.4,
+                swap: Some(0.2),
+                ..crate::cost::CostConfig::default()
+            }),
+        ];
+        for (cost, (input, bound)) in costs.iter().flat_map(|c| {
+            [
+                ("K IH1 S DH AH0 S K AY1", 3.0),
+                ("K EY1 S DH IH1 S", 4.0),
+                ("G AY1 S K AY1", 5.0),
+                ("K S AY1", 3.0),
+                ("G AY1 K S AY1", 3.0),
+                ("K IH1 K S AY1", 4.0),
+            ]
+            .map(|case| (c, case))
+        }) {
             let input = Ph::parse_all(input).unwrap();
             let config = SearchConfig {
                 results: 5,
@@ -565,8 +616,8 @@ mod tests {
                 bigrams: false,
                 ..SearchConfig::default()
             };
-            let expected = brute_force(&input, &lexicon, &cost, &config);
-            let (found, _) = search(&input, &lexicon, &cost, &config);
+            let expected = brute_force(&input, &lexicon, cost, &config);
+            let (found, _) = search(&input, &lexicon, cost, &config);
             let want: Vec<f32> = expected.iter().take(5).map(|e| e.1).collect();
             let got: Vec<f32> = found.iter().map(|m| m.cost).collect();
             assert_eq!(
@@ -584,6 +635,27 @@ mod tests {
             }
             assert!(found.iter().all(|m| m.cost <= bound));
         }
+    }
+
+    #[test]
+    fn a_swap_is_one_edit() {
+        let lexicon = tiny();
+        let swapping = CostModel::new(crate::cost::CostConfig {
+            swap: Some(0.2),
+            ..crate::cost::CostConfig::default()
+        });
+        let input = Ph::parse_all("K S AY1").unwrap();
+        let config = SearchConfig {
+            results: 1,
+            bound: 3.0,
+            bigrams: false,
+            ..SearchConfig::default()
+        };
+        let (found, _) = search(&input, &lexicon, &swapping, &config);
+        assert_eq!(found[0].text(&lexicon), "sky");
+        assert!((found[0].phonetic - 0.2).abs() < 1e-6);
+        let (plain, _) = search(&input, &lexicon, &CostModel::default(), &config);
+        assert!(plain[0].phonetic > 0.2);
     }
 
     #[test]

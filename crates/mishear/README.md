@@ -113,6 +113,9 @@ and runs a grid of them.
 | `--unigram` | off | exactness and speed, against fluency |
 | `--vocab`, `--all-words` | 50k, filtered | coverage against obscure words, names and brands |
 | `--novelty`, `--function-share` | 1.0, 0.2 | departing from the original's words |
+| `--stress-mismatch` | 0 | keeping the line's rhythm (extra cost when a stressed vowel pairs with an unstressed one) |
+| `--swap` | off | adjacent consonants exchanged as one edit ("ask" ↔ "aks") |
+| `--all-spellings` | off | listing homophone spellings separately, rather than merging hearings that sound the same |
 
 What the sweep showed (`hear "kiss the sky"`, and two public-domain lines):
 
@@ -130,6 +133,66 @@ What the sweep showed (`hear "kiss the sky"`, and two public-domain lines):
   rather than "crow don is so to be"), with no clear winner.
 - **`--bigram-prior`.** At 10 the model trusts sparse pairs ("cretin is so to
   be"); at 1000 it acts like the unigram model.
+
+### Evaluating against known mondegreens
+
+`eval` takes the mishearings of public-domain texts in
+[`mondegreens.tsv`](mondegreens.tsv) ("gladly the cross I'd bear" →
+"gladly the cross eyed bear", "bringing in the sheaves" → "bringing in the
+sheep", …). For each grid point, it reports where the famous mishearing
+ranks among the top 50 hearings of the original.
+
+```sh
+cargo run --release -p mishear -- eval --all-words --all-spellings \
+  --lm-values 0.02,0.05 --novelty-values 0,0.1 --stress-values 0,0.3
+```
+
+At its best (`--lm 0.02`, `--novelty 0`), only 2 of the 12 reachable
+mishearings make the top 50: "hark the harold angels sing" at rank 1 and
+"gladly the cross eyed bear" at rank 2.
+
+The others lose to closer neighbours. "Bringing in the thieves" (sound
+cost 0.30) beats "bringing in the sheep" (0.94), and "while shepherds
+washed their socks" needs two changes at once. Famous mondegreens are
+famous for their meaning, not for being the nearest sound. So this set
+can't tune the weights toward anything but "stay close to the original",
+which pulls against `--novelty`; any novelty at all drops both hits. Stress
+and swaps don't change it.
+
+Tuning on taste needs labels: hearings someone has marked good or bad.
+
+Many classic mondegreens differ from the original only in spelling
+(herald → harold, I'd → eyed). Merging hearings by sound, the default,
+keeps one spelling per sound: the cheapest, after novelty. So with novelty
+on, "hark the harold angels sing" can come out as "…angels singh". Use
+`--all-spellings` to see every spelling.
+
+### Rhythm and swaps
+
+- **`--stress-mismatch 0.3` keeps the meter.** "Swaying to and fro on his
+  rickety stool" goes from "…on his wicked east all" to "…on his rickets
+  tool", which is also closer in sound. "Such a maid as was never seen!"
+  goes from "sesame does was never scene" to "such amid as was never
+  scene". It's slightly faster too: tighter costs prune more. Going to 0.6
+  changes nothing more on these lines.
+- **`--swap` changes nothing** on the corpus lines tried or in the eval, and
+  costs about 5% more time. Metathesis isn't how lines get misheard.
+
+### Repeated work across bound rounds
+
+Raising the bound until N matches fit spends about 0.8× the last round's
+time on the earlier rounds. I tried two ways to avoid that, and neither
+pays:
+
+- **Seeding the bound** from a small vocabulary: its N-th best is looser
+  than the full vocabulary's, so the one exact round costs more. That saves
+  10–13% at best.
+- **Faster bound growth** (×2 or ×3, or a higher start): it overshoots, and
+  is 25–50% slower.
+
+The remaining ~45% needs a walk that resumes from the previous round's
+pruned frontier. That means keeping each frontier node's column, on the
+order of 100 MB per line, which isn't worth it at 0.1–0.5 s per line.
 
 **Exactness.** With the unigram model (`--unigram`), the search is exact. It
 returns every match within the bound with its exact cost, and a test checks

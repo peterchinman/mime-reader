@@ -180,8 +180,19 @@ impl Engine {
         }
         search.extra = extra;
         let (matches, stats) = self.hear(&input, &search, config.max_bound);
+        // The line itself is not a mishearing (its homophone respellings,
+        // "hark the harold angels", may well be).
+        let original_words: Vec<Option<WordId>> =
+            reading.words.iter().map(|w| self.lexicon.id(w)).collect();
         let heard = matches
             .iter()
+            .filter(|m| {
+                m.words.len() != original_words.len()
+                    || m.words
+                        .iter()
+                        .zip(&original_words)
+                        .any(|(w, o)| Some(*w) != *o)
+            })
             .map(|m| Heard {
                 text: m.text(&self.lexicon),
                 cost: m.cost,
