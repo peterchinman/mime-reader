@@ -32,10 +32,11 @@ mod native {
 
     use mime_reader::echo::EchoDetector;
     use mime_reader::line::Line;
-    use mime_reader::{CmuDictionary, EchoError, PronouncingDictionary, PronunciationMode};
+    use mime_reader::{CmuDictionary, PronouncingDictionary, PronunciationMode};
 
     use crate::args::{Args, USAGE, effective_config, repo_path};
-    use crate::corpus::{self, LabeledPair};
+    use crate::corpus::{self, Label, LabeledPair};
+    use crate::search::{self, Job};
     use crate::{dump, mutate, report};
 
     /// Mutated pairs generated per mutation kind.
@@ -54,11 +55,14 @@ mod native {
             return Ok(());
         }
         let env = std::env::var("ECHO_CONFIG").ok();
+        let mut configs = Vec::with_capacity(args.aligners.len());
         let mut detectors = Vec::with_capacity(args.aligners.len());
         for &kind in &args.aligners {
             let config = effective_config(&args, env.as_deref(), kind)?;
+            config.validate().map_err(|e| e.to_string())?;
             let detector = EchoDetector::with_config(config);
             report::config(kind, &config, &detector);
+            configs.push(config);
             detectors.push(detector);
         }
         let overridden = args.config.is_some() || env.is_some();
@@ -97,6 +101,9 @@ mod native {
         poems.retain(|p| p.excluded.is_none());
         poems.retain(|p| args.max_lines.is_none_or(|max| p.lines.len() <= max));
         if let Some(forms) = &args.forms {
+            if let Some(unknown) = forms.iter().find(|f| !poems.iter().any(|p| &p.form == *f)) {
+                return Err(format!("--forms: no poem has form {unknown:?}"));
+            }
             poems.retain(|p| forms.contains(&p.form));
         }
         for (index, poem) in poems.iter().enumerate() {
@@ -148,6 +155,10 @@ mod native {
             .collect();
         let mut oov_words: HashMap<String, usize> = HashMap::new();
         let mut dropped: BTreeMap<String, usize> = BTreeMap::new();
+        let mut empty = 0;
+        // Per form: (echoes dropped, echoes in all), and poems that lost any.
+        let mut echoes: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+        let mut poems_losing_echoes = std::collections::BTreeSet::new();
         let mut kept: Vec<(LabeledPair, usize, usize)> = Vec::new();
         for (pair, (a, b)) in pairs.into_iter().zip(pair_lines) {
             let unknown: Vec<&str> = lines[a]
@@ -155,14 +166,29 @@ mod native {
                 .into_iter()
                 .chain(lines[b].unknown_words())
                 .collect();
-            if unknown.is_empty() && !lines[a].words.is_empty() && !lines[b].words.is_empty() {
-                kept.push((pair, a, b));
-            } else {
-                for word in unknown {
-                    *oov_words.entry(word.to_lowercase()).or_default() += 1;
-                }
-                *dropped.entry(pair.source.clone()).or_default() += 1;
+            let blank = lines[a].words.is_empty() || lines[b].words.is_empty();
+            let poem_echo = pair
+                .poem
+                .filter(|_| pair.label == Label::Echo)
+                .map(|p| (p, poems[p].form.clone()));
+            if let Some((_, form)) = &poem_echo {
+                echoes.entry(form.clone()).or_default().1 += 1;
             }
+            if unknown.is_empty() && !blank {
+                kept.push((pair, a, b));
+                continue;
+            }
+            if let Some((p, form)) = poem_echo {
+                echoes.entry(form).or_default().0 += 1;
+                poems_losing_echoes.insert(p);
+            }
+            if unknown.is_empty() {
+                empty += 1;
+            }
+            for word in unknown {
+                *oov_words.entry(word.to_lowercase()).or_default() += 1;
+            }
+            *dropped.entry(pair.source.clone()).or_default() += 1;
         }
         if !dropped.is_empty() {
             let counts: Vec<String> = dropped.iter().map(|(s, n)| format!("{s} {n}")).collect();
@@ -173,34 +199,51 @@ mod native {
                 .take(15)
                 .map(|(w, n)| format!("{w} ×{n}"))
                 .collect();
-            println!("dropped for unknown words: {}", counts.join(", "));
+            println!(
+                "dropped (unknown words, or {empty} with an empty line): {}",
+                counts.join(", ")
+            );
             println!("top unknown words: {}", top.join(", "));
+            // Dropping a pair can drop a whole refrain, which skews every
+            // metric toward poems with ordinary vocabulary.
+            let lost: Vec<String> = echoes
+                .iter()
+                .filter(|(_, (lost, _))| *lost > 0)
+                .map(|(form, (lost, all))| format!("{form} {lost} of {all}"))
+                .collect();
+            if !lost.is_empty() {
+                println!(
+                    "echoes dropped: {} ({} poems affected)",
+                    lost.join(", "),
+                    poems_losing_echoes.len()
+                );
+            }
         }
         println!("scored pairs: {}", kept.len());
         println!();
 
         if let Some(trials) = args.search {
-            return crate::search::run(&args, trials, &poems, &kept, &lines);
+            return search::run(&args, trials, &configs, &poems, &kept, &lines);
         }
 
         // Score.
-        println!("== timing");
-        let mut scores = vec![Vec::with_capacity(kept.len()); args.aligners.len()];
-        for (k, &kind) in args.aligners.iter().enumerate() {
+        println!("== timing ({} threads)", args.threads);
+        let jobs: Vec<Job> = kept
+            .iter()
+            .map(|(pair, a, b)| Job {
+                a: *a,
+                b: *b,
+                label: pair.label,
+                poem: pair.poem,
+            })
+            .collect();
+        let mut scores = Vec::with_capacity(args.aligners.len());
+        for (kind, detector) in args.aligners.iter().zip(&detectors) {
             let start = Instant::now();
-            let detector = &detectors[k];
-            for (pair, a, b) in &kept {
-                let similarity = match detector.compare_lines_with(kind, &lines[*a], &lines[*b]) {
-                    Ok(echo) => echo.alignment.similarity,
-                    Err(EchoError::UnknownWord(_) | EchoError::EmptyLine) => {
-                        unreachable!("filtered above: {} / {}", pair.a, pair.b)
-                    }
-                };
-                scores[k].push(similarity);
-            }
+            scores.push(search::score_all(detector, &jobs, &lines, args.threads));
             let elapsed = start.elapsed();
             println!(
-                "{:<16} {:>8.1} ms  ({:.1} µs/pair)",
+                "{:<16} {:>8.1} ms  ({:.1} µs/pair, wall clock)",
                 kind.to_string(),
                 elapsed.as_secs_f64() * 1e3,
                 elapsed.as_secs_f64() * 1e6 / kept.len().max(1) as f64

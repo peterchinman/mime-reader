@@ -5,25 +5,31 @@
 //! forms — so a large group doesn't drown a small one; within a group,
 //! each poem counts by its number of pairs.
 //!
-//! Poems are split into k folds, stratified by form and strictness. Every
-//! trial records its objective on each fold and on everything but each
-//! fold, at no extra scoring cost, which gives a nested cross-validation
-//! estimate: for each fold, the trial that would have won without it,
-//! judged on it. That is the honest measure of what the search found, as
-//! opposed to what it fit. (Refinement still picks parents by the all-poem
-//! objective, so the estimate leans slightly optimistic.)
-//!
 //! Random sampling over the parameters that matter to the aligner comes
 //! first — each sample screened on one fold and fully scored only if it is
 //! within reach of the best so far — then rounds of local perturbation
-//! around the best few configs.
+//! around the best few configs. Every config is applied on top of the base:
+//! the aligner's tuned config plus any `--config` / `ECHO_CONFIG` override.
+//!
+//! Poems are split into k folds, stratified by form and strictness. Every
+//! trial records its objective on each fold and on everything but each
+//! fold, at no extra scoring cost, which gives a cross-validation estimate:
+//! for each fold, the trial that would have won without it, judged on it.
+//! To keep that honest, it only draws on the random trials (refinement
+//! picks parents by the all-poem objective, which has seen every fold) and
+//! skips the screen fold (the random trials were filtered on it). The base
+//! is left out too: it may itself have been tuned on these poems. Per-fold
+//! and all-poem objectives of single configs are in-sample.
+//!
+//! `--search 0` scores only the base, per fold: a way to compare fixed
+//! configs without any selection.
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use mime_reader::echo::{AlignerKind, EchoConfig, EchoDetector};
+use mime_reader::echo::{AlignerKind, EchoConfig, EchoDetector, EchoNormalization};
 use mime_reader::line::Line;
 
 use crate::args::{Args, ConfigOverride, Objective, repo_path};
@@ -31,81 +37,64 @@ use crate::corpus::{Label, LabeledPair, Poem};
 use crate::metrics;
 use crate::mutate::Rng;
 
-/// A searchable integer parameter: its name in [`ConfigOverride`] and its
-/// range.
+/// A searchable integer parameter: its name, its range, and where it lives
+/// in a [`ConfigOverride`] and an [`EchoConfig`].
 struct Param {
+    #[allow(dead_code)] // named in test failures
     name: &'static str,
     lo: u32,
     hi: u32,
+    slot: fn(&mut ConfigOverride) -> &mut Option<u32>,
+    get: fn(&EchoConfig) -> u32,
+}
+
+/// `param!(field, lo, hi, |config| value)`: the override field and the
+/// parameter share a name.
+macro_rules! param {
+    ($field:ident, $lo:expr, $hi:expr, |$c:ident| $get:expr) => {
+        Param {
+            name: stringify!($field),
+            lo: $lo,
+            hi: $hi,
+            slot: |o| &mut o.$field,
+            get: |$c| $get,
+        }
+    };
 }
 
 const SIMILARITY: [Param; 4] = [
-    Param {
-        name: "vowel_coefficient",
-        lo: 1,
-        hi: 8,
-    },
-    Param {
-        name: "consonant_coefficient",
-        lo: 1,
-        hi: 8,
-    },
-    Param {
-        name: "vowel_zero_point",
-        lo: 150,
-        hi: 700,
-    },
-    Param {
-        name: "consonant_zero_point",
-        lo: 300,
-        hi: 1000,
-    },
+    param!(vowel_coefficient, 1, 8, |c| c.similarity.vowel_coefficient),
+    param!(consonant_coefficient, 1, 8, |c| c
+        .similarity
+        .consonant_coefficient),
+    param!(vowel_zero_point, 150, 700, |c| c
+        .similarity
+        .vowel_zero_point),
+    param!(consonant_zero_point, 100, 1000, |c| c
+        .similarity
+        .consonant_zero_point),
 ];
 const STRESS: [Param; 2] = [
-    Param {
-        name: "secondary_weight",
-        lo: 1,
-        hi: 4,
-    },
-    Param {
-        name: "unstressed_weight",
-        lo: 1,
-        hi: 4,
-    },
+    param!(secondary_weight, 1, 4, |c| c
+        .similarity
+        .stress_weights
+        .secondary),
+    param!(unstressed_weight, 1, 4, |c| c
+        .similarity
+        .stress_weights
+        .unstressed),
 ];
 const GAPS: [Param; 3] = [
-    Param {
-        name: "gap_open",
-        lo: 0,
-        hi: 1500,
-    },
-    Param {
-        name: "gap_extend",
-        lo: 0,
-        hi: 200,
-    },
-    Param {
-        name: "gap_open_repeated_consonant",
-        lo: 0,
-        hi: 1500,
-    },
+    param!(gap_open, 0, 1500, |c| c.gaps.gap_open),
+    param!(gap_extend, 0, 200, |c| c.gaps.gap_extend),
+    param!(gap_open_repeated_consonant, 0, 1500, |c| c
+        .gaps
+        .gap_open_repeated_consonant),
 ];
 const RUNS: [Param; 3] = [
-    Param {
-        name: "move_cost",
-        lo: 0,
-        hi: 1500,
-    },
-    Param {
-        name: "run_open",
-        lo: 0,
-        hi: 1500,
-    },
-    Param {
-        name: "min_run",
-        lo: 200,
-        hi: 1500,
-    },
+    param!(move_cost, 0, 1500, |c| c.structure.move_cost),
+    param!(run_open, 0, 1500, |c| c.structure.run_open),
+    param!(min_run, 200, 1500, |c| c.structure.min_run),
 ];
 
 /// The parameters that affect `kind`.
@@ -116,24 +105,6 @@ fn params(kind: AlignerKind) -> Vec<&'static Param> {
         AlignerKind::WatermanEggert => all.extend(&RUNS),
     }
     all
-}
-
-fn slot<'o>(o: &'o mut ConfigOverride, name: &str) -> &'o mut Option<u32> {
-    match name {
-        "vowel_coefficient" => &mut o.vowel_coefficient,
-        "consonant_coefficient" => &mut o.consonant_coefficient,
-        "vowel_zero_point" => &mut o.vowel_zero_point,
-        "consonant_zero_point" => &mut o.consonant_zero_point,
-        "secondary_weight" => &mut o.secondary_weight,
-        "unstressed_weight" => &mut o.unstressed_weight,
-        "gap_open" => &mut o.gap_open,
-        "gap_extend" => &mut o.gap_extend,
-        "gap_open_repeated_consonant" => &mut o.gap_open_repeated_consonant,
-        "move_cost" => &mut o.move_cost,
-        "run_open" => &mut o.run_open,
-        "min_run" => &mut o.min_run,
-        other => unreachable!("unknown search parameter {other}"),
-    }
 }
 
 fn uniform(rng: &mut Rng) -> f64 {
@@ -156,7 +127,7 @@ fn constrain(o: &mut ConfigOverride) {
 fn sample(kind: AlignerKind, rng: &mut Rng) -> ConfigOverride {
     let mut o = ConfigOverride::default();
     for p in params(kind) {
-        *slot(&mut o, p.name) = Some(rng.range(p.lo as usize..p.hi as usize + 1) as u32);
+        *(p.slot)(&mut o) = Some(rng.range(p.lo as usize..p.hi as usize + 1) as u32);
     }
     // Per-phoneme gap cost: half the time none, as in the default.
     if uniform(rng) < 0.5 {
@@ -183,12 +154,12 @@ fn perturb(kind: AlignerKind, base: &ConfigOverride, scale: f64, rng: &mut Rng) 
             continue;
         }
         let span = f64::from(p.hi - p.lo);
-        let current = f64::from(slot(&mut o, p.name).unwrap_or(p.lo));
+        let current = f64::from((p.slot)(&mut o).unwrap_or(p.lo));
         let step = (uniform(rng) * 2.0 - 1.0) * scale * span;
         let next = (current + step)
             .round()
             .clamp(f64::from(p.lo), f64::from(p.hi));
-        *slot(&mut o, p.name) = Some(next as u32);
+        *(p.slot)(&mut o) = Some(next as u32);
     }
     if uniform(rng) < 0.1 {
         o.normalization = Some(match o.normalization.as_deref() {
@@ -204,31 +175,13 @@ fn perturb(kind: AlignerKind, base: &ConfigOverride, scale: f64, rng: &mut Rng) 
 /// defaults print and perturb like any sample).
 fn override_of(kind: AlignerKind, config: &EchoConfig) -> ConfigOverride {
     let mut o = ConfigOverride::default();
-    let value = |name: &str| -> u32 {
-        let s = &config.similarity;
-        match name {
-            "vowel_coefficient" => s.vowel_coefficient,
-            "consonant_coefficient" => s.consonant_coefficient,
-            "vowel_zero_point" => s.vowel_zero_point,
-            "consonant_zero_point" => s.consonant_zero_point,
-            "secondary_weight" => s.stress_weights.secondary,
-            "unstressed_weight" => s.stress_weights.unstressed,
-            "gap_open" => config.gaps.gap_open,
-            "gap_extend" => config.gaps.gap_extend,
-            "gap_open_repeated_consonant" => config.gaps.gap_open_repeated_consonant,
-            "move_cost" => config.structure.move_cost,
-            "run_open" => config.structure.run_open,
-            "min_run" => config.structure.min_run,
-            other => unreachable!("{other}"),
-        }
-    };
     for p in params(kind) {
-        *slot(&mut o, p.name) = Some(value(p.name));
+        *(p.slot)(&mut o) = Some((p.get)(config));
     }
     o.normalization = Some(
         match config.normalization {
-            mime_reader::echo::EchoNormalization::ShorterSelfSimilarity => "shorter",
-            mime_reader::echo::EchoNormalization::MeanSelfSimilarity => "mean",
+            EchoNormalization::ShorterSelfSimilarity => "shorter",
+            EchoNormalization::MeanSelfSimilarity => "mean",
         }
         .to_string(),
     );
@@ -245,12 +198,12 @@ pub struct Job {
     pub poem: Option<usize>,
 }
 
-/// Scores every job with `kind` under `detector`, spread over `threads`.
-/// Threads take small batches from a shared counter, so faster cores (or
-/// cores that drew easy pairs) keep working instead of idling at the end.
-fn score_all(
+/// Scores every job under `detector`, spread over `threads`. Threads take
+/// small batches from a shared counter, so faster cores (or cores that drew
+/// easy pairs) keep working instead of idling at the end. Jobs must be
+/// scorable: pairs with unknown words or empty lines are dropped upstream.
+pub fn score_all(
     detector: &EchoDetector,
-    kind: AlignerKind,
     jobs: &[Job],
     lines: &[Line],
     threads: usize,
@@ -273,8 +226,10 @@ fn score_all(
                             .iter()
                             .map(|job| {
                                 detector
-                                    .compare_lines_with(kind, &lines[job.a], &lines[job.b])
-                                    .map_or(f32::NAN, |echo| echo.alignment.similarity)
+                                    .compare_lines(&lines[job.a], &lines[job.b])
+                                    .expect("unscorable pairs are dropped before scoring")
+                                    .alignment
+                                    .similarity
                             })
                             .collect();
                         done.push((start, batch));
@@ -362,8 +317,30 @@ fn assign_folds(poems: &[Poem], k: usize, seed: u64) -> Vec<usize> {
     fold
 }
 
+/// How a trial's config was chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    /// The base config.
+    Base,
+    /// Drawn at random (and through the screen).
+    Random,
+    /// Perturbed from one of the best so far.
+    Refine,
+}
+
+impl Phase {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Base => "base",
+            Self::Random => "random",
+            Self::Refine => "refine",
+        }
+    }
+}
+
 struct Trial {
     config: ConfigOverride,
+    phase: Phase,
     /// The objective on every poem: what the search maximizes.
     all: f64,
     all_groups: BTreeMap<String, f64>,
@@ -385,14 +362,22 @@ fn mean(xs: impl Iterator<Item = f64>) -> Option<f64> {
     (!xs.is_empty()).then(|| xs.iter().sum::<f64>() / xs.len() as f64)
 }
 
-/// The honest estimate of the search: for each fold, the trial that scores
-/// best *without* that fold, judged on that fold; averaged over folds.
-fn nested_estimate(tried: &[Trial], k: usize) -> (Option<f64>, Vec<Option<f64>>) {
+/// The honest estimate of the search: for each fold except `screen_fold`,
+/// the random trial that scores best *without* that fold, judged on that
+/// fold; averaged over those folds (see the module docs).
+fn nested_estimate(
+    tried: &[Trial],
+    k: usize,
+    screen_fold: usize,
+) -> (Option<f64>, Vec<Option<f64>>) {
     let per_fold: Vec<Option<f64>> = (0..k)
         .map(|f| {
+            if f == screen_fold {
+                return None;
+            }
             tried
                 .iter()
-                .filter(|t| t.without[f].is_some())
+                .filter(|t| t.phase == Phase::Random && t.without[f].is_some())
                 .max_by(|a, b| a.without[f].unwrap().total_cmp(&b.without[f].unwrap()))
                 .and_then(|t| t.folds[f])
         })
@@ -400,11 +385,24 @@ fn nested_estimate(tried: &[Trial], k: usize) -> (Option<f64>, Vec<Option<f64>>)
     (mean(per_fold.iter().flatten().copied()), per_fold)
 }
 
-/// Runs the search for each `--aligner`. `kept` are the scorable pairs
-/// (fixture pairs serve only as a reported guard).
+/// The mean over every fold but `screen_fold`: the folds the estimate uses.
+fn mean_outside(folds: &[Option<f64>], screen_fold: usize) -> Option<f64> {
+    mean(
+        folds
+            .iter()
+            .enumerate()
+            .filter(|&(f, _)| f != screen_fold)
+            .filter_map(|(_, x)| *x),
+    )
+}
+
+/// Runs the search for each `--aligner`, from its base config in `bases`
+/// (same order). `kept` are the scorable pairs (fixture pairs serve only as
+/// a reported guard).
 pub fn run(
     args: &Args,
     trials: usize,
+    bases: &[EchoConfig],
     poems: &[Poem],
     kept: &[(LabeledPair, usize, usize)],
     lines: &[Line],
@@ -474,26 +472,23 @@ pub fn run(
     println!();
 
     std::fs::create_dir_all(repo_path("target/echo")).map_err(|e| e.to_string())?;
-    for &kind in &args.aligners {
+    for (&kind, &base) in args.aligners.iter().zip(bases) {
         let mut rng = Rng::new(args.search_seed.wrapping_add(kind as u64 * 7919));
-        // Overrides apply on top of the aligner's tuned config, which is
-        // also the baseline ("defaults") every trial is compared with.
-        let tuned = EchoConfig::for_aligner(kind);
         let detector_for = |o: &ConfigOverride| -> Result<EchoDetector, String> {
-            let mut config = tuned;
+            let mut config = base;
             o.apply(&mut config)?;
             Ok(EchoDetector::with_config(config))
         };
         let screen = |o: &ConfigOverride| -> Result<f64, String> {
-            let scores = score_all(&detector_for(o)?, kind, &screen_jobs, lines, args.threads);
+            let scores = score_all(&detector_for(o)?, &screen_jobs, lines, args.threads);
             Ok(
                 objective(&scores, &screen_jobs, poems, &|_| true, args.objective)
                     .0
                     .unwrap_or(f64::NAN),
             )
         };
-        let evaluate = |o: &ConfigOverride| -> Result<(Trial, f64), String> {
-            let scores = score_all(&detector_for(o)?, kind, &jobs, lines, args.threads);
+        let evaluate = |o: &ConfigOverride, phase: Phase| -> Result<(Trial, f64), String> {
+            let scores = score_all(&detector_for(o)?, &jobs, lines, args.threads);
             let (all, all_groups) = objective(&scores, &jobs, poems, &|_| true, args.objective);
             let (_, forms) = objective(&scores, &jobs, poems, &|_| true, Objective::Form);
             let folds = (0..k)
@@ -513,6 +508,7 @@ pub fn run(
             Ok((
                 Trial {
                     config: o.clone(),
+                    phase,
                     all: all.unwrap_or(f64::NAN),
                     all_groups,
                     forms,
@@ -525,17 +521,18 @@ pub fn run(
         };
 
         let start = Instant::now();
-        let (baseline, baseline_screen) = evaluate(&override_of(kind, &tuned))?;
+        let (baseline, baseline_screen) = evaluate(&override_of(kind, &base), Phase::Base)?;
         let per_trial = start.elapsed();
         println!(
             "== {kind}: {trials} random (screened on fold {SCREEN_FOLD}) + {} refinement trials (~{:.1}s per full trial)",
             trials / 2,
             per_trial.as_secs_f64()
         );
+        let per_fold: Vec<String> = baseline.folds.iter().map(|x| fmt(*x)).collect();
         println!(
-            "defaults        objective {}  mean fold {}  fixture {}",
+            "base            objective {}  per fold [{}]  fixture {}  (in-sample)",
             fmt(Some(baseline.all)),
-            fmt(mean(baseline.folds.iter().flatten().copied())),
+            per_fold.join(", "),
             fmt(baseline.fixture_auc)
         );
 
@@ -550,7 +547,7 @@ pub fn run(
                 screened_out += 1;
                 continue;
             }
-            let (trial, screen_score) = evaluate(&candidate)?;
+            let (trial, screen_score) = evaluate(&candidate, Phase::Random)?;
             best_screen = best_screen.max(screen_score);
             tried.push(trial);
         }
@@ -561,7 +558,7 @@ pub fn run(
         for round in 0..trials / 2 {
             let parent = tried[rng.range(0..tried.len().min(5))].config.clone();
             let scale = if round < trials / 4 { 0.15 } else { 0.06 };
-            let (child, _) = evaluate(&perturb(kind, &parent, scale, &mut rng))?;
+            let (child, _) = evaluate(&perturb(kind, &parent, scale, &mut rng), Phase::Refine)?;
             tried.push(child);
             by_objective(&mut tried);
         }
@@ -571,8 +568,8 @@ pub fn run(
             tried.len()
         );
         println!(
-            "{:<5} {:>9} {:>9} {:>8}  per-group AUC | per-form AUC (all poems)",
-            "rank", "objective", "mean fold", "fixture"
+            "{:<5} {:<7} {:>9} {:>9} {:>8}  per-group AUC | per-form AUC (all poems; in-sample)",
+            "rank", "phase", "objective", "mean fold", "fixture"
         );
         for (rank, trial) in tried.iter().take(8).enumerate() {
             let groups: Vec<String> = trial
@@ -586,8 +583,9 @@ pub fn run(
                 .map(|(f, a)| format!("{f} {a:.4}"))
                 .collect();
             println!(
-                "{:<5} {:>9} {:>9} {:>8}  {} | {}",
+                "{:<5} {:<7} {:>9} {:>9} {:>8}  {} | {}",
                 rank + 1,
+                trial.phase.name(),
                 fmt(Some(trial.all)),
                 fmt(mean(trial.folds.iter().flatten().copied())),
                 fmt(trial.fixture_auc),
@@ -595,17 +593,17 @@ pub fn run(
                 forms.join(", ")
             );
         }
-        let (nested, per_fold) = nested_estimate(&tried, k);
-        let default_trial = tried
+        let (nested, per_fold) = nested_estimate(&tried, k, SCREEN_FOLD);
+        let base_trial = tried
             .iter()
-            .find(|t| t.config == override_of(kind, &tuned))
-            .expect("the defaults are among the trials");
+            .find(|t| t.phase == Phase::Base)
+            .expect("the base is among the trials");
         let per_fold: Vec<String> = per_fold.iter().map(|x| fmt(*x)).collect();
         println!(
-            "nested CV estimate (best config chosen without each fold, scored on it): {} [{}]; defaults {}",
+            "CV estimate (best random config chosen without each fold, scored on it; screen fold {SCREEN_FOLD} skipped): {} [{}]; base on the same folds {}",
             fmt(nested),
             per_fold.join(", "),
-            fmt(mean(default_trial.folds.iter().flatten().copied()))
+            fmt(mean_outside(&base_trial.folds, SCREEN_FOLD))
         );
         let best = &tried[0];
         let json = serde_json::to_string(&best.config).map_err(|e| e.to_string())?;
@@ -613,13 +611,7 @@ pub fn run(
 
         // Thresholds at the best config, per form and per strictness, on
         // every poem.
-        let scores = score_all(
-            &detector_for(&best.config)?,
-            kind,
-            &jobs,
-            lines,
-            args.threads,
-        );
+        let scores = score_all(&detector_for(&best.config)?, &jobs, lines, args.threads);
         let mut groups: BTreeMap<String, (Vec<f32>, Vec<f32>)> = BTreeMap::new();
         for (job, &score) in jobs.iter().zip(&scores) {
             let Some(p) = job.poem else { continue };
@@ -658,6 +650,7 @@ pub fn run(
         for trial in &tried {
             let row = serde_json::json!({
                 "config": trial.config,
+                "phase": trial.phase.name(),
                 "objective": trial.all,
                 "groups": trial.all_groups,
                 "forms": trial.forms,
@@ -689,7 +682,7 @@ mod tests {
             for _ in 0..200 {
                 let mut o = perturb(kind, &sample(kind, &mut rng), 0.3, &mut rng);
                 for p in params(kind) {
-                    let v = slot(&mut o, p.name).expect("every searched parameter is set");
+                    let v = (p.slot)(&mut o).expect("every searched parameter is set");
                     assert!((p.lo..=p.hi).contains(&v), "{} = {v}", p.name);
                 }
                 assert!(o.unstressed_weight <= o.secondary_weight);
@@ -704,6 +697,34 @@ mod tests {
                 .move_cost
                 .is_none()
         );
+    }
+
+    #[test]
+    fn the_estimate_uses_only_random_trials_outside_the_screen_fold() {
+        // Three folds; fold 0 is the screen.
+        let trial = |phase, folds: [f64; 3], without: [f64; 3]| Trial {
+            config: ConfigOverride::default(),
+            phase,
+            all: 0.0,
+            all_groups: BTreeMap::new(),
+            forms: BTreeMap::new(),
+            folds: folds.map(Some).to_vec(),
+            without: without.map(Some).to_vec(),
+            fixture_auc: None,
+        };
+        let tried = [
+            // The base and a refinement look best everywhere: ignored.
+            trial(Phase::Base, [0.99; 3], [0.99; 3]),
+            trial(Phase::Refine, [0.98; 3], [0.98; 3]),
+            // Random trials: the second wins without fold 1, the first
+            // without fold 2.
+            trial(Phase::Random, [0.5, 0.6, 0.7], [0.9, 0.1, 0.9]),
+            trial(Phase::Random, [0.4, 0.8, 0.3], [0.1, 0.9, 0.1]),
+        ];
+        let (estimate, per_fold) = nested_estimate(&tried, 3, 0);
+        assert_eq!(per_fold, [None, Some(0.8), Some(0.7)]);
+        assert!((estimate.unwrap() - 0.75).abs() < 1e-12);
+        assert_eq!(mean_outside(&tried[0].folds, 0), Some(0.99));
     }
 
     #[test]

@@ -72,6 +72,19 @@ impl Poem {
     }
 }
 
+/// The header keys a poem file may use (README: "Poem file format").
+const HEADER_KEYS: [&str; 9] = [
+    "form",
+    "title",
+    "author",
+    "year",
+    "source",
+    "notes",
+    "template",
+    "strictness",
+    "exclude",
+];
+
 /// Parses one poem file.
 pub fn parse_poem(text: &str, path: &Path, source: &str) -> Result<Poem, String> {
     let fail = |message: String| format!("{}: {message}", path.display());
@@ -85,7 +98,16 @@ pub fn parse_poem(text: &str, path: &Path, source: &str) -> Result<Poem, String>
         let (key, value) = line
             .split_once(':')
             .ok_or_else(|| fail(format!("header line without a colon: {line:?}")))?;
-        header.insert(key.trim().to_lowercase(), value.trim().to_string());
+        let key = key.trim().to_lowercase();
+        // A typo'd key would otherwise be silently ignored (`strictnes:
+        // loose` scoring the poem as strict).
+        if !HEADER_KEYS.contains(&key.as_str()) {
+            return Err(fail(format!(
+                "unknown header {key:?} (expected one of {})",
+                HEADER_KEYS.join(", ")
+            )));
+        }
+        header.insert(key, value.trim().to_string());
     }
     let required = |key: &str| {
         header
@@ -178,11 +200,15 @@ fn template_for(
                     }
                     EchoTemplate::villanelle()
                 }
-                "pantoum" if shaped(4) => EchoTemplate::pantoum(stanzas.len()),
+                "pantoum" if shaped(4) => {
+                    EchoTemplate::pantoum(stanzas.len()).map_err(|e| format!("pantoum: {e}"))?
+                }
                 "pantoum" => {
                     return Err(format!("pantoum stanzas {stanzas:?}, expected quatrains"));
                 }
-                "blues" if shaped(3) => EchoTemplate::blues(stanzas.len()),
+                "blues" if shaped(3) => {
+                    EchoTemplate::blues(stanzas.len()).map_err(|e| format!("blues: {e}"))?
+                }
                 "blues" => {
                     return Err(format!(
                         "blues stanzas {stanzas:?}, expected tercets (or a template)"
@@ -194,13 +220,13 @@ fn template_for(
             }
         }
     };
-    if let Some(expected) = template.expected_line_count
+    if let Some(expected) = template.expected_line_count()
         && expected != lines.len()
     {
         return Err(format!(
             "{form}: {} lines, template {:?} expects {expected}",
             lines.len(),
-            template.name
+            template.name()
         ));
     }
     Ok(template)
@@ -327,10 +353,10 @@ mod tests {
         let poems = load_dir(&dir, "public").unwrap_or_else(|e| panic!("{e}"));
         assert!(!poems.is_empty(), "no poems under {}", dir.display());
         for poem in &poems {
-            assert!(!poem.template.groups.is_empty(), "{}", poem.id());
+            assert!(!poem.template.groups().is_empty(), "{}", poem.id());
             let last = poem
                 .template
-                .groups
+                .groups()
                 .iter()
                 .flatten()
                 .max()
@@ -379,13 +405,17 @@ mod tests {
         assert!(parse_poem("title: T\nauthor: A\n\nx\n", Path::new("x.txt"), "public").is_err());
         let refrain = "form: refrain\ntitle: T\nauthor: A\n\nx\ny\nx\n";
         assert!(parse_poem(refrain, Path::new("r.txt"), "public").is_err());
+        // A typo'd header key is an error, not a silent default.
+        let typo = VILLANELLE.replace("author: A\n", "author: A\nstrictnes: loose\n");
+        let error = parse_poem(&typo, Path::new("v.txt"), "public").unwrap_err();
+        assert!(error.contains("unknown header \"strictnes\""), "{error}");
         let with_template =
             "form: refrain\ntemplate: A_A\ntitle: T\nauthor: A\n\nx\ny\nx\n".to_string();
         assert_eq!(
             parse_poem(&with_template, Path::new("r.txt"), "public")
                 .unwrap()
                 .template
-                .groups,
+                .groups(),
             [vec![0, 2]]
         );
     }

@@ -33,19 +33,19 @@ impl EchoStrictness {
     /// tuned config ([`super::EchoConfig::for_aligner`]); with another config
     /// these don't apply. Loose marks are each aligner's best balanced
     /// accuracy on loose poems. Strict poems separate almost perfectly over
-    /// a wide range (semi-global 0.41–0.68 across resamples), so strict
+    /// a wide range (semi-global 0.34–0.60 across resamples), so strict
     /// marks sit above the best point, for margin. On the corpus:
     ///
     /// | aligner | strictness | threshold | echoes caught | false positives |
     /// |---|---|---|---|---|
-    /// | semi-global | strict | 0.50 | 99.1% | 0.3% |
-    /// | semi-global | loose | 0.28 | 91.0% | 3.9% |
+    /// | semi-global | strict | 0.50 | 99.1% | 0.1% |
+    /// | semi-global | loose | 0.25 | 92.4% | 4.4% |
     /// | Waterman–Eggert | strict | 0.45 | 99.1% | 0.2% |
-    /// | Waterman–Eggert | loose | 0.24 | 94.7% | 5.9% |
+    /// | Waterman–Eggert | loose | 0.24 | 94.9% | 6.1% |
     pub fn threshold(self, aligner: AlignerKind) -> f32 {
         match (aligner, self) {
             (AlignerKind::SemiGlobal, Self::Strict) => 0.50,
-            (AlignerKind::SemiGlobal, Self::Loose) => 0.28,
+            (AlignerKind::SemiGlobal, Self::Loose) => 0.25,
             (AlignerKind::WatermanEggert, Self::Strict) => 0.45,
             (AlignerKind::WatermanEggert, Self::Loose) => 0.24,
         }
@@ -70,18 +70,26 @@ impl std::str::FromStr for EchoStrictness {
 }
 
 /// A template plus how to judge it: the minimum similarity a follower must
-/// reach against its leader, and the aligner that measures it.
+/// reach against its leader. The aligner is the detector's
+/// ([`super::EchoConfig::aligner`]), so a measured threshold is always the
+/// one for the aligner that does the scoring.
 #[derive(Debug, Clone, PartialEq)]
-pub struct RepetitionScheme {
-    pub template: EchoTemplate,
-    pub threshold: f32,
-    pub aligner: AlignerKind,
+pub struct EchoScheme {
+    template: EchoTemplate,
+    pass_mark: PassMark,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PassMark {
+    /// The measured threshold for the detector's aligner.
+    Measured(EchoStrictness),
+    Explicit(f32),
 }
 
 /// One follower's comparison with its leader.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EchoPairScore {
-    pub alignment: EchoMatch,
+    pub echo: EchoMatch,
     /// Whether the similarity reached the threshold.
     pub passed: bool,
 }
@@ -101,31 +109,48 @@ pub struct EchoFormResult {
     pub missing_pairs: Vec<(usize, usize)>,
     /// Whether the poem has the form's line count (true when it has none).
     pub line_count_matches: bool,
+    /// The threshold the followers were judged at.
+    pub threshold: f32,
     /// Every pair scored and passed, none missing, and the count matches.
     pub passed: bool,
 }
 
-impl RepetitionScheme {
-    /// Judged at `strictness`'s threshold for `aligner`. The detector passed
-    /// to [`Self::check`] should use `EchoConfig::for_aligner(aligner)`.
-    pub fn new(template: EchoTemplate, strictness: EchoStrictness, aligner: AlignerKind) -> Self {
-        Self::with_threshold(template, strictness.threshold(aligner), aligner)
+impl EchoScheme {
+    /// Judged at `strictness`'s measured threshold for the detector's
+    /// aligner. The thresholds were measured under each aligner's tuned
+    /// config ([`super::EchoConfig::for_aligner`]).
+    pub fn new(template: EchoTemplate, strictness: EchoStrictness) -> Self {
+        Self {
+            template,
+            pass_mark: PassMark::Measured(strictness),
+        }
     }
 
     /// Judged at the template's conventional strictness
-    /// ([`EchoTemplate::conventional_strictness`]) with the default aligner.
+    /// ([`EchoTemplate::strictness`]).
     pub fn conventional(template: EchoTemplate) -> Self {
-        let strictness = template.conventional_strictness();
-        Self::new(template, strictness, AlignerKind::default())
+        let strictness = template.strictness();
+        Self::new(template, strictness)
     }
 
     /// Judged at an explicit `threshold`, e.g. for a config the measured
     /// thresholds don't apply to.
-    pub fn with_threshold(template: EchoTemplate, threshold: f32, aligner: AlignerKind) -> Self {
+    pub fn with_threshold(template: EchoTemplate, threshold: f32) -> Self {
         Self {
             template,
-            threshold,
-            aligner,
+            pass_mark: PassMark::Explicit(threshold),
+        }
+    }
+
+    pub fn template(&self) -> &EchoTemplate {
+        &self.template
+    }
+
+    /// The threshold followers must reach when `detector` scores them.
+    pub fn threshold(&self, detector: &EchoDetector) -> f32 {
+        match self.pass_mark {
+            PassMark::Measured(strictness) => strictness.threshold(detector.config().aligner),
+            PassMark::Explicit(threshold) => threshold,
         }
     }
 
@@ -136,9 +161,9 @@ impl RepetitionScheme {
         follower: &Line,
         detector: &EchoDetector,
     ) -> Result<EchoPairScore, EchoError> {
-        let alignment = detector.compare_lines_with(self.aligner, leader, follower)?;
-        let passed = alignment.alignment.similarity >= self.threshold;
-        Ok(EchoPairScore { alignment, passed })
+        let echo = detector.compare_lines(leader, follower)?;
+        let passed = echo.alignment.similarity >= self.threshold(detector);
+        Ok(EchoPairScore { echo, passed })
     }
 
     /// Checks every pair the template asserts. `lines` are the poem's
@@ -158,7 +183,7 @@ impl RepetitionScheme {
         }
         let line_count_matches = self
             .template
-            .expected_line_count
+            .expected_line_count()
             .is_none_or(|expected| expected == lines.len());
         let passed = line_count_matches
             && missing_pairs.is_empty()
@@ -169,6 +194,7 @@ impl RepetitionScheme {
             pairs,
             missing_pairs,
             line_count_matches,
+            threshold: self.threshold(detector),
             passed,
         }
     }
@@ -228,36 +254,42 @@ mod tests {
         assert!("lax".parse::<EchoStrictness>().is_err());
     }
 
+    fn lenient() -> EchoDetector {
+        EchoDetector::with_config(EchoConfig::for_aligner(AlignerKind::WatermanEggert))
+    }
+
     #[test]
-    fn schemes_take_the_measured_threshold_or_an_explicit_one() {
-        let scheme = RepetitionScheme::conventional(EchoTemplate::duplex());
-        assert_eq!(scheme.aligner, AlignerKind::SemiGlobal);
+    fn schemes_take_the_detectors_measured_threshold_or_an_explicit_one() {
+        let semi_global = AlignerKind::SemiGlobal;
+        let scheme = EchoScheme::conventional(EchoTemplate::duplex());
         assert_eq!(
-            scheme.threshold,
-            EchoStrictness::Loose.threshold(AlignerKind::SemiGlobal)
-        );
-        let scheme = RepetitionScheme::conventional(EchoTemplate::villanelle());
-        assert_eq!(
-            scheme.threshold,
-            EchoStrictness::Strict.threshold(AlignerKind::SemiGlobal)
-        );
-        let scheme = RepetitionScheme::new(
-            EchoTemplate::pantoum(4),
-            EchoStrictness::Loose,
-            AlignerKind::WatermanEggert,
+            scheme.threshold(detector()),
+            EchoStrictness::Loose.threshold(semi_global)
         );
         assert_eq!(
-            scheme.threshold,
+            scheme.threshold(&lenient()),
             EchoStrictness::Loose.threshold(AlignerKind::WatermanEggert)
         );
-        let scheme =
-            RepetitionScheme::with_threshold(EchoTemplate::blues(3), 0.7, AlignerKind::SemiGlobal);
-        assert_eq!(scheme.threshold, 0.7);
+        let scheme = EchoScheme::conventional(EchoTemplate::villanelle());
+        assert_eq!(
+            scheme.threshold(detector()),
+            EchoStrictness::Strict.threshold(semi_global)
+        );
+        let scheme = EchoScheme::new(EchoTemplate::pantoum(4).unwrap(), EchoStrictness::Loose);
+        assert_eq!(
+            scheme.threshold(detector()),
+            EchoStrictness::Loose.threshold(semi_global)
+        );
+        let scheme = EchoScheme::with_threshold(EchoTemplate::blues(3).unwrap(), 0.7);
+        assert_eq!(scheme.threshold(detector()), 0.7);
+        assert_eq!(scheme.threshold(&lenient()), 0.7);
+        let result = scheme.check(&[], detector());
+        assert_eq!(result.threshold, 0.7);
     }
 
     #[test]
     fn a_duplex_passes_its_template() {
-        let scheme = RepetitionScheme::conventional(EchoTemplate::duplex());
+        let scheme = EchoScheme::conventional(EchoTemplate::duplex());
         let result = scheme.check(&lines(&DUPLEX), detector());
         assert!(result.line_count_matches);
         assert!(result.missing_pairs.is_empty());
@@ -267,7 +299,7 @@ mod tests {
             assert!(
                 score.passed,
                 "{} → {}: {}",
-                pair.leader, pair.follower, score.alignment.alignment.similarity
+                pair.leader, pair.follower, score.echo.alignment.similarity
             );
         }
         assert!(result.passed);
@@ -276,19 +308,12 @@ mod tests {
     #[test]
     fn a_duplex_passes_strictly_too_and_under_waterman_eggert() {
         // These followers change one word each, so they are strict echoes.
-        let scheme = RepetitionScheme::new(
-            EchoTemplate::duplex(),
-            EchoStrictness::Strict,
-            AlignerKind::SemiGlobal,
-        );
-        assert!(scheme.check(&lines(&DUPLEX), detector()).passed);
-        let lenient =
-            EchoDetector::with_config(EchoConfig::for_aligner(AlignerKind::WatermanEggert));
+        let lenient = lenient();
         for strictness in EchoStrictness::ALL {
-            let scheme = RepetitionScheme::new(
-                EchoTemplate::duplex(),
-                strictness,
-                AlignerKind::WatermanEggert,
+            let scheme = EchoScheme::new(EchoTemplate::duplex(), strictness);
+            assert!(
+                scheme.check(&lines(&DUPLEX), detector()).passed,
+                "{strictness}"
             );
             assert!(
                 scheme.check(&lines(&DUPLEX), &lenient).passed,
@@ -299,7 +324,7 @@ mod tests {
 
     #[test]
     fn a_short_duplex_is_missing_its_closing_pair() {
-        let scheme = RepetitionScheme::conventional(EchoTemplate::duplex());
+        let scheme = EchoScheme::conventional(EchoTemplate::duplex());
         let result = scheme.check(&lines(&DUPLEX[..13]), detector());
         assert_eq!(result.missing_pairs, [(0, 13)]);
         assert!(!result.line_count_matches);
@@ -310,7 +335,7 @@ mod tests {
     fn unrelated_followers_fail() {
         let mut texts = DUPLEX;
         texts[2] = "potatoes boil in copper pots";
-        let scheme = RepetitionScheme::conventional(EchoTemplate::duplex());
+        let scheme = EchoScheme::conventional(EchoTemplate::duplex());
         let result = scheme.check(&lines(&texts), detector());
         let pair = result.pairs.iter().find(|p| p.follower == 2).unwrap();
         assert!(!pair.outcome.as_ref().unwrap().passed);
@@ -321,7 +346,7 @@ mod tests {
     fn an_empty_line_is_an_error_not_a_failure() {
         let mut texts = DUPLEX;
         texts[4] = "";
-        let scheme = RepetitionScheme::conventional(EchoTemplate::duplex());
+        let scheme = EchoScheme::conventional(EchoTemplate::duplex());
         let result = scheme.check(&lines(&texts), detector());
         let pair = result.pairs.iter().find(|p| p.follower == 4).unwrap();
         assert_eq!(pair.outcome, Err(EchoError::EmptyLine));
@@ -369,7 +394,7 @@ mod tests {
             );
             for (group, class, expected, a, b) in &pairs {
                 let similarity = detector
-                    .compare_lines_with(kind, &Line::new(a, dict()), &Line::new(b, dict()))
+                    .compare_lines(&Line::new(a, dict()), &Line::new(b, dict()))
                     .unwrap_or_else(|e| panic!("{group}: {a:?} / {b:?}: {e}"))
                     .alignment
                     .similarity;

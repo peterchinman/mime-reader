@@ -58,8 +58,10 @@ pub use trace::{Trace, TraceEvent};
 
 /// The "impossible" score: the identity for `max`, far enough from
 /// `i64::MIN` that adding any realistic run of finite scores to it can't
-/// overflow. Only used as a starting best or a hard wall, never summed with
-/// itself.
+/// overflow. Used as a starting best or a hard wall (masked cells,
+/// vowel×consonant pairs in echo's table). At most two are ever summed
+/// (`NEG_INF` pair + `NEG_INF` entry) before flooring back to it, which the
+/// `/ 4` headroom allows.
 pub const NEG_INF: i64 = i64::MIN / 4;
 
 /// How many distinct phonemes there are: 24 consonants, plus 15 vowels × 3
@@ -90,6 +92,12 @@ pub fn phoneme_id(phoneme: &Phoneme) -> u8 {
         }
     };
     id as u8
+}
+
+/// The [`phoneme_id`] of every phoneme in `phonemes`, for indexing a
+/// [`ScoreTable`].
+pub fn phoneme_ids(phonemes: &[Phoneme]) -> Vec<u8> {
+    phonemes.iter().map(phoneme_id).collect()
 }
 
 /// Whether the phoneme with this id is a consonant.
@@ -128,7 +136,6 @@ impl TranspositionDirection {
     }
 }
 
-// Todo: should this be folded into Edit enum?
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlignmentStep<'a> {
     Match {

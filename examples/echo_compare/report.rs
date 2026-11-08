@@ -116,16 +116,22 @@ pub fn eval_sets(scored: &[Scored]) -> Vec<EvalSet<'_>> {
             negatives: pick(&is_corpus, Label::Not),
         },
     ];
-    for source in ["public", "private"] {
-        let from = move |r: &&Scored| r.pair.source == source;
-        let set = EvalSet {
-            name: source,
-            positives: pick(&from, Label::Echo),
-            negatives: pick(&from, Label::Not),
-        };
-        if !set.positives.is_empty() {
-            sets.push(set);
-        }
+    // Split by source only when there are both (otherwise it repeats
+    // "corpus").
+    let sources: Vec<EvalSet> = ["public", "private"]
+        .into_iter()
+        .map(|source| {
+            let from = move |r: &&Scored| r.pair.source == source;
+            EvalSet {
+                name: source,
+                positives: pick(&from, Label::Echo),
+                negatives: pick(&from, Label::Not),
+            }
+        })
+        .filter(|set| !set.positives.is_empty())
+        .collect();
+    if sources.len() > 1 {
+        sets.extend(sources);
     }
     sets.push(EvalSet {
         name: "all",

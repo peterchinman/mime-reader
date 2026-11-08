@@ -1,6 +1,6 @@
 //! What a traceback emits, and how it becomes alignment steps.
 
-use super::{AlignmentStep, OwnedAlignmentStep, TranspositionDirection};
+use super::{AlignmentStep, TranspositionDirection};
 use crate::phoneme::Phoneme;
 
 /// One event of a traceback, in alignment order. Indices are 0-based
@@ -9,10 +9,10 @@ use crate::phoneme::Phoneme;
 pub enum TraceEvent {
     /// `a[i]` aligned with `b[j]`.
     Pair { i: usize, j: usize },
-    /// `a[i]` aligned with nothing.
-    GapA { i: usize },
-    /// `b[j]` aligned with nothing.
-    GapB { j: usize },
+    /// `a[i]` skipped: paired with nothing.
+    SkipA { i: usize },
+    /// `b[j]` skipped: paired with nothing.
+    SkipB { j: usize },
     /// Adjacent swap: `a[i], a[i+1]` crossed with `b[j], b[j+1]`
     /// (`a[i] = b[j+1]` and `a[i+1] = b[j]`).
     Swap { i: usize, j: usize },
@@ -45,14 +45,6 @@ impl Trace {
             .collect()
     }
 
-    /// [`Self::steps`] as owned steps.
-    pub fn owned_steps(&self, a: &[Phoneme], b: &[Phoneme]) -> Vec<OwnedAlignmentStep> {
-        self.indexed_steps(a, b)
-            .into_iter()
-            .map(|indexed| OwnedAlignmentStep::from(indexed.step))
-            .collect()
-    }
-
     /// [`Self::steps`], each with the positions it consumed.
     pub fn indexed_steps<'a>(&self, a: &'a [Phoneme], b: &'a [Phoneme]) -> Vec<IndexedStep<'a>> {
         let mut steps = Vec::with_capacity(self.events.len());
@@ -70,7 +62,7 @@ impl Trace {
                         b_index: Some(j),
                     });
                 }
-                TraceEvent::GapA { i } => steps.push(IndexedStep {
+                TraceEvent::SkipA { i } => steps.push(IndexedStep {
                     step: AlignmentStep::Indel {
                         a: Some(&a[i]),
                         b: None,
@@ -78,7 +70,7 @@ impl Trace {
                     a_index: Some(i),
                     b_index: None,
                 }),
-                TraceEvent::GapB { j } => steps.push(IndexedStep {
+                TraceEvent::SkipB { j } => steps.push(IndexedStep {
                     step: AlignmentStep::Indel {
                         a: None,
                         b: Some(&b[j]),
@@ -114,6 +106,7 @@ impl Trace {
 
 #[cfg(test)]
 mod tests {
+    use super::super::OwnedAlignmentStep;
     use super::*;
 
     fn parse(s: &str) -> Vec<Phoneme> {
@@ -130,9 +123,9 @@ mod tests {
                 TraceEvent::Pair { i: 0, j: 0 },
                 TraceEvent::Pair { i: 1, j: 1 },
                 TraceEvent::Swap { i: 2, j: 2 },
-                TraceEvent::GapA { i: 4 },
-                TraceEvent::GapB { j: 4 },
-                TraceEvent::GapB { j: 5 },
+                TraceEvent::SkipA { i: 4 },
+                TraceEvent::SkipB { j: 4 },
+                TraceEvent::SkipB { j: 5 },
             ],
         };
         let steps = trace.indexed_steps(&a, &b);
@@ -160,7 +153,7 @@ mod tests {
         assert_eq!((steps[6].a_index, steps[6].b_index), (None, Some(5)));
         // The Right transposition carries the earlier phonemes of each side.
         assert_eq!(
-            trace.owned_steps(&a, &b)[2],
+            OwnedAlignmentStep::from(steps[2].step),
             OwnedAlignmentStep::Transposition {
                 a: a[2].clone(),
                 b: b[2].clone(),

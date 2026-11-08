@@ -59,7 +59,7 @@ fn bench_echo_align(c: &mut Criterion) {
             // Each aligner under its tuned config, as it would be used.
             let detector = EchoDetector::with_config(EchoConfig::for_aligner(kind));
             group.bench_function(format!("{kind}/{name}"), |bench| {
-                bench.iter(|| detector.compare_phonemes_with(kind, black_box(&a), black_box(&b)))
+                bench.iter(|| detector.compare_phonemes(black_box(&a), black_box(&b)))
             });
         }
     }

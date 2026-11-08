@@ -5,21 +5,17 @@
 //! one gap. Re-ordered blocks can only be explained as gaps and
 //! substitutions, so this is the strict baseline.
 
-use crate::align::{GapScores, ScoreTable, affine};
+use crate::align::{GapScores, ScoreTable, affine, phoneme_ids};
 use crate::phoneme::Phoneme;
 
 use super::alignment::{
-    AlignerKind, EchoAligner, EchoCosts, RawAlignment, concatenate, coverage, segments_from_trace,
+    EchoAligner, EchoCosts, RawAlignment, aligned, concatenate, segments_from_trace,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
-pub struct SemiGlobalAligner;
+pub(crate) struct SemiGlobalAligner;
 
 impl EchoAligner for SemiGlobalAligner {
-    fn kind(&self) -> AlignerKind {
-        AlignerKind::SemiGlobal
-    }
-
     fn align(
         &self,
         a: &[Phoneme],
@@ -32,8 +28,8 @@ impl EchoAligner for SemiGlobalAligner {
             GapScores::new(&costs.gaps, b, None),
         );
         let trace = affine::align(
-            &ScoreTable::ids(a),
-            &ScoreTable::ids(b),
+            &phoneme_ids(a),
+            &phoneme_ids(b),
             table,
             &gaps_a,
             &gaps_b,
@@ -43,13 +39,13 @@ impl EchoAligner for SemiGlobalAligner {
         );
         let (segments, steps) =
             concatenate(segments_from_trace(&trace, a, b, table, &gaps_a, &gaps_b));
-        let (a_coverage, b_coverage) = coverage(&steps, a.len(), b.len());
+        let (a_aligned, b_aligned) = aligned(&steps, a.len(), b.len());
         RawAlignment {
             raw: trace.score,
             steps,
             segments,
-            a_coverage,
-            b_coverage,
+            a_aligned,
+            b_aligned,
         }
     }
 }
@@ -68,7 +64,7 @@ mod tests {
         assert_eq!(alignment.raw, self_sim(SWAP_A));
         assert_eq!(alignment.segments.len(), 1);
         assert_eq!(alignment.segments[0].placement, Placement::InPlace);
-        assert!(alignment.a_coverage.iter().all(|&c| c == 1));
+        assert!(alignment.a_aligned.iter().all(|&x| x));
     }
 
     #[test]

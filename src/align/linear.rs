@@ -10,8 +10,8 @@ use crate::phoneme::Phoneme;
 // Traceback codes, one per matrix cell.
 const START: u8 = 0;
 const DIAGONAL: u8 = 1;
-const GAP_B: u8 = 2;
-const GAP_A: u8 = 3;
+const SKIP_B: u8 = 2;
+const SKIP_A: u8 = 3;
 const SWAP: u8 = 4;
 
 /// Keeps the higher score; on a tie the lower `priority` wins.
@@ -62,8 +62,8 @@ fn prepare(
 ///
 /// `D[i][j]`, the best score of aligning `a[..i]` with `b[..j]`, is the max of
 /// - `D[i-1][j-1] + table[a_i][b_j]` (pair),
-/// - `D[i][j-1] − extend_b[j]` (gap in `a`: `b_j` unaligned),
-/// - `D[i-1][j] − extend_a[i]` (gap in `b`: `a_i` unaligned),
+/// - `D[i][j-1] − extend_b[j]` (`b_j` skipped),
+/// - `D[i-1][j] − extend_a[i]` (`a_i` skipped),
 /// - `D[i-2][j-2] − swap` when `a_{i-1}, a_i` are consonants with
 ///   `a_i = b_{j-1}` and `a_{i-1} = b_j`.
 ///
@@ -73,10 +73,10 @@ fn prepare(
 ///
 /// Ties go to the most structural explanation, so the traceback is
 /// deterministic: a zero-scored pair (priority 0) < swap (1) < any other pair
-/// (2) < gap in `a` (3) < gap in `b` (4). These are the rhyme DP's
-/// `choose_edit` priorities; each cell compares alignments of the same
-/// prefixes, so cost and score pick the same cell winners and the same
-/// traceback.
+/// (2) < skipping `b_j` (3) < skipping `a_i` (4). These are the priorities of
+/// the cost-minimizing rhyme DP this replaced; each cell compares alignments
+/// of the same prefixes, so cost and score pick the same cell winners and the
+/// same traceback.
 ///
 /// OSA caveats (deliberate): unlike unrestricted Damerau-Levenshtein, no
 /// substring is edited more than once, and the result is not a metric.
@@ -145,13 +145,13 @@ fn align_ids(
     for i in 1..=n {
         score[i * width] = score[(i - 1) * width] - extend_a[i - 1];
         if trace {
-            edits[i * width] = GAP_A;
+            edits[i * width] = SKIP_A;
         }
     }
     for j in 1..=m {
         score[j] = score[j - 1] - extend_b[j - 1];
         if trace {
-            edits[j] = GAP_B;
+            edits[j] = SKIP_B;
         }
     }
 
@@ -187,8 +187,8 @@ fn align_ids(
                 if pair == 0 { 0 } else { 2 },
                 DIAGONAL,
             );
-            choose(&mut best, score[row + j - 1] - extend_b[j - 1], 3, GAP_B);
-            choose(&mut best, score[up + j] - gap_a, 4, GAP_A);
+            choose(&mut best, score[row + j - 1] - extend_b[j - 1], 3, SKIP_B);
+            choose(&mut best, score[up + j] - gap_a, 4, SKIP_A);
 
             score[row + j] = best.0;
             if trace {
@@ -219,13 +219,13 @@ fn traceback(edits: &[u8], n: usize, m: usize) -> Vec<TraceEvent> {
                 j -= 1;
                 events.push(TraceEvent::Pair { i, j });
             }
-            GAP_B => {
+            SKIP_B => {
                 j -= 1;
-                events.push(TraceEvent::GapB { j });
+                events.push(TraceEvent::SkipB { j });
             }
-            GAP_A => {
+            SKIP_A => {
                 i -= 1;
-                events.push(TraceEvent::GapA { i });
+                events.push(TraceEvent::SkipA { i });
             }
             SWAP => {
                 i -= 2;
@@ -282,8 +282,8 @@ mod tests {
             .iter()
             .map(|event| match *event {
                 TraceEvent::Pair { i, j } => table().score(&a[i], &b[j]),
-                TraceEvent::GapA { i } => -ga.extend[i],
-                TraceEvent::GapB { j } => -gb.extend[j],
+                TraceEvent::SkipA { i } => -ga.extend[i],
+                TraceEvent::SkipB { j } => -gb.extend[j],
                 TraceEvent::Swap { .. } => -swap.unwrap(),
             })
             .sum()

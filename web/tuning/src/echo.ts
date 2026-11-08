@@ -391,20 +391,29 @@ function currentPair(): Pair {
 
 // ---- scoring ----------------------------------------------------------------
 
-function score(pair: Pair, kind: AlignerKindDto): Outcome {
+function errorMessage(err: unknown): string {
+	return String(err instanceof Error ? err.message : err);
+}
+
+function score(pair: Pair): Outcome {
 	try {
-		return { ok: true, dto: analyzer.scoreEcho(pair.a, pair.b, kind) };
+		return { ok: true, dto: analyzer.scoreEcho(pair.a, pair.b) };
 	} catch (err) {
-		return { ok: false, message: String(err instanceof Error ? err.message : err) };
+		return { ok: false, message: errorMessage(err) };
 	}
 }
 
 // Scores `pairs` with each of `kinds` under that aligner's config:
-// result[pair][aligner].
+// result[pair][aligner]. A config the analyzer rejects (a value past its
+// limits) fails every pair with the reason.
 function scoreAll(pairs: Pair[], kinds: AlignerKindDto[]): Outcome[][] {
-	const columns = kinds.map((kind) => {
-		analyzer.setEchoConfig(configs[kind]);
-		return pairs.map((pair) => score(pair, kind));
+	const columns = kinds.map((kind): Outcome[] => {
+		try {
+			analyzer.setEchoConfig({ ...configs[kind], aligner: kind });
+		} catch (err) {
+			return pairs.map(() => ({ ok: false, message: errorMessage(err) }));
+		}
+		return pairs.map(score);
 	});
 	return pairs.map((_, i) => columns.map((column) => column[i]));
 }
@@ -592,8 +601,8 @@ function alignmentEl(dto: EchoAlignmentDto): HTMLElement {
 		return map;
 	};
 	box.append(
-		lineEl(dto.a_words, dto.a_phonemes, dto.a_word_starts, dto.a_coverage, segmentOf("a"), dto),
-		lineEl(dto.b_words, dto.b_phonemes, dto.b_word_starts, dto.b_coverage, segmentOf("b"), dto),
+		lineEl(dto.a_words, dto.a_phonemes, dto.a_word_starts, dto.a_aligned, segmentOf("a"), dto),
+		lineEl(dto.b_words, dto.b_phonemes, dto.b_word_starts, dto.b_aligned, segmentOf("b"), dto),
 	);
 
 	dto.segments.forEach((segment, k) => {
@@ -636,7 +645,7 @@ function lineEl(
 	words: string[],
 	phonemes: string[],
 	wordStarts: number[],
-	coverage: number[],
+	aligned: boolean[],
 	segmentOf: Map<number, number>,
 	dto: EchoAlignmentDto,
 ): HTMLElement {
@@ -656,7 +665,7 @@ function lineEl(
 			ph.className = "ph";
 			ph.textContent = phonemes[i];
 			const segment = segmentOf.get(i);
-			if (coverage[i] === 0 || segment === undefined) {
+			if (!aligned[i] || segment === undefined) {
 				ph.classList.add("unaligned");
 			} else {
 				ph.classList.add(dto.segments[segment].placement);

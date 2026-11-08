@@ -1,10 +1,11 @@
-//! Exhaustive-recursion oracles for the alignment recurrences.
+//! Recursive oracles for the alignment recurrences.
 //!
-//! Each oracle enumerates every edit sequence of its model directly, sharing
-//! only the cost primitives with the code under test — no matrix, no
-//! boundary initialization, no traceback. They validate that a DP faithfully
-//! maximizes its recurrence, not that the recurrence is the right model.
-//! Exponential, so only for tiny inputs.
+//! Each oracle explores every edit sequence of its model from its
+//! definition, sharing only the cost primitives with the code under test —
+//! no matrix, no boundary initialization, no traceback. They validate that a
+//! DP faithfully maximizes its recurrence, not that the recurrence is the
+//! right model. `linear_global` is plain exhaustive recursion (exponential);
+//! `affine` memoizes on (position, last event). Both are for tiny inputs.
 
 use super::{GapModel, NEG_INF, ScoreTable};
 use crate::phoneme::Phoneme;
@@ -70,8 +71,8 @@ pub(crate) fn linear_global(
 enum Last {
     Start,
     Pair,
-    GapA,
-    GapB,
+    SkipA,
+    SkipB,
 }
 
 /// The best score of `a` vs `b` under the affine model in `mode`, by
@@ -137,22 +138,22 @@ pub(crate) fn affine(
                 best = best.max((score + self.go(i + 1, j + 1, Last::Pair)).max(NEG_INF));
             }
             if i < n && self.row_ok(i) && (j == 0 || self.col_ok(j - 1)) {
-                let open = if last == Last::GapA {
+                let open = if last == Last::SkipA {
                     0
                 } else {
                     self.gaps.open_cost(&self.a[i], prev(self.a, i))
                 };
                 let cost = open + self.gaps.extend_cost(&self.a[i], prev(self.a, i));
-                best = best.max((self.go(i + 1, j, Last::GapA) - cost).max(NEG_INF));
+                best = best.max((self.go(i + 1, j, Last::SkipA) - cost).max(NEG_INF));
             }
             if j < m && self.col_ok(j) && (i == 0 || self.row_ok(i - 1)) {
-                let open = if last == Last::GapB {
+                let open = if last == Last::SkipB {
                     0
                 } else {
                     self.gaps.open_cost(&self.b[j], prev(self.b, j))
                 };
                 let cost = open + self.gaps.extend_cost(&self.b[j], prev(self.b, j));
-                best = best.max((self.go(i, j + 1, Last::GapB) - cost).max(NEG_INF));
+                best = best.max((self.go(i, j + 1, Last::SkipB) - cost).max(NEG_INF));
             }
             self.memo.insert(key, best);
             best

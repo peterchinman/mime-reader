@@ -3,8 +3,8 @@
 //!
 //! States, for `a[..i]` vs `b[..j]`:
 //! - `M[i][j]`: the alignment ends pairing `a_i` with `b_j`;
-//! - `X[i][j]`: it ends with `a_i` unaligned (a gap in `b`);
-//! - `Y[i][j]`: it ends with `b_j` unaligned (a gap in `a`).
+//! - `X[i][j]`: it ends skipping `a_i`;
+//! - `Y[i][j]`: it ends skipping `b_j`.
 //!
 //! With `go(i)` / `ge(i)` the open / extend cost at position `i` of its own
 //! sequence ([`GapScores`]):
@@ -120,7 +120,8 @@ pub(crate) fn align(
     let width = m + 1;
     let cells = (n + 1) * width;
     let at = |i: usize, j: usize| i * width + j;
-    let masked = |i: usize, j: usize| mask.is_some_and(|mask| mask.rows[i - 1] || mask.cols[j - 1]);
+    let row_masked = |i: usize| mask.is_some_and(|mask| mask.rows[i - 1]);
+    let col_masked = |j: usize| mask.is_some_and(|mask| mask.cols[j - 1]);
 
     let mut sm = vec![NEG_INF; cells];
     let mut sx = vec![NEG_INF; cells];
@@ -133,15 +134,17 @@ pub(crate) fn align(
     // Borders.
     match mode {
         Mode::Global => {
+            // A border skips a whole prefix, so it ends at the first masked
+            // position (the rest stays NEG_INF).
             sm[at(0, 0)] = 0;
-            for i in 1..=n {
+            for i in (1..=n).take_while(|&i| !row_masked(i)) {
                 let (score, from) = x_entry(&sm, &sx, &sy, at(i - 1, 0), gaps_a, i);
                 sx[at(i, 0)] = score;
                 if trace {
                     px[at(i, 0)] = from;
                 }
             }
-            for j in 1..=m {
+            for j in (1..=m).take_while(|&j| !col_masked(j)) {
                 let (score, from) = y_entry(&sm, &sx, &sy, at(0, j - 1), gaps_b, j);
                 sy[at(0, j)] = score;
                 if trace {
@@ -163,7 +166,7 @@ pub(crate) fn align(
     for i in 1..=n {
         for j in 1..=m {
             let here = at(i, j);
-            if masked(i, j) {
+            if row_masked(i) || col_masked(j) {
                 continue; // stays NEG_INF in all three states
             }
             let diag = at(i - 1, j - 1);
@@ -233,7 +236,9 @@ pub(crate) fn align(
             events: Vec::new(),
         };
     };
-    let events = if trace {
+    // Unreachable (only possible in global mode, when masks wall off every
+    // path): there is no alignment to trace.
+    let events = if trace && score > NEG_INF / 2 {
         traceback((end_i, end_j, end_state), width, &pm, &px, &py)
     } else {
         Vec::new()
@@ -309,12 +314,12 @@ fn traceback(
                 }
             }
             STATE_X => {
-                events.push(TraceEvent::GapA { i: i - 1 });
+                events.push(TraceEvent::SkipA { i: i - 1 });
                 state = px[here];
                 i -= 1;
             }
             STATE_Y => {
-                events.push(TraceEvent::GapB { j: j - 1 });
+                events.push(TraceEvent::SkipB { j: j - 1 });
                 state = py[here];
                 j -= 1;
             }
@@ -327,7 +332,7 @@ fn traceback(
 
 #[cfg(test)]
 mod tests {
-    use super::super::{GapModel, linear, oracle};
+    use super::super::{GapModel, linear, oracle, phoneme_ids};
     use super::*;
     use crate::phoneme::Phoneme;
 
@@ -384,8 +389,8 @@ mod tests {
         gaps: &GapModel,
     ) -> Trace {
         align(
-            &ScoreTable::ids(a),
-            &ScoreTable::ids(b),
+            &phoneme_ids(a),
+            &phoneme_ids(b),
             &table(),
             &GapScores::new(gaps, a, None),
             &GapScores::new(gaps, b, None),
@@ -404,12 +409,12 @@ mod tests {
         for &event in &trace.events {
             total += match event {
                 TraceEvent::Pair { i, j } => table().score(&a[i], &b[j]),
-                TraceEvent::GapA { i } => {
-                    let open = !matches!(previous, Some(TraceEvent::GapA { .. }));
+                TraceEvent::SkipA { i } => {
+                    let open = !matches!(previous, Some(TraceEvent::SkipA { .. }));
                     -(if open { ga.open[i] } else { 0 }) - ga.extend[i]
                 }
-                TraceEvent::GapB { j } => {
-                    let open = !matches!(previous, Some(TraceEvent::GapB { .. }));
+                TraceEvent::SkipB { j } => {
+                    let open = !matches!(previous, Some(TraceEvent::SkipB { .. }));
                     -(if open { gb.open[j] } else { 0 }) - gb.extend[j]
                 }
                 TraceEvent::Swap { .. } => panic!("affine never swaps"),
@@ -428,8 +433,8 @@ mod tests {
         for &event in &trace.events {
             let (i, j) = match event {
                 TraceEvent::Pair { i, j } => (Some(i), Some(j)),
-                TraceEvent::GapA { i } => (Some(i), None),
-                TraceEvent::GapB { j } => (None, Some(j)),
+                TraceEvent::SkipA { i } => (Some(i), None),
+                TraceEvent::SkipB { j } => (None, Some(j)),
                 TraceEvent::Swap { .. } => unreachable!(),
             };
             if let Some(i) = i {
@@ -520,7 +525,7 @@ mod tests {
     }
 
     #[test]
-    fn masked_local_matches_the_oracle_and_avoids_the_mask() {
+    fn masked_alignment_matches_the_oracle_and_avoids_the_mask_in_every_mode() {
         let alphabet = parse("AE1 IH0 OW1 K T S");
         let table = table();
         let mut rng = Rng(0xD1B5_4A32_D192_ED03);
@@ -528,12 +533,72 @@ mod tests {
             let a = rng.sequence(&alphabet, 4);
             let b = rng.sequence(&alphabet, 4);
             let mask = rng.mask(a.len(), b.len());
-            let expected = oracle::affine(&a, &b, &table, &GAPS, Mode::Local, Some(&mask));
-            let trace = run(&a, &b, Mode::Local, Some(&mask), &GAPS);
-            assert_eq!(trace.score, expected, "{a:?} vs {b:?} masked {mask:?}");
-            assert_eq!(rescore(&trace, &a, &b, &GAPS), trace.score);
-            assert_well_formed(&trace, a.len(), b.len(), Mode::Local, Some(&mask));
+            for mode in modes() {
+                let context = || format!("{mode:?} {a:?} vs {b:?} masked {mask:?}");
+                let expected = oracle::affine(&a, &b, &table, &GAPS, mode, Some(&mask));
+                let trace = run(&a, &b, mode, Some(&mask), &GAPS);
+                if expected <= NEG_INF / 2 {
+                    // Walled off (global mode): no alignment, nothing traced.
+                    assert!(trace.score <= NEG_INF / 2, "{}", context());
+                    assert!(trace.events.is_empty(), "{}", context());
+                    continue;
+                }
+                assert_eq!(trace.score, expected, "{}", context());
+                assert_eq!(rescore(&trace, &a, &b, &GAPS), trace.score, "{}", context());
+                assert_well_formed(&trace, a.len(), b.len(), mode, Some(&mask));
+            }
         }
+    }
+
+    #[test]
+    fn a_masked_global_border_is_a_wall() {
+        // Skipping a masked row is impossible, so with row 0 masked a global
+        // alignment can't start at all.
+        let a = parse("K AE1 T");
+        let mut mask = Mask::new(a.len(), a.len());
+        mask.rows[0] = true;
+        let trace = run(&a, &a, Mode::Global, Some(&mask), &GAPS);
+        assert!(trace.score <= NEG_INF / 2);
+        assert!(trace.events.is_empty());
+    }
+
+    #[test]
+    fn ties_prefer_the_documented_cells_and_states() {
+        // Semi-global: two equal ends, (1, 1) and (1, 2): (n, m) wins.
+        let trace = run(
+            &parse("AE1"),
+            &parse("AE1 AE1"),
+            Mode::SemiGlobal,
+            None,
+            &GAPS,
+        );
+        assert_eq!(trace.events, [TraceEvent::Pair { i: 0, j: 1 }]);
+        // Local: two equal best regions; the first in row-major order wins.
+        let (a, b) = (parse("K AE1 T"), parse("K AE1 T K AE1 T"));
+        let trace = run(&a, &b, Mode::Local, None, &GAPS);
+        assert_eq!(
+            trace.events,
+            [
+                TraceEvent::Pair { i: 0, j: 0 },
+                TraceEvent::Pair { i: 1, j: 1 },
+                TraceEvent::Pair { i: 2, j: 2 },
+            ]
+        );
+        // Global, free gaps: skipping both beats pairing K with T, and the
+        // end state prefers X (ending on a skipped `a`) over Y.
+        let free = GapModel {
+            open: 0,
+            open_repeated_consonant: 0,
+            extend_vowel: 0,
+            extend_consonant: 0,
+            extend_repeated_consonant: 0,
+        };
+        let trace = run(&parse("K"), &parse("T"), Mode::Global, None, &free);
+        assert_eq!(trace.score, 0);
+        assert_eq!(
+            trace.events,
+            [TraceEvent::SkipB { j: 0 }, TraceEvent::SkipA { i: 0 }]
+        );
     }
 
     #[test]
@@ -546,8 +611,8 @@ mod tests {
             for mode in modes() {
                 let traced = run(&a, &b, mode, None, &GAPS);
                 let untraced = align(
-                    &ScoreTable::ids(&a),
-                    &ScoreTable::ids(&b),
+                    &phoneme_ids(&a),
+                    &phoneme_ids(&b),
                     &table(),
                     &GapScores::new(&GAPS, &a, None),
                     &GapScores::new(&GAPS, &b, None),

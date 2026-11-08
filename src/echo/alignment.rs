@@ -69,7 +69,7 @@ pub enum Placement {
 
 /// Echo costs in engine units (see [`super::EchoDetector::unit`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EchoCosts {
+pub(crate) struct EchoCosts {
     pub gaps: GapModel,
     /// Charged per moved segment (Waterman–Eggert).
     pub move_cost: i64,
@@ -77,7 +77,8 @@ pub struct EchoCosts {
     pub run_open: i64,
     /// Local runs scoring below this end the search (Waterman–Eggert).
     pub min_run: i64,
-    /// At most this many local runs (Waterman–Eggert).
+    /// At most this many local alignments, each split into runs
+    /// (Waterman–Eggert).
     pub max_runs: usize,
 }
 
@@ -97,14 +98,15 @@ pub struct EchoStep {
 pub struct EchoSegment {
     /// The positions of `a` the segment's steps consume.
     pub a_range: Range<usize>,
-    /// The positions of `b` the segment's steps consume (empty if it only
-    /// gaps `a`).
+    /// The positions of `b` the segment's steps consume.
     pub b_range: Range<usize>,
     /// The segment's steps, as a range into the alignment's `steps`.
     pub steps: Range<usize>,
     /// The sum of its steps' scores.
     pub score: i64,
-    /// What it cost to start this segment (run open, move).
+    /// What it cost to start this segment: `run_open` for each
+    /// Waterman–Eggert run but the first (in the orientation it was found
+    /// in), plus `move_cost` if moved.
     pub open_cost: i64,
     pub placement: Placement,
 }
@@ -113,16 +115,17 @@ pub struct EchoSegment {
 ///
 /// Invariants: `steps` are exactly the segments' steps, segments in `a`
 /// order; `Σ steps.score == Σ segments.score`; `raw = Σ segments.score −
-/// Σ segments.open_cost`; no phoneme takes part in more than one pair.
+/// Σ segments.open_cost`; no phoneme takes part in more than one pair; the
+/// in-place segments keep their order in both lines.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct RawAlignment {
+pub(crate) struct RawAlignment {
     pub raw: i64,
     pub steps: Vec<EchoStep>,
     pub segments: Vec<EchoSegment>,
-    /// How many pairs each phoneme of `a` takes part in (0 or 1).
-    pub a_coverage: Vec<u8>,
-    /// How many pairs each phoneme of `b` takes part in (0 or 1).
-    pub b_coverage: Vec<u8>,
+    /// Whether each phoneme of `a` is paired.
+    pub a_aligned: Vec<bool>,
+    /// Whether each phoneme of `b` is paired.
+    pub b_aligned: Vec<bool>,
 }
 
 impl RawAlignment {
@@ -132,13 +135,15 @@ impl RawAlignment {
             raw: 0,
             steps: Vec::new(),
             segments: Vec::new(),
-            a_coverage: vec![0; n],
-            b_coverage: vec![0; m],
+            a_aligned: vec![false; n],
+            b_aligned: vec![false; m],
         }
     }
 
     /// The same alignment with the roles of `a` and `b` exchanged, its
-    /// segments re-sorted into the new `a` order and re-marked in place.
+    /// segments re-sorted into the new `a` order. Placements carry over:
+    /// segments are disjoint in both lines, so a chain in order in both is
+    /// one in either orientation.
     pub fn transpose(self) -> Self {
         let mut segments: Vec<(EchoSegment, Vec<EchoStep>)> = self
             .segments
@@ -162,14 +167,13 @@ impl RawAlignment {
             })
             .collect();
         segments.sort_by_key(|(segment, _)| (segment.a_range.start, segment.b_range.start));
-        let (mut segments, steps) = concatenate(segments);
-        mark_in_place(&mut segments);
+        let (segments, steps) = concatenate(segments);
         Self {
             raw: self.raw,
             steps,
             segments,
-            a_coverage: self.b_coverage,
-            b_coverage: self.a_coverage,
+            a_aligned: self.b_aligned,
+            b_aligned: self.a_aligned,
         }
     }
 }
@@ -193,9 +197,7 @@ fn swap_sides(step: &OwnedAlignmentStep) -> OwnedAlignmentStep {
 
 /// An echo alignment strategy. Implementations differ in how they let
 /// material go unaligned and how they treat re-ordering.
-pub trait EchoAligner {
-    fn kind(&self) -> AlignerKind;
-
+pub(crate) trait EchoAligner {
     /// Whether `align(a, b)` and `align(b, a)` score the same. When not, the
     /// detector runs both orientations and keeps the better.
     fn is_symmetric(&self) -> bool {
@@ -224,8 +226,10 @@ pub struct EchoAlignment {
     pub normalization: EchoNormalization,
     pub steps: Vec<EchoStep>,
     pub segments: Vec<EchoSegment>,
-    pub a_coverage: Vec<u8>,
-    pub b_coverage: Vec<u8>,
+    /// Whether each phoneme of `a` is paired.
+    pub a_aligned: Vec<bool>,
+    /// Whether each phoneme of `b` is paired.
+    pub b_aligned: Vec<bool>,
 }
 
 impl EchoAlignment {
@@ -243,21 +247,14 @@ impl EchoAlignment {
 /// Labels the heaviest chain of segments that is in order in both lines
 /// [`Placement::InPlace`] and the rest [`Placement::Moved`]: a weighted
 /// longest increasing subsequence over `b` positions, taking `segments` in
-/// their (`a`) order and weighting each by its score.
-pub fn mark_in_place(segments: &mut [EchoSegment]) {
-    let weights: Vec<i64> = segments.iter().map(|segment| segment.score).collect();
-    mark_in_place_weighted(segments, &weights);
-}
-
-/// [`mark_in_place`] with explicit weights. Two segments chain when the
-/// earlier one (in `a`) ends in `b` no later than the later one starts.
-/// Ties prefer the chain ending earliest, then the earliest predecessor.
-/// Returns whether any chain had positive weight (an empty or all-negative
-/// list still marks its single heaviest segment in place).
-pub(crate) fn mark_in_place_weighted(segments: &mut [EchoSegment], weights: &[i64]) -> bool {
+/// their (`a`) order. Two segments chain when the earlier one (in `a`) ends
+/// in `b` no later than the later one starts. Ties prefer the chain ending
+/// earliest, then the earliest predecessor. An all-negative list still
+/// marks its single heaviest segment in place.
+pub(crate) fn mark_in_place(segments: &mut [EchoSegment], weights: &[i64]) {
     let k = segments.len();
     if k == 0 {
-        return false;
+        return;
     }
     // chain[x]: the best weight of a chain ending at x; prev[x] its
     // predecessor.
@@ -290,7 +287,6 @@ pub(crate) fn mark_in_place_weighted(segments: &mut [EchoSegment], weights: &[i6
         segments[x].placement = Placement::InPlace;
         at = prev[x];
     }
-    chain[end] > 0
 }
 
 /// Scores every step of a trace as one segment (none for an empty trace):
@@ -312,12 +308,12 @@ pub(crate) fn segments_from_trace(
     for &event in &trace.events {
         let score = match event {
             TraceEvent::Pair { i, j } => table.score(&a[i], &b[j]),
-            TraceEvent::GapA { i } => {
-                let opens = !matches!(previous, Some(TraceEvent::GapA { .. }));
+            TraceEvent::SkipA { i } => {
+                let opens = !matches!(previous, Some(TraceEvent::SkipA { .. }));
                 -(if opens { gaps_a.open[i] } else { 0 }) - gaps_a.extend[i]
             }
-            TraceEvent::GapB { j } => {
-                let opens = !matches!(previous, Some(TraceEvent::GapB { .. }));
+            TraceEvent::SkipB { j } => {
+                let opens = !matches!(previous, Some(TraceEvent::SkipB { .. }));
                 -(if opens { gaps_b.open[j] } else { 0 }) - gaps_b.extend[j]
             }
             TraceEvent::Swap { .. } => unreachable!("echo aligners never swap"),
@@ -338,7 +334,8 @@ pub(crate) fn segments_from_trace(
     }
 }
 
-/// A segment spanning `steps` (step range left at 0..len).
+/// A segment spanning `steps` (step range left at 0..len). Every segment
+/// pairs at least one phoneme, so neither range is empty.
 pub(crate) fn segment_of(steps: &[EchoStep]) -> EchoSegment {
     let span = |indices: &mut dyn Iterator<Item = usize>| -> Range<usize> {
         let mut range: Option<Range<usize>> = None;
@@ -376,13 +373,13 @@ pub(crate) fn concatenate(
     (all_segments, all_steps)
 }
 
-/// How many pairs each position takes part in, per side.
-pub(crate) fn coverage(steps: &[EchoStep], n: usize, m: usize) -> (Vec<u8>, Vec<u8>) {
-    let (mut a, mut b) = (vec![0u8; n], vec![0u8; m]);
+/// Which positions of each side are paired.
+pub(crate) fn aligned(steps: &[EchoStep], n: usize, m: usize) -> (Vec<bool>, Vec<bool>) {
+    let (mut a, mut b) = (vec![false; n], vec![false; m]);
     for step in steps {
         if let (Some(i), Some(j)) = (step.a_index, step.b_index) {
-            a[i] = a[i].saturating_add(1);
-            b[j] = b[j].saturating_add(1);
+            a[i] = true;
+            b[j] = true;
         }
     }
     (a, b)
@@ -407,12 +404,18 @@ mod tests {
         segments.iter().map(|s| s.placement).collect()
     }
 
+    /// Marks with each segment weighted by its score.
+    fn mark_by_score(segments: &mut [EchoSegment]) {
+        let weights: Vec<i64> = segments.iter().map(|s| s.score).collect();
+        mark_in_place(segments, &weights);
+    }
+
     use Placement::{InPlace, Moved};
 
     #[test]
     fn in_order_segments_are_all_in_place() {
         let mut segments = [segment(0..3, 0..3, 5), segment(3..6, 4..7, 5)];
-        mark_in_place(&mut segments);
+        mark_by_score(&mut segments);
         assert_eq!(placements(&segments), [InPlace, InPlace]);
     }
 
@@ -420,10 +423,10 @@ mod tests {
     fn the_lighter_side_of_a_swap_is_moved() {
         // a = X Y, b = Y X: one of them moved — the lighter one.
         let mut segments = [segment(0..3, 4..7, 9), segment(3..7, 0..4, 4)];
-        mark_in_place(&mut segments);
+        mark_by_score(&mut segments);
         assert_eq!(placements(&segments), [InPlace, Moved]);
         let mut segments = [segment(0..3, 4..7, 3), segment(3..7, 0..4, 8)];
-        mark_in_place(&mut segments);
+        mark_by_score(&mut segments);
         assert_eq!(placements(&segments), [Moved, InPlace]);
     }
 
@@ -435,7 +438,7 @@ mod tests {
             segment(2..4, 2..4, 6),
             segment(4..6, 0..2, 5),
         ];
-        mark_in_place(&mut segments);
+        mark_by_score(&mut segments);
         assert_eq!(placements(&segments), [Moved, InPlace, Moved]);
         // a = X Y Z, b = Z X Y: X and Y stay in order.
         let mut segments = [
@@ -443,7 +446,7 @@ mod tests {
             segment(2..4, 4..6, 5),
             segment(4..6, 0..2, 6),
         ];
-        mark_in_place(&mut segments);
+        mark_by_score(&mut segments);
         assert_eq!(placements(&segments), [InPlace, InPlace, Moved]);
     }
 
@@ -455,7 +458,7 @@ mod tests {
             segment(2..4, 0..2, 5),
             segment(4..6, 0..2, 5),
         ];
-        mark_in_place(&mut segments);
+        mark_by_score(&mut segments);
         assert_eq!(placements(&segments), [InPlace, Moved, Moved]);
     }
 }

@@ -43,11 +43,6 @@ impl ScoreTable {
     pub fn score(&self, a: &Phoneme, b: &Phoneme) -> i64 {
         self.get(phoneme_id(a), phoneme_id(b))
     }
-
-    /// The [`phoneme_id`] of every phoneme in `phonemes`, for indexing.
-    pub fn ids(phonemes: &[Phoneme]) -> Vec<u8> {
-        phonemes.iter().map(phoneme_id).collect()
-    }
 }
 
 impl std::fmt::Debug for ScoreTable {
@@ -95,13 +90,6 @@ mod tests {
         assert_eq!(table.score(&p("AE1"), &p("AE0")), -1);
         assert_eq!(table.score(&p("T"), &p("D")), -1);
         assert_eq!(table.score(&p("T"), &p("AE1")), -100);
-    }
-
-    #[test]
-    fn ids_index_the_table() {
-        let phonemes: Vec<Phoneme> = ["K", "AE1", "T"].iter().map(|s| p(s)).collect();
-        let ids = ScoreTable::ids(&phonemes);
-        assert_eq!(ids, phonemes.iter().map(phoneme_id).collect::<Vec<_>>());
     }
 
     #[test]

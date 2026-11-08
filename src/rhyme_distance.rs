@@ -68,7 +68,6 @@ impl Default for RhymeDistanceConfig {
     }
 }
 
-// TODO: should this be folded into DpOutput?
 #[derive(Debug, PartialEq, Eq)]
 pub struct RhymeDistanceOutput<'a> {
     score: u32,
@@ -646,7 +645,7 @@ mod tests {
     /// sharing the cost primitives but none of the machinery under test: no
     /// matrix, no boundary initialization, no prefix/suffix stripping, no
     /// slice swapping.
-    /// This is an *implementation* oracle — it validates that run_dp and its
+    /// This is an *implementation* oracle — it validates that the DP and its
     /// wrappers faithfully minimize the OSA recurrence, not that OSA is the
     /// right model. Exponential, so only for tiny inputs.
     fn oracle_distance(
@@ -769,14 +768,14 @@ mod tests {
 
     #[test]
     fn interior_gap_charges_the_gapped_phoneme() {
-        // Regression: run_dp once swapped the insert/delete gap costs, charging
+        // Regression: the DP once swapped the insert/delete gap costs, charging
         // an interior gap by the *other* sequence's current phoneme. That let a
         // vowel be indel'd for the price of an adjacent consonant, dodging the
         // vowel_indel_penalty (e.g. "blueprint" vs "new bag" scored far too low).
         //
         // Matching consonants on both sides force the vowel to be an interior
-        // gap. Both orientations are checked: inserting the vowel exercises the
-        // GapInFirst branch, deleting it exercises GapInSecond.
+        // gap. Both orientations are checked: inserting the vowel skips a `b`
+        // phoneme, deleting it skips an `a` phoneme.
         let s = scorer();
         let vowel_indel = config().vowel_indel_penalty;
         assert_eq!(

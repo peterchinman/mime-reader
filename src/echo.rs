@@ -25,31 +25,32 @@
 //! Echo keeps its own coefficients ([`SimilarityConfig`]); it never reads
 //! [`crate::RhymeDistanceConfig`].
 
-pub mod alignment;
-pub mod flatten;
-pub mod scheme;
-pub mod semi_global;
-pub mod similarity;
-pub mod template;
-pub mod waterman_eggert;
+mod alignment;
+mod flatten;
+mod scheme;
+mod semi_global;
+mod similarity;
+mod template;
+mod waterman_eggert;
 
-pub use alignment::{
-    AlignerKind, EchoAligner, EchoAlignment, EchoCosts, EchoSegment, EchoStep, Placement,
-    RawAlignment, mark_in_place,
-};
-pub use flatten::{FlatLine, flatten, flatten_variants};
-pub use scheme::{EchoFormResult, EchoPairResult, EchoPairScore, EchoStrictness, RepetitionScheme};
-pub use semi_global::SemiGlobalAligner;
+pub use alignment::{AlignerKind, EchoAlignment, EchoSegment, EchoStep, Placement};
+pub use flatten::FlatLine;
+pub use scheme::{EchoFormResult, EchoPairResult, EchoPairScore, EchoScheme, EchoStrictness};
 pub use similarity::{
     CALIBRATED_CONSONANT_ZERO_POINT, CALIBRATED_VOWEL_ZERO_POINT, SimilarityConfig, StressWeights,
-    TUNED_CONSONANT_ZERO_POINT, ZeroPoints, calibrate_zero_points, similarity_table,
+    TUNED_CONSONANT_ZERO_POINT, ZeroPoints, calibrate_zero_points,
 };
-pub use template::EchoTemplate;
-pub use waterman_eggert::WatermanEggertAligner;
+pub use template::{EchoTemplate, MAX_TEMPLATE_LINES};
+
+use alignment::{EchoAligner, EchoCosts, RawAlignment};
+use flatten::flatten_variants;
+use semi_global::SemiGlobalAligner;
+use similarity::similarity_table;
+use waterman_eggert::WatermanEggertAligner;
 
 use crate::align::{GapModel, ScoreTable};
 use crate::consonant_distance::{AnalyticConsonantDistance, ConsonantDistanceScorer};
-use crate::error::EchoError;
+use crate::error::{EchoError, InvalidEchoConfigError};
 use crate::line::Line;
 use crate::phoneme::Phoneme;
 use crate::vowel_distance::{VowelDistanceScorer, VowelHexGraph};
@@ -87,7 +88,7 @@ pub struct StructureConfig {
     /// After the first, local runs scoring less end the search. ¾ unit: a
     /// lone primary vowel counts, a lone consonant doesn't.
     pub min_run: u32,
-    /// At most this many local runs.
+    /// At most this many local alignments, each split into runs.
     pub max_runs: usize,
 }
 
@@ -107,13 +108,15 @@ impl Default for StructureConfig {
 pub enum EchoNormalization {
     /// The smaller self-similarity: how much of the shorter line is echoed.
     /// A truncation of a line is a full echo of it — but so is a short line
-    /// found inside a long one, which is where many of the default's false
-    /// positives come from.
-    #[default]
+    /// found inside a long one, however short.
     ShorterSelfSimilarity,
-    /// The mean of both self-similarities: extra material on either side
-    /// counts against the echo, so a truncation scores below 1. Fewer false
-    /// positives from short lines; Waterman–Eggert's tuned config uses it.
+    /// The mean of both self-similarities: how much the two lines share.
+    /// Material on either side that isn't echoed counts against the score,
+    /// so containment is graded by length (a half-length truncation scores
+    /// about ⅔). The default for both aligners: on the labeled corpus it
+    /// caught the same echoes as shorter-line normalization with fewer false
+    /// positives (−13% on loose poems, −65% on strict ones).
+    #[default]
     MeanSelfSimilarity,
 }
 
@@ -126,8 +129,8 @@ pub struct EchoConfig {
     pub gaps: GapConfig,
     pub structure: StructureConfig,
     pub normalization: EchoNormalization,
-    /// The aligner [`EchoDetector::compare_lines`] and
-    /// [`EchoDetector::compare_phonemes`] use.
+    /// The aligner that scores every comparison. Its tuned config is
+    /// [`EchoConfig::for_aligner`].
     pub aligner: AlignerKind,
     /// A line with more pronunciation combinations than this is compared
     /// under its first pronunciations only.
@@ -150,20 +153,101 @@ impl Default for EchoConfig {
     }
 }
 
+/// The largest value [`EchoConfig::validate`] accepts for each kind of
+/// field: far beyond any useful setting, small enough that no score or cost
+/// can overflow.
+const MAX_COEFFICIENT: u32 = 1000;
+const MAX_ZERO_POINT: u32 = 10_000;
+const MAX_STRESS_WEIGHT: u32 = 100;
+const MAX_COST: u32 = 1_000_000;
+const MAX_RUNS: usize = 1000;
+const MAX_VARIANTS_PER_LINE: usize = 4096;
+const MAX_VARIANT_PAIRS: usize = 65_536;
+
 impl EchoConfig {
+    /// Checks every field against its limit, so that untrusted input (the
+    /// wasm bindings) can't overflow a score or blow up the variant search.
+    pub fn validate(&self) -> Result<(), InvalidEchoConfigError> {
+        let s = &self.similarity;
+        let w = &s.stress_weights;
+        let g = &self.gaps;
+        let t = &self.structure;
+        let fields: [(&'static str, u64, u64); 15] = [
+            (
+                "vowel_coefficient",
+                s.vowel_coefficient.into(),
+                MAX_COEFFICIENT.into(),
+            ),
+            (
+                "consonant_coefficient",
+                s.consonant_coefficient.into(),
+                MAX_COEFFICIENT.into(),
+            ),
+            (
+                "vowel_zero_point",
+                s.vowel_zero_point.into(),
+                MAX_ZERO_POINT.into(),
+            ),
+            (
+                "consonant_zero_point",
+                s.consonant_zero_point.into(),
+                MAX_ZERO_POINT.into(),
+            ),
+            ("primary_weight", w.primary.into(), MAX_STRESS_WEIGHT.into()),
+            (
+                "secondary_weight",
+                w.secondary.into(),
+                MAX_STRESS_WEIGHT.into(),
+            ),
+            (
+                "unstressed_weight",
+                w.unstressed.into(),
+                MAX_STRESS_WEIGHT.into(),
+            ),
+            ("gap_open", g.gap_open.into(), MAX_COST.into()),
+            ("gap_extend", g.gap_extend.into(), MAX_COST.into()),
+            (
+                "gap_open_repeated_consonant",
+                g.gap_open_repeated_consonant.into(),
+                MAX_COST.into(),
+            ),
+            ("move_cost", t.move_cost.into(), MAX_COST.into()),
+            ("run_open", t.run_open.into(), MAX_COST.into()),
+            ("min_run", t.min_run.into(), MAX_COST.into()),
+            ("max_runs", t.max_runs as u64, MAX_RUNS as u64),
+            (
+                "max_variants_per_line",
+                self.max_variants_per_line as u64,
+                MAX_VARIANTS_PER_LINE as u64,
+            ),
+        ];
+        let pairs = (
+            "max_variant_pairs",
+            self.max_variant_pairs as u64,
+            MAX_VARIANT_PAIRS as u64,
+        );
+        for (field, value, max) in fields.into_iter().chain([pairs]) {
+            if value > max {
+                return Err(InvalidEchoConfigError { field, value, max });
+            }
+        }
+        Ok(())
+    }
+
     /// The config `aligner` was tuned with, by cross-validated search on the
     /// labeled corpus (`data/echo/README.md`). [`EchoStrictness::threshold`]
     /// was measured under these configs; another config needs its own
     /// thresholds.
     ///
-    /// - Semi-global: the defaults, which are the hand-set structure plus
-    ///   one tuned value, [`TUNED_CONSONANT_ZERO_POINT`]. The search's full
-    ///   optimum was not significantly better and its vowel-side values
-    ///   didn't agree across folds.
-    /// - Waterman–Eggert: the search's optimum. It needs its structural
-    ///   costs tuned (the zero point alone barely helps), and it uses mean
-    ///   normalization. Several of these values sit near the edge of the
-    ///   searched range (`run_open` at its maximum).
+    /// - Semi-global: the defaults, which are the hand-set costs plus the
+    ///   two choices every search agreed on: [`TUNED_CONSONANT_ZERO_POINT`]
+    ///   and mean normalization. The search's full optimum was not
+    ///   significantly better, and its vowel-side values didn't agree across
+    ///   folds.
+    /// - Waterman–Eggert: the search's optimum (tuned on the whole corpus,
+    ///   so in-sample). It needs its structural costs tuned — the zero point
+    ///   alone barely helps — and `run_open` sits at the top of the searched
+    ///   range.
     pub fn for_aligner(aligner: AlignerKind) -> Self {
         match aligner {
             AlignerKind::SemiGlobal => Self::default(),
@@ -246,7 +330,7 @@ fn derive_costs(config: &EchoConfig, unit: i64) -> EchoCosts {
 }
 
 /// The aligner for `kind`.
-pub fn aligner(kind: AlignerKind) -> &'static dyn EchoAligner {
+fn aligner(kind: AlignerKind) -> &'static dyn EchoAligner {
     match kind {
         AlignerKind::SemiGlobal => &SemiGlobalAligner,
         AlignerKind::WatermanEggert => &WatermanEggertAligner,
@@ -265,7 +349,8 @@ impl EchoDetector {
         Self::with_config(EchoConfig::default())
     }
 
-    /// The default engines with `config`.
+    /// The default engines with `config`, which should pass
+    /// [`EchoConfig::validate`] (beyond its limits, scores may overflow).
     pub fn with_config(config: EchoConfig) -> Self {
         Self::with_scorers_and_config(
             &VowelHexGraph::new(),
@@ -274,12 +359,14 @@ impl EchoDetector {
         )
     }
 
-    /// Builds the similarity table from `vowels` and `consonants`.
+    /// Builds the similarity table from `vowels` and `consonants`. `config`
+    /// should pass [`EchoConfig::validate`].
     pub fn with_scorers_and_config<V, C>(vowels: &V, consonants: &C, config: EchoConfig) -> Self
     where
         V: VowelDistanceScorer,
         C: ConsonantDistanceScorer,
     {
+        debug_assert_eq!(config.validate(), Ok(()));
         let (table, unit) = similarity_table(&config.similarity, vowels, consonants);
         Self {
             table,
@@ -287,15 +374,6 @@ impl EchoDetector {
             costs: derive_costs(&config, unit),
             config,
         }
-    }
-
-    /// Rebuilds the detector from `vowels`, `consonants` and `config`.
-    pub fn set_config<V, C>(&mut self, vowels: &V, consonants: &C, config: EchoConfig)
-    where
-        V: VowelDistanceScorer,
-        C: ConsonantDistanceScorer,
-    {
-        *self = Self::with_scorers_and_config(vowels, consonants, config);
     }
 
     pub fn config(&self) -> EchoConfig {
@@ -308,12 +386,14 @@ impl EchoDetector {
         self.unit
     }
 
-    pub fn table(&self) -> &ScoreTable {
+    #[cfg(test)]
+    pub(crate) fn table(&self) -> &ScoreTable {
         &self.table
     }
 
     /// The config's costs in engine units.
-    pub fn costs(&self) -> &EchoCosts {
+    #[cfg(test)]
+    pub(crate) fn costs(&self) -> &EchoCosts {
         &self.costs
     }
 
@@ -323,23 +403,14 @@ impl EchoDetector {
         phonemes.iter().map(|p| self.table.score(p, p)).sum()
     }
 
-    /// Compares two phoneme sequences with the configured aligner.
+    /// Compares two phoneme sequences with the configured aligner. An
+    /// asymmetric aligner runs in both orientations; the better is reported
+    /// in this one.
     pub fn compare_phonemes(&self, a: &[Phoneme], b: &[Phoneme]) -> EchoAlignment {
-        self.compare_phonemes_with(self.config.aligner, a, b)
-    }
-
-    /// Compares two phoneme sequences with `kind`. An asymmetric aligner
-    /// runs in both orientations; the better is reported in this one.
-    pub fn compare_phonemes_with(
-        &self,
-        kind: AlignerKind,
-        a: &[Phoneme],
-        b: &[Phoneme],
-    ) -> EchoAlignment {
         let raw = if a.is_empty() || b.is_empty() {
             RawAlignment::empty(a.len(), b.len())
         } else {
-            let aligner = aligner(kind);
+            let aligner = aligner(self.config.aligner);
             let forward = aligner.align(a, b, &self.table, &self.costs);
             if aligner.is_symmetric() {
                 forward
@@ -374,41 +445,31 @@ impl EchoDetector {
             normalization: self.config.normalization,
             steps: raw.steps,
             segments: raw.segments,
-            a_coverage: raw.a_coverage,
-            b_coverage: raw.b_coverage,
+            a_aligned: raw.a_aligned,
+            b_aligned: raw.b_aligned,
         }
     }
 
-    /// Compares two lines with the configured aligner.
+    /// Compares two lines with the configured aligner, over their
+    /// pronunciation variants (capped per line and per pair), keeping the
+    /// most similar. Ties keep the earliest pair, so first pronunciations
+    /// win.
     pub fn compare_lines(&self, a: &Line, b: &Line) -> Result<EchoMatch, EchoError> {
-        self.compare_lines_with(self.config.aligner, a, b)
-    }
-
-    /// Compares two lines with `kind`, over their pronunciation variants
-    /// (capped per line and per pair), keeping the most similar. Ties keep
-    /// the earliest pair, so first pronunciations win.
-    pub fn compare_lines_with(
-        &self,
-        kind: AlignerKind,
-        a: &Line,
-        b: &Line,
-    ) -> Result<EchoMatch, EchoError> {
         let mut a_variants = flatten_variants(a, self.config.max_variants_per_line)?;
         let mut b_variants = flatten_variants(b, self.config.max_variants_per_line)?;
         let cap = self.config.max_variant_pairs.max(1);
         while a_variants.len() * b_variants.len() > cap {
-            // Drop to first pronunciations on the side with more variants.
+            // Keep as many of the larger side's first variants as fit.
             if a_variants.len() >= b_variants.len() {
-                a_variants.truncate(1);
+                a_variants.truncate((cap / b_variants.len()).max(1));
             } else {
-                b_variants.truncate(1);
+                b_variants.truncate((cap / a_variants.len()).max(1));
             }
         }
         let mut best: Option<(EchoAlignment, usize, usize)> = None;
         for (x, a_flat) in a_variants.iter().enumerate() {
             for (y, b_flat) in b_variants.iter().enumerate() {
-                let alignment =
-                    self.compare_phonemes_with(kind, &a_flat.phonemes, &b_flat.phonemes);
+                let alignment = self.compare_phonemes(&a_flat.phonemes, &b_flat.phonemes);
                 if best
                     .as_ref()
                     .is_none_or(|(known, ..)| alignment.similarity > known.similarity)
@@ -515,14 +576,33 @@ mod tests {
     use super::test_support::*;
     use super::*;
 
+    /// Every aligner under its tuned config, plus combinations the presets
+    /// don't cover (Waterman–Eggert's mechanics under the default costs,
+    /// shorter-line normalization).
+    fn configs() -> Vec<EchoConfig> {
+        vec![
+            EchoConfig::for_aligner(AlignerKind::SemiGlobal),
+            EchoConfig::for_aligner(AlignerKind::WatermanEggert),
+            EchoConfig {
+                aligner: AlignerKind::WatermanEggert,
+                ..EchoConfig::default()
+            },
+            EchoConfig {
+                normalization: EchoNormalization::ShorterSelfSimilarity,
+                ..EchoConfig::default()
+            },
+        ]
+    }
+
     /// Every structural promise an [`EchoAlignment`] makes.
     fn assert_invariants(
         alignment: &EchoAlignment,
         a: &[Phoneme],
         b: &[Phoneme],
-        kind: AlignerKind,
+        d: &EchoDetector,
     ) {
-        let context = || format!("{kind} on {a:?} vs {b:?}: {alignment:?}");
+        let config = d.config();
+        let context = || format!("{config:?} on {a:?} vs {b:?}: {alignment:?}");
         // Steps are exactly the segments' steps, segments in a order.
         let mut next = 0;
         for segment in &alignment.segments {
@@ -562,26 +642,55 @@ mod tests {
             .map(|s| s.score - s.open_cost)
             .sum();
         assert_eq!(alignment.raw, assembled, "{}", context());
-        // Coverage counts pairs, at most one per phoneme.
-        let mut a_coverage = vec![0u8; a.len()];
-        let mut b_coverage = vec![0u8; b.len()];
-        for step in &alignment.steps {
-            if let (Some(i), Some(j)) = (step.a_index, step.b_index) {
-                a_coverage[i] += 1;
-                b_coverage[j] += 1;
-            }
+        // Placement agrees with what each segment was charged, and the
+        // in-place segments keep their order in both lines.
+        let (run_open, move_cost) = (d.costs().run_open, d.costs().move_cost);
+        for segment in &alignment.segments {
+            let allowed = match segment.placement {
+                Placement::InPlace => [0, run_open],
+                Placement::Moved => [move_cost, run_open + move_cost],
+            };
+            assert!(allowed.contains(&segment.open_cost), "{}", context());
         }
-        assert_eq!(alignment.a_coverage, a_coverage, "{}", context());
-        assert_eq!(alignment.b_coverage, b_coverage, "{}", context());
+        let in_place: Vec<&EchoSegment> = alignment
+            .segments
+            .iter()
+            .filter(|s| s.placement == Placement::InPlace)
+            .collect();
         assert!(
-            a_coverage.iter().chain(&b_coverage).all(|&c| c <= 1),
+            in_place
+                .windows(2)
+                .all(|w| w[0].a_range.end <= w[1].a_range.start
+                    && w[0].b_range.end <= w[1].b_range.start),
             "{}",
             context()
         );
+        // Each phoneme is paired at most once, and `*_aligned` says which.
+        let mut a_uses = vec![0; a.len()];
+        let mut b_uses = vec![0; b.len()];
+        for step in &alignment.steps {
+            if let (Some(i), Some(j)) = (step.a_index, step.b_index) {
+                a_uses[i] += 1;
+                b_uses[j] += 1;
+            }
+        }
+        assert!(
+            a_uses.iter().chain(&b_uses).all(|&uses| uses <= 1),
+            "{}",
+            context()
+        );
+        let paired = |uses: &[i32]| uses.iter().map(|&n| n == 1).collect::<Vec<_>>();
+        assert_eq!(alignment.a_aligned, paired(&a_uses), "{}", context());
+        assert_eq!(alignment.b_aligned, paired(&b_uses), "{}", context());
         // Normalization.
-        let denominator = alignment.self_similarity_a.min(alignment.self_similarity_b);
-        if denominator > 0 {
-            let expected = alignment.raw as f64 / denominator as f64;
+        let (self_a, self_b) = (alignment.self_similarity_a, alignment.self_similarity_b);
+        assert_eq!(alignment.normalization, config.normalization);
+        let denominator = match config.normalization {
+            EchoNormalization::ShorterSelfSimilarity => self_a.min(self_b) as f64,
+            EchoNormalization::MeanSelfSimilarity => (self_a + self_b) as f64 / 2.0,
+        };
+        if denominator > 0.0 {
+            let expected = alignment.raw as f64 / denominator;
             assert!(
                 (f64::from(alignment.similarity) - expected).abs() < 1e-5,
                 "{}",
@@ -595,19 +704,25 @@ mod tests {
     }
 
     #[test]
-    fn invariants_hold_on_random_sweeps_for_every_aligner() {
+    fn invariants_hold_on_random_sweeps_for_every_config() {
         let alphabet = parse("AE1 AE0 AE2 IH0 OW1 ER0 AY1 K T T S Z M N D L");
         let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
-        let d = detector();
+        let detectors: Vec<EchoDetector> = configs()
+            .into_iter()
+            .map(EchoDetector::with_config)
+            .collect();
         for _ in 0..800 {
             let (a, b) = (rng.sequence(&alphabet, 18), rng.sequence(&alphabet, 18));
-            for kind in AlignerKind::ALL {
-                let forward = d.compare_phonemes_with(kind, &a, &b);
-                assert_invariants(&forward, &a, &b, kind);
-                let backward = d.compare_phonemes_with(kind, &b, &a);
+            for d in &detectors {
+                let forward = d.compare_phonemes(&a, &b);
+                assert_invariants(&forward, &a, &b, d);
+                let backward = d.compare_phonemes(&b, &a);
+                assert_invariants(&backward, &b, &a, d);
                 assert_eq!(
-                    forward.raw, backward.raw,
-                    "{kind} must be symmetric: {a:?} vs {b:?}"
+                    forward.raw,
+                    backward.raw,
+                    "{:?} must be symmetric: {a:?} vs {b:?}",
+                    d.config()
                 );
             }
         }
@@ -615,13 +730,14 @@ mod tests {
 
     #[test]
     fn verbatim_repeats_score_exactly_one() {
-        for kind in AlignerKind::ALL {
+        for config in configs() {
+            let d = EchoDetector::with_config(config);
             for line in [SWAP_A, BIRD, UNRELATED_B, "AH0"] {
                 let a = parse(line);
                 assert_eq!(
-                    detector().compare_phonemes_with(kind, &a, &a).similarity,
+                    d.compare_phonemes(&a, &a).similarity,
                     1.0,
-                    "{kind} {line}"
+                    "{config:?} {line}"
                 );
             }
         }
@@ -629,24 +745,41 @@ mod tests {
 
     #[test]
     fn empty_sequences_score_zero() {
-        for kind in AlignerKind::ALL {
-            let alignment = detector().compare_phonemes_with(kind, &[], &parse(SWAP_A));
+        for config in configs() {
+            let alignment = EchoDetector::with_config(config).compare_phonemes(&[], &parse(SWAP_A));
             assert_eq!((alignment.raw, alignment.similarity), (0, 0.0));
             assert!(alignment.steps.is_empty());
-            assert_eq!(alignment.b_coverage.len(), parse(SWAP_A).len());
+            assert_eq!(alignment.b_aligned.len(), parse(SWAP_A).len());
         }
+    }
+
+    #[test]
+    fn both_aligners_default_to_mean_normalization() {
+        for kind in AlignerKind::ALL {
+            assert_eq!(
+                EchoConfig::for_aligner(kind).normalization,
+                EchoNormalization::MeanSelfSimilarity
+            );
+            assert_eq!(EchoConfig::for_aligner(kind).aligner, kind);
+        }
+        assert_eq!(
+            EchoConfig::for_aligner(AlignerKind::SemiGlobal),
+            EchoConfig::default()
+        );
     }
 
     #[test]
     fn normalization_chooses_the_denominator() {
         let (dark, darker) = (parse("D AA1 R K"), parse("D AA1 R K ER0"));
-        let shorter = detector().compare_phonemes(&dark, &darker);
-        assert_eq!(shorter.similarity, 1.0);
-        let config = EchoConfig {
-            normalization: EchoNormalization::MeanSelfSimilarity,
+        let shorter = EchoDetector::with_config(EchoConfig {
+            normalization: EchoNormalization::ShorterSelfSimilarity,
             ..EchoConfig::default()
-        };
-        let mean = EchoDetector::with_config(config).compare_phonemes(&dark, &darker);
+        })
+        .compare_phonemes(&dark, &darker);
+        // A truncation is a full echo of the shorter line...
+        assert_eq!(shorter.similarity, 1.0);
+        // ...but under the default, the unechoed syllable counts against it.
+        let mean = detector().compare_phonemes(&dark, &darker);
         assert_eq!(mean.raw, shorter.raw);
         let expected = shorter.raw as f64
             / ((shorter.self_similarity_a + shorter.self_similarity_b) as f64 / 2.0);
@@ -663,14 +796,35 @@ mod tests {
         assert_eq!(d.costs().min_run * 4, d.unit() * 3);
         let mut config = EchoConfig::default();
         config.gaps.gap_open = 250;
-        let mut cheaper = EchoDetector::new();
-        cheaper.set_config(
+        let cheaper = EchoDetector::with_scorers_and_config(
             &VowelHexGraph::new(),
             &AnalyticConsonantDistance::new(),
             config,
         );
         assert_eq!(cheaper.costs().gaps.open * 4, cheaper.unit());
         assert_eq!(cheaper.config(), config);
+    }
+
+    #[test]
+    fn configs_are_validated() {
+        for kind in AlignerKind::ALL {
+            assert_eq!(EchoConfig::for_aligner(kind).validate(), Ok(()));
+        }
+        let mut config = EchoConfig::default();
+        config.similarity.vowel_coefficient = u32::MAX;
+        assert_eq!(
+            config.validate(),
+            Err(InvalidEchoConfigError {
+                field: "vowel_coefficient",
+                value: u64::from(u32::MAX),
+                max: u64::from(MAX_COEFFICIENT),
+            })
+        );
+        let config = EchoConfig {
+            max_variant_pairs: usize::MAX,
+            ..EchoConfig::default()
+        };
+        assert_eq!(config.validate().unwrap_err().field, "max_variant_pairs");
     }
 
     #[test]
@@ -684,31 +838,37 @@ mod tests {
         // Resegmentation is invisible: the flattened phonemes are compared.
         let a = Line::new("dark demands I call my own", dict());
         let b = Line::new("call my own dark demand sigh", dict());
-        let echo = detector()
-            .compare_lines_with(AlignerKind::WatermanEggert, &a, &b)
-            .unwrap();
+        let lenient =
+            EchoDetector::with_config(EchoConfig::for_aligner(AlignerKind::WatermanEggert));
+        let echo = lenient.compare_lines(&a, &b).unwrap();
         assert!(
             echo.alignment.similarity > 0.85,
             "{}",
             echo.alignment.similarity
         );
-        let strict = detector()
-            .compare_lines_with(AlignerKind::SemiGlobal, &a, &b)
-            .unwrap();
+        let strict = detector().compare_lines(&a, &b).unwrap();
         assert!(strict.alignment.similarity < 0.7);
     }
 
     #[test]
     fn variant_pairs_are_capped() {
-        let config = EchoConfig {
-            max_variant_pairs: 2,
-            ..EchoConfig::default()
+        let capped = |max_variant_pairs| {
+            EchoDetector::with_config(EchoConfig {
+                max_variant_pairs,
+                ..EchoConfig::default()
+            })
         };
-        let capped = EchoDetector::with_config(config);
+        // "fire truck" has two pronunciations.
         let fire_truck = Line::new("fire truck", dict());
-        let echo = capped.compare_lines(&fire_truck, &fire_truck).unwrap();
+        let fire = Line::new("fire", dict());
+        let echo = capped(2).compare_lines(&fire_truck, &fire_truck).unwrap();
         assert_eq!(echo.variant_pairs_tried, 2);
         assert_eq!(echo.alignment.similarity, 1.0);
+        // The larger side keeps as many variants as fit beside the other.
+        let echo = capped(3).compare_lines(&fire_truck, &fire).unwrap();
+        assert_eq!(echo.variant_pairs_tried, 2);
+        let echo = capped(256).compare_lines(&fire_truck, &fire).unwrap();
+        assert_eq!(echo.variant_pairs_tried, 4);
     }
 
     #[test]

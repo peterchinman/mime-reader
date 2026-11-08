@@ -11,8 +11,8 @@ use wasm_bindgen::prelude::*;
 
 use super::{AlignmentStepDto, WasmAnalyzer};
 use crate::echo::{
-    AlignerKind, EchoConfig, EchoDetector, EchoMatch, EchoNormalization, EchoStrictness,
-    EchoTemplate, GapConfig, Placement, RepetitionScheme, SimilarityConfig, StressWeights,
+    AlignerKind, EchoConfig, EchoDetector, EchoMatch, EchoNormalization, EchoScheme,
+    EchoStrictness, EchoTemplate, GapConfig, Placement, SimilarityConfig, StressWeights,
     StructureConfig,
 };
 use crate::line::Line;
@@ -44,35 +44,38 @@ impl WasmAnalyzer {
         self.echo_config.into()
     }
 
-    /// Replaces the echo config used by `scoreEcho` and `checkEchoForm`.
+    /// Replaces the echo config used by `scoreEcho` and `checkEchoForm`. Its
+    /// aligner scores every comparison; `echoConfigFor` gives each aligner's
+    /// tuned config. Rejects values beyond the config's limits.
     #[wasm_bindgen(js_name = setEchoConfig)]
-    pub fn set_echo_config(&mut self, config: EchoConfigDto) {
-        self.echo_config = config.into();
+    pub fn set_echo_config(&mut self, config: EchoConfigDto) -> Result<(), JsError> {
+        let config = EchoConfig::from(config);
+        config.validate()?;
+        self.echo_config = config;
+        Ok(())
     }
 
-    /// Scores how strongly line `b` echoes line `a`, with `aligner` (the
-    /// config's aligner when omitted).
+    /// Scores how strongly line `b` echoes line `a`, with the config's
+    /// aligner.
     #[wasm_bindgen(js_name = scoreEcho)]
-    pub fn score_echo(
-        &self,
-        a: &str,
-        b: &str,
-        aligner: Option<AlignerKindDto>,
-    ) -> Result<EchoAlignmentDto, JsError> {
-        let detector = self.echo_detector();
-        let kind = aligner.map_or(self.echo_config.aligner, AlignerKind::from);
+    pub fn score_echo(&self, a: &str, b: &str) -> Result<EchoAlignmentDto, JsError> {
         let (a_line, b_line) = (Line::new(a, &*self.dict), Line::new(b, &*self.dict));
-        let echo = detector.compare_lines_with(kind, &a_line, &b_line)?;
-        Ok(EchoAlignmentDto::new(&echo, &a_line, &b_line, kind))
+        let echo = self.echo_detector().compare_lines(&a_line, &b_line)?;
+        Ok(EchoAlignmentDto::new(
+            &echo,
+            &a_line,
+            &b_line,
+            self.echo_config.aligner,
+        ))
     }
 
     /// Checks a poem's lines against a repetition template. Blank lines
     /// (stanza breaks) are skipped, so indices count non-blank lines.
     ///
     /// Followers pass at `threshold` when given, else at `strictness`'s
-    /// threshold for the aligner (the template's conventional strictness
-    /// when omitted). The measured thresholds assume the aligner's tuned
-    /// config (`echoConfigFor`).
+    /// measured threshold for the config's aligner (the template's
+    /// conventional strictness when omitted). The measured thresholds assume
+    /// the aligner's tuned config (`echoConfigFor`).
     #[wasm_bindgen(js_name = checkEchoForm)]
     pub fn check_echo_form(
         &self,
@@ -80,15 +83,14 @@ impl WasmAnalyzer {
         template: EchoTemplateDto,
         strictness: Option<EchoStrictnessDto>,
         threshold: Option<f32>,
-        aligner: Option<AlignerKindDto>,
     ) -> Result<EchoFormResultDto, JsError> {
         let template = EchoTemplate::try_from(template)?;
-        let expected_line_count = template.expected_line_count;
-        let kind = aligner.map_or(self.echo_config.aligner, AlignerKind::from);
-        let strictness =
-            strictness.map_or_else(|| template.conventional_strictness(), EchoStrictness::from);
-        let threshold = threshold.unwrap_or_else(|| strictness.threshold(kind));
-        let scheme = RepetitionScheme::with_threshold(template, threshold, kind);
+        let expected_line_count = template.expected_line_count();
+        let strictness = strictness.map_or_else(|| template.strictness(), EchoStrictness::from);
+        let scheme = match threshold {
+            Some(threshold) => EchoScheme::with_threshold(template, threshold),
+            None => EchoScheme::new(template, strictness),
+        };
         let lines: Vec<Line> = lines
             .iter()
             .filter(|line| !line.trim().is_empty())
@@ -104,9 +106,9 @@ impl WasmAnalyzer {
                     follower: pair.follower,
                     outcome: match pair.outcome {
                         Ok(score) => EchoPairOutcomeDto::Scored {
-                            raw: score.alignment.alignment.raw,
-                            similarity: score.alignment.alignment.similarity,
-                            distance: score.alignment.alignment.distance(),
+                            raw: score.echo.alignment.raw,
+                            similarity: score.echo.alignment.similarity,
+                            distance: score.echo.alignment.distance(),
                             passed: score.passed,
                         },
                         Err(error) => EchoPairOutcomeDto::Error {
@@ -124,7 +126,7 @@ impl WasmAnalyzer {
             expected_line_count,
             line_count_matches: result.line_count_matches,
             strictness: strictness.into(),
-            threshold,
+            threshold: result.threshold,
             passed: result.passed,
         })
     }
@@ -197,12 +199,31 @@ impl From<EchoStrictness> for EchoStrictnessDto {
     }
 }
 
+/// What a raw score is divided by. Mirrors [`EchoNormalization`].
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(rename_all = "snake_case")]
 pub enum EchoNormalizationDto {
     ShorterSelfSimilarity,
     MeanSelfSimilarity,
+}
+
+impl From<EchoNormalizationDto> for EchoNormalization {
+    fn from(normalization: EchoNormalizationDto) -> Self {
+        match normalization {
+            EchoNormalizationDto::ShorterSelfSimilarity => Self::ShorterSelfSimilarity,
+            EchoNormalizationDto::MeanSelfSimilarity => Self::MeanSelfSimilarity,
+        }
+    }
+}
+
+impl From<EchoNormalization> for EchoNormalizationDto {
+    fn from(normalization: EchoNormalization) -> Self {
+        match normalization {
+            EchoNormalization::ShorterSelfSimilarity => Self::ShorterSelfSimilarity,
+            EchoNormalization::MeanSelfSimilarity => Self::MeanSelfSimilarity,
+        }
+    }
 }
 
 /// The echo config, flattened. Costs are in thousandths of a unit (the
@@ -252,12 +273,7 @@ impl From<EchoConfig> for EchoConfigDto {
             run_open: c.structure.run_open,
             min_run: c.structure.min_run,
             max_runs: to_u32(c.structure.max_runs),
-            normalization: match c.normalization {
-                EchoNormalization::ShorterSelfSimilarity => {
-                    EchoNormalizationDto::ShorterSelfSimilarity
-                }
-                EchoNormalization::MeanSelfSimilarity => EchoNormalizationDto::MeanSelfSimilarity,
-            },
+            normalization: c.normalization.into(),
             aligner: c.aligner.into(),
             max_variants_per_line: to_u32(c.max_variants_per_line),
             max_variant_pairs: to_u32(c.max_variant_pairs),
@@ -290,12 +306,7 @@ impl From<EchoConfigDto> for EchoConfig {
                 min_run: c.min_run,
                 max_runs: c.max_runs as usize,
             },
-            normalization: match c.normalization {
-                EchoNormalizationDto::ShorterSelfSimilarity => {
-                    EchoNormalization::ShorterSelfSimilarity
-                }
-                EchoNormalizationDto::MeanSelfSimilarity => EchoNormalization::MeanSelfSimilarity,
-            },
+            normalization: c.normalization.into(),
             aligner: c.aligner.into(),
             max_variants_per_line: c.max_variants_per_line as usize,
             max_variant_pairs: c.max_variant_pairs as usize,
@@ -335,8 +346,8 @@ pub struct EchoSegmentDto {
 
 /// A scored echo comparison, with everything needed to draw it: both lines'
 /// words and phonemes (under the pronunciation variants that scored best),
-/// where each word starts, the steps, segments and per-phoneme coverage
-/// (0 = unaligned, 1 = aligned).
+/// where each word starts, the steps, segments and which phonemes are
+/// paired.
 #[derive(Serialize, Debug, Tsify)]
 #[tsify(into_wasm_abi)]
 pub struct EchoAlignmentDto {
@@ -354,8 +365,8 @@ pub struct EchoAlignmentDto {
     b_word_starts: Vec<usize>,
     steps: Vec<EchoStepDto>,
     segments: Vec<EchoSegmentDto>,
-    a_coverage: Vec<u8>,
-    b_coverage: Vec<u8>,
+    a_aligned: Vec<bool>,
+    b_aligned: Vec<bool>,
     variant_pairs_tried: usize,
 }
 
@@ -409,8 +420,8 @@ impl EchoAlignmentDto {
                     },
                 })
                 .collect(),
-            a_coverage: alignment.a_coverage.clone(),
-            b_coverage: alignment.b_coverage.clone(),
+            a_aligned: alignment.a_aligned.clone(),
+            b_aligned: alignment.b_aligned.clone(),
             variant_pairs_tried: echo.variant_pairs_tried,
         }
     }
@@ -436,8 +447,8 @@ impl TryFrom<EchoTemplateDto> for EchoTemplate {
         Ok(match template {
             EchoTemplateDto::Duplex => EchoTemplate::duplex(),
             EchoTemplateDto::Villanelle => EchoTemplate::villanelle(),
-            EchoTemplateDto::Pantoum { stanzas } => EchoTemplate::pantoum(stanzas),
-            EchoTemplateDto::Blues { stanzas } => EchoTemplate::blues(stanzas),
+            EchoTemplateDto::Pantoum { stanzas } => EchoTemplate::pantoum(stanzas)?,
+            EchoTemplateDto::Blues { stanzas } => EchoTemplate::blues(stanzas)?,
             EchoTemplateDto::Custom { scheme } => EchoTemplate::parse(&scheme)?,
         })
     }
@@ -486,16 +497,21 @@ mod tests {
     use super::*;
     use wasm_bindgen_test::wasm_bindgen_test;
 
+    /// An analyzer scoring with `kind` under its tuned config.
+    fn analyzer_for(kind: AlignerKindDto) -> WasmAnalyzer {
+        let mut ws = analyzer();
+        ws.set_echo_config(echo_config_for(kind)).unwrap();
+        ws
+    }
+
+    const ALIGNERS: [AlignerKindDto; 2] =
+        [AlignerKindDto::SemiGlobal, AlignerKindDto::WatermanEggert];
+
     #[wasm_bindgen_test]
     fn identical_lines_score_one_with_every_aligner() {
-        let ws = analyzer();
-        for kind in [AlignerKindDto::SemiGlobal, AlignerKindDto::WatermanEggert] {
-            let dto = ws
-                .score_echo(
-                    "dark demands I call my own",
-                    "dark demands I call my own",
-                    Some(kind),
-                )
+        for kind in ALIGNERS {
+            let dto = analyzer_for(kind)
+                .score_echo("dark demands I call my own", "dark demands I call my own")
                 .unwrap();
             assert!(
                 (dto.similarity - 1.0).abs() < 1e-6,
@@ -505,18 +521,14 @@ mod tests {
             assert_eq!(dto.aligner, kind);
             assert_eq!(dto.a_words.len(), 6);
             assert_eq!(dto.a_word_starts.len(), 6);
-            assert!(dto.a_coverage.iter().all(|&c| c == 1));
+            assert!(dto.a_aligned.iter().all(|&x| x));
         }
     }
 
     #[wasm_bindgen_test]
     fn a_swap_reports_a_moved_segment() {
-        let dto = analyzer()
-            .score_echo(
-                "dark demands I call my own",
-                "call my own dark demand sigh",
-                Some(AlignerKindDto::WatermanEggert),
-            )
+        let dto = analyzer_for(AlignerKindDto::WatermanEggert)
+            .score_echo("dark demands I call my own", "call my own dark demand sigh")
             .unwrap();
         assert!(dto.similarity > 0.85);
         assert_eq!(
@@ -533,7 +545,7 @@ mod tests {
     fn unknown_words_are_errors() {
         assert!(
             analyzer()
-                .score_echo("call my own", "call my xyzzy", None)
+                .score_echo("call my own", "call my xyzzy")
                 .is_err()
         );
     }
@@ -544,7 +556,7 @@ mod tests {
             .map(|k| format!("the light is gone number {k}"))
             .collect();
         let result = analyzer()
-            .check_echo_form(lines, EchoTemplateDto::Duplex, None, Some(0.5), None)
+            .check_echo_form(lines, EchoTemplateDto::Duplex, None, Some(0.5))
             .unwrap();
         assert_eq!(result.missing_pairs, [[0, 13]]);
         assert!(!result.line_count_matches);
@@ -573,7 +585,6 @@ mod tests {
                 },
                 None,
                 None,
-                None,
             )
             .unwrap();
         // A custom template is judged strict by default.
@@ -594,39 +605,46 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
-    fn a_bad_custom_template_is_an_error() {
-        let result = analyzer().check_echo_form(
-            vec![],
+    fn bad_templates_are_errors_not_panics() {
+        let ws = analyzer();
+        for template in [
             EchoTemplateDto::Custom {
                 scheme: "AB-A".into(),
             },
-            None,
-            Some(0.5),
-            None,
-        );
-        assert!(result.is_err());
+            EchoTemplateDto::Custom {
+                scheme: "aa*200000000".into(),
+            },
+            EchoTemplateDto::Pantoum { stanzas: 0 },
+            EchoTemplateDto::Blues {
+                stanzas: usize::MAX,
+            },
+        ] {
+            assert!(
+                ws.check_echo_form(vec![], template.clone(), None, Some(0.5))
+                    .is_err(),
+                "{template:?}"
+            );
+        }
     }
 
     #[wasm_bindgen_test]
-    fn strictness_picks_the_aligners_threshold() {
+    fn strictness_picks_the_config_aligners_threshold() {
         let lines: Vec<String> = (0..14).map(|k| format!("the light is gone {k}")).collect();
-        let ws = analyzer();
         // A duplex is conventionally loose.
-        let result = ws
-            .check_echo_form(lines.clone(), EchoTemplateDto::Duplex, None, None, None)
+        let result = analyzer()
+            .check_echo_form(lines.clone(), EchoTemplateDto::Duplex, None, None)
             .unwrap();
         assert_eq!(result.strictness, EchoStrictnessDto::Loose);
         assert_eq!(
             result.threshold,
             echo_threshold(EchoStrictnessDto::Loose, AlignerKindDto::SemiGlobal)
         );
-        let result = ws
+        let result = analyzer_for(AlignerKindDto::WatermanEggert)
             .check_echo_form(
                 lines,
                 EchoTemplateDto::Duplex,
                 Some(EchoStrictnessDto::Strict),
                 None,
-                Some(AlignerKindDto::WatermanEggert),
             )
             .unwrap();
         assert_eq!(
@@ -636,7 +654,7 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
-    fn echo_config_round_trips() {
+    fn echo_config_round_trips_and_is_validated() {
         let mut ws = analyzer();
         assert_eq!(ws.echo_config(), default_echo_config());
         assert_eq!(
@@ -649,10 +667,15 @@ mod tests {
             EchoConfig::for_aligner(AlignerKind::WatermanEggert)
         );
         config.gap_open = 250;
-        ws.set_echo_config(config);
+        ws.set_echo_config(config).unwrap();
         assert_eq!(ws.echo_config(), config);
         assert_eq!(EchoConfig::from(config).gaps.gap_open, 250);
-        let dto = ws.score_echo("call my own", "call my own", None).unwrap();
+        let dto = ws.score_echo("call my own", "call my own").unwrap();
         assert_eq!(dto.aligner, AlignerKindDto::WatermanEggert);
+        // Out of range: rejected, and the previous config kept.
+        let mut bad = config;
+        bad.vowel_coefficient = u32::MAX;
+        assert!(ws.set_echo_config(bad).is_err());
+        assert_eq!(ws.echo_config(), config);
     }
 }

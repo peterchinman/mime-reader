@@ -20,19 +20,20 @@ USAGE: cargo run --release --example echo_compare -- [OPTIONS]
   --no-mutations     skip synthetic mutations of corpus lines
   --seed N           mutation seed (default 1)
   --max-lines N      skip poems longer than N lines
+  --forms A,B        only use poems of these forms (e.g. pantoum,duplex)
   --by-poem          print the per-poem ranking table
   --dump FILE        write every scored pair (.csv or .json)
+  --threads N        worker threads (default: all cores)
   -h, --help         this text
 
 PARAMETER SEARCH (replaces the report):
-  --search N         try N random configs per aligner, then refine the best
+  --search N         try N random configs per aligner, then refine the best;
+                     0 scores just the base config per fold
   --search-seed N    search seed (default 1)
   --folds K          cross-validation folds, stratified by form and strictness
                      (default 5)
   --objective NAME   strictness (mean of strict and loose AUC; default) or
-                     form (mean of per-form AUCs)
-  --forms A,B        only use poems of these forms (e.g. pantoum,duplex)
-  --threads N        worker threads (default: all cores)";
+                     form (mean of per-form AUCs)";
 
 /// What the parameter search averages AUC over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

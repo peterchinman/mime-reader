@@ -84,10 +84,6 @@ impl GapScores {
     pub fn len(&self) -> usize {
         self.extend.len()
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.extend.is_empty()
-    }
 }
 
 #[cfg(test)]

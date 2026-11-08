@@ -248,9 +248,6 @@ pub fn mutate<D: PronouncingDictionary>(
             let (p, x, y) = loop {
                 let p = rng.range(0..n - 1);
                 let x = rng.range(1..n - p);
-                if p + x >= n {
-                    continue;
-                }
                 let y = rng.range(1..n - p - x + 1);
                 if p > 0 || p + x + y < n {
                     break (p, x, y);

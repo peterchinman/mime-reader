@@ -16,22 +16,24 @@
 //! assembly charges `run_open` — by default the same as `gap_open`.
 //!
 //! Assembly charges `run_open` per run after the first and `move_cost` per
-//! moved run, and keeps a run only if it pays for itself: the in-place
-//! chain maximizes `Σ (score − run_open)`, and a run outside it is kept as
-//! moved only if `score > run_open + move_cost`. So
-//! `raw = Σ score − run_open × (runs − 1) − move_cost × moved` over the
-//! kept runs.
+//! moved run, and keeps a run only if it pays for itself: a run outside the
+//! in-place chain is kept, as moved, only if `score > run_open + move_cost`.
+//! So `raw = Σ score − run_open × (runs − 1) − move_cost × moved` over the
+//! kept runs, and the in-place chain is the one that maximizes it: each run
+//! is worth `score − run_open` in place and `max(0, score − run_open −
+//! move_cost)` outside, so the chain maximizes `Σ min(score − run_open,
+//! move_cost)`.
 
-use crate::align::{GapScores, ScoreTable, affine};
+use crate::align::{GapScores, ScoreTable, affine, phoneme_ids};
 use crate::phoneme::Phoneme;
 
 use super::alignment::{
-    AlignerKind, EchoAligner, EchoCosts, EchoSegment, EchoStep, Placement, RawAlignment,
-    concatenate, coverage, mark_in_place_weighted, segment_of, segments_from_trace,
+    EchoAligner, EchoCosts, EchoSegment, EchoStep, Placement, RawAlignment, aligned, concatenate,
+    mark_in_place, segment_of, segments_from_trace,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
-pub struct WatermanEggertAligner;
+pub(crate) struct WatermanEggertAligner;
 
 impl WatermanEggertAligner {
     /// The ungapped runs of every accepted local alignment, in discovery
@@ -46,7 +48,7 @@ impl WatermanEggertAligner {
             GapScores::new(&costs.gaps, a, None),
             GapScores::new(&costs.gaps, b, None),
         );
-        let (ids_a, ids_b) = (ScoreTable::ids(a), ScoreTable::ids(b));
+        let (ids_a, ids_b) = (phoneme_ids(a), phoneme_ids(b));
         let mut mask = affine::Mask::new(a.len(), b.len());
         let mut runs = Vec::new();
         for _ in 0..costs.max_runs {
@@ -102,11 +104,41 @@ fn split_at_gaps(steps: Vec<EchoStep>) -> Vec<(EchoSegment, Vec<EchoStep>)> {
         .collect()
 }
 
-impl EchoAligner for WatermanEggertAligner {
-    fn kind(&self) -> AlignerKind {
-        AlignerKind::WatermanEggert
+/// Places `runs` (sorted by their start in `a`) and keeps those that pay
+/// for themselves, with their open costs set (see the module docs).
+fn assemble(
+    runs: Vec<(EchoSegment, Vec<EchoStep>)>,
+    costs: &EchoCosts,
+) -> Vec<(EchoSegment, Vec<EchoStep>)> {
+    let (mut segments, steps): (Vec<EchoSegment>, Vec<Vec<EchoStep>>) = runs.into_iter().unzip();
+    // Every run is weighed as if charged run_open; the first kept run gets
+    // it back below, which shifts every chain's total alike.
+    let weights: Vec<i64> = segments
+        .iter()
+        .map(|s| (s.score - costs.run_open).min(costs.move_cost))
+        .collect();
+    mark_in_place(&mut segments, &weights);
+    let mut kept: Vec<(EchoSegment, Vec<EchoStep>)> = segments
+        .into_iter()
+        .zip(steps)
+        .filter(|(segment, _)| {
+            segment.placement == Placement::InPlace
+                || segment.score > costs.run_open + costs.move_cost
+        })
+        .collect();
+    for (index, (segment, _)) in kept.iter_mut().enumerate() {
+        let run_open = if index == 0 { 0 } else { costs.run_open };
+        let moved = if segment.placement == Placement::Moved {
+            costs.move_cost
+        } else {
+            0
+        };
+        segment.open_cost = run_open + moved;
     }
+    kept
+}
 
+impl EchoAligner for WatermanEggertAligner {
     /// Greedy: when several runs tie, which is taken first (and so walled
     /// off) depends on orientation, and can change what is left.
     fn is_symmetric(&self) -> bool {
@@ -125,45 +157,15 @@ impl EchoAligner for WatermanEggertAligner {
             return RawAlignment::empty(a.len(), b.len());
         }
         runs.sort_by_key(|(segment, _)| segment.a_range.start);
-
-        // In place: the chain maximizing Σ (score − run_open). Every run is
-        // charged run_open here; the first kept run gets it back below.
-        let mut segments: Vec<EchoSegment> =
-            runs.iter().map(|(segment, _)| segment.clone()).collect();
-        let weights: Vec<i64> = segments.iter().map(|s| s.score - costs.run_open).collect();
-        mark_in_place_weighted(&mut segments, &weights);
-        let keep: Vec<bool> = segments
-            .iter()
-            .map(|segment| {
-                segment.placement == Placement::InPlace
-                    || segment.score > costs.run_open + costs.move_cost
-            })
-            .collect();
-
-        let mut kept: Vec<(EchoSegment, Vec<EchoStep>)> = Vec::new();
-        for ((segment, (_, steps)), keep) in segments.into_iter().zip(runs).zip(keep) {
-            if keep {
-                kept.push((segment, steps));
-            }
-        }
-        for (index, (segment, _)) in kept.iter_mut().enumerate() {
-            let run_open = if index == 0 { 0 } else { costs.run_open };
-            let moved = if segment.placement == Placement::Moved {
-                costs.move_cost
-            } else {
-                0
-            };
-            segment.open_cost = run_open + moved;
-        }
-        let (segments, steps) = concatenate(kept);
+        let (segments, steps) = concatenate(assemble(runs, costs));
         let raw = segments.iter().map(|s| s.score - s.open_cost).sum();
-        let (a_coverage, b_coverage) = coverage(&steps, a.len(), b.len());
+        let (a_aligned, b_aligned) = aligned(&steps, a.len(), b.len());
         RawAlignment {
             raw,
             steps,
             segments,
-            a_coverage,
-            b_coverage,
+            a_aligned,
+            b_aligned,
         }
     }
 }
@@ -175,6 +177,72 @@ mod tests {
     use crate::echo::test_support::*;
 
     const WE: WatermanEggertAligner = WatermanEggertAligner;
+
+    /// A run of `score` over `a` and `b`, with no steps (assembly only
+    /// reads ranges and scores).
+    fn run(
+        a: std::ops::Range<usize>,
+        b: std::ops::Range<usize>,
+        score: i64,
+    ) -> (EchoSegment, Vec<EchoStep>) {
+        let segment = EchoSegment {
+            a_range: a,
+            b_range: b,
+            steps: 0..0,
+            score,
+            open_cost: 0,
+            placement: Placement::InPlace,
+        };
+        (segment, Vec::new())
+    }
+
+    fn assembled_raw(kept: &[(EchoSegment, Vec<EchoStep>)]) -> i64 {
+        kept.iter().map(|(s, _)| s.score - s.open_cost).sum()
+    }
+
+    #[test]
+    fn assembly_moves_a_heavy_run_when_that_keeps_more() {
+        // B (10 units) comes after P, Q, R (2 each) in `a` but before them
+        // in `b`. Keeping B in place would move all three (raw 13); moving
+        // B instead keeps them in place (raw 14).
+        let unit = 1000;
+        let costs = EchoCosts {
+            run_open: unit / 2,
+            move_cost: unit / 2,
+            ..*costs()
+        };
+        let runs = vec![
+            run(0..2, 10..12, 2 * unit),
+            run(2..4, 12..14, 2 * unit),
+            run(4..6, 14..16, 2 * unit),
+            run(6..16, 0..10, 10 * unit),
+        ];
+        let kept = assemble(runs, &costs);
+        assert_eq!(kept.len(), 4);
+        assert_eq!(kept[3].0.placement, Placement::Moved);
+        // 10 + 3 × 2 − 3 run opens − 1 move.
+        assert_eq!(assembled_raw(&kept), 14 * unit);
+    }
+
+    #[test]
+    fn assembly_keeps_a_light_run_in_place_rather_than_moving_a_heavy_one() {
+        // A light run conflicting with B: B stays in place, and the light
+        // run, not worth a move, is dropped.
+        let unit = 1000;
+        let costs = EchoCosts {
+            run_open: unit / 2,
+            move_cost: unit / 2,
+            ..*costs()
+        };
+        let runs = vec![
+            run(0..2, 10..12, unit / 2 + 100),
+            run(6..16, 0..10, 10 * unit),
+        ];
+        let kept = assemble(runs, &costs);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].0.placement, Placement::InPlace);
+        assert_eq!(assembled_raw(&kept), 10 * unit);
+    }
 
     #[test]
     fn verbatim_is_one_in_place_run() {
@@ -255,7 +323,7 @@ mod tests {
         let a = [BLOCK_X, BLOCK_Y, BLOCK_Z].join(" ");
         let yxz = raw(&WE, &a, &[BLOCK_Y, BLOCK_X, BLOCK_Z].join(" "));
         assert!(
-            yxz.a_coverage.iter().all(|&c| c == 1),
+            yxz.a_aligned.iter().all(|&x| x),
             "every phoneme aligned once"
         );
         assert_eq!(
@@ -301,13 +369,14 @@ mod tests {
         for _ in 0..500 {
             let (a, b) = (rng.sequence(&alphabet, 16), rng.sequence(&alphabet, 16));
             let alignment = WE.align(&a, &b, detector().table(), costs());
-            assert!(
-                alignment
-                    .a_coverage
-                    .iter()
-                    .chain(&alignment.b_coverage)
-                    .all(|&c| c <= 1)
-            );
+            let (mut a_uses, mut b_uses) = (vec![0; a.len()], vec![0; b.len()]);
+            for step in &alignment.steps {
+                if let (Some(i), Some(j)) = (step.a_index, step.b_index) {
+                    a_uses[i] += 1;
+                    b_uses[j] += 1;
+                }
+            }
+            assert!(a_uses.iter().chain(&b_uses).all(|&uses| uses <= 1));
             // Kept runs are disjoint in b as well as a.
             for (x, s) in alignment.segments.iter().enumerate() {
                 for t in &alignment.segments[x + 1..] {

@@ -79,23 +79,26 @@ fn pronunciations(line: &Line) -> Result<Vec<Vec<&[Phoneme]>>, EchoError> {
 }
 
 /// `line` with each word's first (primary) pronunciation.
-pub fn flatten(line: &Line) -> Result<FlatLine, EchoError> {
-    let words = pronunciations(line)?;
+#[cfg(test)]
+fn flatten(line: &Line) -> Result<FlatLine, EchoError> {
+    Ok(first_pronunciations(&pronunciations(line)?))
+}
+
+fn first_pronunciations(words: &[Vec<&[Phoneme]>]) -> FlatLine {
     let first: Vec<&[Phoneme]> = words.iter().map(|choices| choices[0]).collect();
-    Ok(FlatLine::from_words(&first))
+    FlatLine::from_words(&first)
 }
 
 /// Every combination of the words' pronunciations, word 0 varying fastest.
 /// When there would be more than `cap`, just the first-pronunciation
 /// flattening.
-pub fn flatten_variants(line: &Line, cap: usize) -> Result<Vec<FlatLine>, EchoError> {
+pub(crate) fn flatten_variants(line: &Line, cap: usize) -> Result<Vec<FlatLine>, EchoError> {
     let words = pronunciations(line)?;
     let total = words
         .iter()
         .try_fold(1usize, |total, choices| total.checked_mul(choices.len()));
     let Some(total) = total.filter(|&total| total <= cap.max(1)) else {
-        let first: Vec<&[Phoneme]> = words.iter().map(|choices| choices[0]).collect();
-        return Ok(vec![FlatLine::from_words(&first)]);
+        return Ok(vec![first_pronunciations(&words)]);
     };
     let mut variants = Vec::with_capacity(total);
     for mut index in 0..total {

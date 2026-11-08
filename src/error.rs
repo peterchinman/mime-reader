@@ -112,6 +112,14 @@ pub enum EchoError {
     EmptyLine,
 }
 
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+#[error("echo config: {field} must be at most {max} (got {value})")]
+pub struct InvalidEchoConfigError {
+    pub field: &'static str,
+    pub value: u64,
+    pub max: u64,
+}
+
 #[derive(Debug, Clone, Error, PartialEq)]
 pub enum ParseEchoTemplateError {
     #[error("echo template is empty")]
@@ -124,4 +132,6 @@ pub enum ParseEchoTemplateError {
     NoEchoes,
     #[error("line {} belongs to more than one echo group", index + 1)]
     OverlappingGroups { index: usize },
+    #[error("echo template is longer than {max} lines")]
+    TooLong { max: usize },
 }
