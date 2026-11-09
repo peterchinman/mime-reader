@@ -88,6 +88,14 @@ Deformation options combine and apply in order:
 WebAssembly and runs in a Web Worker. It needs `wasm-pack` and the data from
 Setup.
 
+**Demo:** <https://peterchinman.github.io/mime-reader/>. The workflow
+`.github/workflows/mishear-pages.yml` builds it on every push to
+`peter/mishear` that touches the crate. The data is generated in CI, not
+committed: the wordfreq list, and the Google counts, whose summed form is
+cached between runs. The page's footer credits the data. `MISHEAR_BASE`
+sets the path the build is served from (`/mime-reader/` there, `/`
+locally).
+
 ```sh
 cd crates/mishear/web
 npm install

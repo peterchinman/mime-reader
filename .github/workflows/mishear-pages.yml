@@ -1,0 +1,88 @@
+# Builds the mishear web demo (crates/mishear/web) and publishes it to GitHub
+# Pages. Its data is generated here rather than committed: the word-frequency
+# list (wordfreq, CC BY-SA 4.0) and the word-pair counts (Google Books Ngram,
+# CC BY 3.0). Streaming Google's 2-grams takes about 20 minutes, so their
+# summed counts are cached; packing them reruns every time.
+name: mishear demo
+
+on:
+  push:
+    branches: [peter/mishear]
+    paths:
+      - crates/mishear/**
+      - src/**
+      - data/CMUdict/**
+      - data/ENABLE/**
+      - data/echo/public/**
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/mishear-pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: mishear-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install wasm-pack
+        run: curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Word frequencies (wordfreq, CC BY-SA 4.0)
+        run: |
+          python -m pip install wordfreq==3.1.1
+          python -I crates/mishear/scripts/wordfreq_list.py 100000
+
+      - name: Restore the summed Google counts
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/google-all.tsv
+          key: google-fiction-${{ hashFiles('crates/mishear/examples/google_bigrams.rs', 'crates/mishear/data/wordfreq-en.tsv') }}
+      - name: Word-pair counts (Google Books Ngram, CC BY 3.0)
+        env:
+          GOOGLE_COUNTS: ${{ runner.temp }}/google-all.tsv
+        run: crates/mishear/scripts/google_bigrams.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build the page
+        working-directory: crates/mishear/web
+        env:
+          MISHEAR_BASE: /${{ github.event.repository.name }}/
+        run: |
+          wasm-pack build .. --target web --out-dir web/pkg
+          npm ci
+          npm run data
+          npx tsc --noEmit
+          npx vite build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: crates/mishear/web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

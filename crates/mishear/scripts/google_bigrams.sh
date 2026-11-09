@@ -6,21 +6,29 @@
 # of the frequency list's words summed over the years, then packs the pairs
 # whose words can be in the lexicon (examples/pack_bigrams.rs). Needs about
 # 1 GB of temporary space. Extra arguments go to the packer (--keep N).
+#
+# GOOGLE_COUNTS=path keeps the summed counts there (about 500 MB of text)
+# and, when the file already exists, packs it without streaming again.
 set -eu
 cd "$(dirname "$0")/.."
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-index=http://storage.googleapis.com/books/ngrams/books/20200217/eng-fiction/eng-fiction-2-ngrams_exports.html
-curl -sS --fail "$index" | grep -oE 'http[^"]+/2-[0-9]+-of-[0-9]+\.gz' > "$tmp/urls"
-echo "$(wc -l < "$tmp/urls") files"
+counts=${GOOGLE_COUNTS:-$tmp/google-all.tsv}
 cargo build --release -p mishear --example google_bigrams --example pack_bigrams
-for u in $(cat "$tmp/urls"); do
-  # A file cut short would leave its words undercounted: note it, and don't pack.
-  { curl -sS --fail --retry 5 "$u" | gunzip -c; } || touch "$tmp/failed"
-  echo "$(date +%T) $(basename "$u")" >&2
-done | ../../target/release/examples/google_bigrams --out "$tmp/google"
-if [ -e "$tmp/failed" ]; then
-  echo "a download failed: not packing (run again)" >&2
-  exit 1
+if [ ! -s "$counts" ]; then
+  index=http://storage.googleapis.com/books/ngrams/books/20200217/eng-fiction/eng-fiction-2-ngrams_exports.html
+  curl -sS --fail "$index" | grep -oE 'http[^"]+/2-[0-9]+-of-[0-9]+\.gz' > "$tmp/urls"
+  echo "$(wc -l < "$tmp/urls") files"
+  for u in $(cat "$tmp/urls"); do
+    # A file cut short would leave its words undercounted: note it, and don't pack.
+    { curl -sS --fail --retry 5 "$u" | gunzip -c; } || touch "$tmp/failed"
+    echo "$(date +%T) $(basename "$u")" >&2
+  done | ../../target/release/examples/google_bigrams --out "$tmp/google"
+  if [ -e "$tmp/failed" ]; then
+    echo "a download failed: not packing (run again)" >&2
+    exit 1
+  fi
+  mkdir -p "$(dirname "$counts")"
+  mv "$tmp/google-all.tsv" "$counts"
 fi
-../../target/release/examples/pack_bigrams "$tmp/google-all.tsv" data/bigrams-en.bin "$@"
+../../target/release/examples/pack_bigrams "$counts" data/bigrams-en.bin "$@"

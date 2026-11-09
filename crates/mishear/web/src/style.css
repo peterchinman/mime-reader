@@ -481,6 +481,17 @@ details.disabled .panel-body {
 .sweep li {
   margin: 0.15rem 0;
 }
+.credits {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.8rem;
+  max-width: 60rem;
+}
+.credits a {
+  color: inherit;
+}
 .sweep .cost {
   color: var(--muted);
   font-size: 0.78rem;
