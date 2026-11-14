@@ -32,6 +32,8 @@ pub enum InflectionRule {
     Er,
     /// `-est`.
     Est,
+    /// `-less`: *hopeless*, *pulpless*, and *penniless* over a base in y.
+    Less,
 }
 
 /// A productive suffix: how to recover the written bases a word may have been
@@ -52,6 +54,7 @@ enum InflectionalSuffix {
     Ed,
     Er,
     Est,
+    Less,
 }
 
 /// A productive pronunciation rule and the possible written bases from which
@@ -91,11 +94,13 @@ impl PronunciationDerivation {
 impl InflectionalSuffix {
     /// Every suffix, in precedence order: `derive_pronunciations` takes the
     /// first one whose base is in the dictionary.
-    const PRECEDENCE: [Self; 11] = [
+    const PRECEDENCE: [Self; 12] = [
         Self::ApostropheS,
         Self::SApostrophe,
         Self::Er,
         Self::Est,
+        // Before -s: every -less word ends in s.
+        Self::Less,
         Self::S,
         Self::Ves,
         Self::IlyFromY,
@@ -120,6 +125,7 @@ impl InflectionalSuffix {
             Self::Ed => ed_bases(word),
             Self::Er => er_est_bases(word, "er", "r"),
             Self::Est => er_est_bases(word, "est", "st"),
+            Self::Less => less_bases(word),
         }
     }
 
@@ -134,6 +140,7 @@ impl InflectionalSuffix {
             Self::Ed => InflectionRule::Ed,
             Self::Er => InflectionRule::Er,
             Self::Est => InflectionRule::Est,
+            Self::Less => InflectionRule::Less,
         }
     }
 
@@ -175,6 +182,21 @@ impl InflectionalSuffix {
                     ],
                 ),
             ],
+            // CMUdict writes -less with AH0 in most words (143 of 179) and
+            // IH0 in most of the rest; keep both, the usual one first.
+            Self::Less => [VowelPhoneme::AH, VowelPhoneme::IH]
+                .into_iter()
+                .map(|vowel| {
+                    append_suffix(
+                        base,
+                        [
+                            consonant_phoneme(ConsonantPhoneme::L),
+                            vowel_phoneme(vowel),
+                            consonant_phoneme(ConsonantPhoneme::S),
+                        ],
+                    )
+                })
+                .collect(),
         }
     }
 }
@@ -370,6 +392,18 @@ fn er_est_bases(word: &str, written_suffix: &str, silent_e_suffix: &str) -> Opti
 
 // The restored y or ie takes the case of the letter it replaces, which keeps
 // a capitalized word's single-letter base intact (Dying -> Die).
+/// pulp -> pulpless and hope -> hopeless add -less to the whole base; penny
+/// -> penniless and pity -> pitiless turn a final y after a consonant to i.
+fn less_bases(word: &str) -> Option<Vec<String>> {
+    let stem = strip_suffix_ignore_ascii_case(word, "less").filter(|stem| !stem.is_empty())?;
+    let mut base_candidates = Vec::with_capacity(2);
+    push_candidate(&mut base_candidates, stem.to_string());
+    if let Some(y_base) = restore_final_y_after_consonant(stem) {
+        push_candidate(&mut base_candidates, y_base);
+    }
+    Some(base_candidates)
+}
+
 fn restore_final_y(stem: &str) -> Option<String> {
     let base = stem.strip_suffix(['i', 'I'])?;
     let y = if stem.ends_with('I') { "Y" } else { "y" };
@@ -901,6 +935,28 @@ mod tests {
         assert_eq!(
             as_arpabet(&pronunciations[1]),
             ["P", "L", "EY1", "N", "AH0", "S", "T"]
+        );
+    }
+
+    #[test]
+    fn less_suffix_finds_its_base_and_adds_both_weak_vowels() {
+        assert_eq!(bases(InflectionalSuffix::Less, "pulpless"), ["pulp"]);
+        assert_eq!(bases(InflectionalSuffix::Less, "hopeless"), ["hope"]);
+        assert!(includes_base(
+            &bases(InflectionalSuffix::Less, "penniless"),
+            "penny"
+        ));
+        assert!(PronunciationDerivation::new(InflectionalSuffix::Less, "less").is_none());
+
+        let derivation = derive(InflectionalSuffix::Less, "pulpless");
+        let pronunciations = derivation.apply(&[phonemes(&["P", "AH1", "L", "P"])]);
+        assert_eq!(
+            as_arpabet(&pronunciations[0]),
+            ["P", "AH1", "L", "P", "L", "AH0", "S"]
+        );
+        assert_eq!(
+            as_arpabet(&pronunciations[1]),
+            ["P", "AH1", "L", "P", "L", "IH0", "S"]
         );
     }
 

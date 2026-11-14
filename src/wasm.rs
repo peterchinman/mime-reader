@@ -517,6 +517,7 @@ pub enum InflectionRuleDto {
     Ed,
     Er,
     Est,
+    Less,
 }
 
 impl From<InflectionRule> for InflectionRuleDto {
@@ -531,6 +532,7 @@ impl From<InflectionRule> for InflectionRuleDto {
             InflectionRule::Ed => InflectionRuleDto::Ed,
             InflectionRule::Er => InflectionRuleDto::Er,
             InflectionRule::Est => InflectionRuleDto::Est,
+            InflectionRule::Less => InflectionRuleDto::Less,
         }
     }
 }

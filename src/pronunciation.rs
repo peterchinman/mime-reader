@@ -270,6 +270,26 @@ mod tests {
     }
 
     #[test]
+    fn derives_a_missing_less_word_from_its_base() {
+        let dict = dict().with_pronunciation_mode(PronunciationMode::AllowDerived);
+        assert!(dict.lookup("pulpless").is_none());
+
+        let derived = dict.pronunciations_for("pulpless").unwrap();
+        let pronunciation: Vec<String> = derived.pronunciations[0]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(pronunciation, ["P", "AH1", "L", "P", "L", "AH0", "S"]);
+        assert_eq!(
+            derived.origin,
+            PronunciationOrigin::Derived {
+                dictionary_base: "pulp".to_string(),
+                rules: vec![InflectionRule::Less],
+            }
+        );
+    }
+
+    #[test]
     fn derives_possessives_written_with_a_curly_apostrophe() {
         let dict = dict().with_pronunciation_mode(PronunciationMode::AllowDerived);
         assert_eq!(
