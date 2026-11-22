@@ -290,6 +290,41 @@ mod tests {
     }
 
     #[test]
+    fn chains_suffix_rules_from_a_base() {
+        let dict = dict().with_pronunciation_mode(PronunciationMode::AllowDerived);
+        for (word, base, rules, pronunciation) in [
+            (
+                "pulplessness",
+                "pulp",
+                vec![InflectionRule::Less, InflectionRule::Ness],
+                "P AH1 L P L AH0 S N AH0 S",
+            ),
+            (
+                "pulpfulness",
+                "pulp",
+                vec![InflectionRule::Ful, InflectionRule::Ness],
+                "P AH1 L P F AH0 L N AH0 S",
+            ),
+        ] {
+            assert!(dict.lookup(word).is_none(), "{word}");
+            let derived = dict.pronunciations_for(word).unwrap();
+            let first: Vec<String> = derived.pronunciations[0]
+                .iter()
+                .map(ToString::to_string)
+                .collect();
+            assert_eq!(first.join(" "), pronunciation, "{word}");
+            assert_eq!(
+                derived.origin,
+                PronunciationOrigin::Derived {
+                    dictionary_base: base.to_string(),
+                    rules,
+                },
+                "{word}"
+            );
+        }
+    }
+
+    #[test]
     fn derives_possessives_written_with_a_curly_apostrophe() {
         let dict = dict().with_pronunciation_mode(PronunciationMode::AllowDerived);
         assert_eq!(
