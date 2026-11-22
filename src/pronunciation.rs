@@ -143,6 +143,49 @@ fn derive_pronunciations<D: PronouncingDictionary + ?Sized>(
     None
 }
 
+/// One way `word` may have been formed from a dictionary headword by a single
+/// productive rule: the headword, the rule, and the pronunciations the rule
+/// gives it. See [`inflection_bases`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InflectionBase {
+    pub base: String,
+    pub rule: InflectionRule,
+    pub pronunciations: Pronunciations,
+}
+
+/// Every single-rule derivation of `word` from a headword the dictionary
+/// lists exactly, whether or not `word` has an entry of its own: *music's* is
+/// *music* + [`InflectionRule::ApostropheS`], pronounced M Y UW1 Z IH0 K S.
+///
+/// Rules match spelling alone, so a candidate can be spurious (*does* from
+/// *doe*); comparing its `pronunciations` with the word's own entry tells the
+/// real derivations apart. Bases that are themselves derived are not
+/// followed: call this again on a base to peel another layer.
+pub fn inflection_bases<D: PronouncingDictionary + ?Sized>(
+    dict: &D,
+    word: &str,
+) -> Vec<InflectionBase> {
+    let word = dictionary_spelling(word);
+    let mut bases = Vec::new();
+    for derivation in pronunciation_derivations(&word) {
+        for base in derivation.base_candidates() {
+            let Some(base_pronunciations) = dictionary_base_pronunciations(dict, base) else {
+                continue;
+            };
+            let pronunciations = derivation.apply(&base_pronunciations.pronunciations);
+            if pronunciations.is_empty() {
+                continue;
+            }
+            bases.push(InflectionBase {
+                base: base_pronunciations.dictionary_base,
+                rule: derivation.rule(),
+                pronunciations,
+            });
+        }
+    }
+    bases
+}
+
 /// Respells running text the way CMUdict writes it. CMUdict uses straight
 /// apostrophes, while prose editors commonly insert typographic ones, even an
 /// opening quote for a leading elision (‘tis), and it has no entry for a
@@ -189,6 +232,48 @@ mod tests {
         DICT.get_or_init(|| {
             CmuDictionary::load("data/CMUdict/cmudict-0.7b").expect("failed to load dictionary")
         })
+    }
+
+    fn arpabet(s: &str) -> Box<[Phoneme]> {
+        s.split_whitespace().map(|p| p.parse().unwrap()).collect()
+    }
+
+    fn bases_of(word: &str) -> Vec<InflectionBase> {
+        inflection_bases(dict(), word)
+    }
+
+    fn has(bases: &[InflectionBase], base: &str, rule: InflectionRule) -> bool {
+        bases.iter().any(|b| b.base == base && b.rule == rule)
+    }
+
+    #[test]
+    fn inflection_bases_find_a_listed_possessive_from_its_base() {
+        let bases = bases_of("music's");
+        assert!(bases.iter().any(|b| b.base == "music"
+            && b.rule == InflectionRule::ApostropheS
+            && b.pronunciations.contains(&arpabet("M Y UW1 Z IH0 K S"))));
+        // Typographic apostrophes are read as straight ones.
+        assert_eq!(bases_of("music’s"), bases);
+    }
+
+    #[test]
+    fn inflection_bases_offer_spelling_lookalikes_that_pronunciation_rules_out() {
+        let does = dict().lookup("does").unwrap();
+        let bases = bases_of("does");
+        assert!(bases.iter().any(|b| b.base == "doe"));
+        for b in &bases {
+            assert!(b.pronunciations.iter().all(|p| !does.contains(p)));
+        }
+    }
+
+    #[test]
+    fn inflection_bases_cover_ves_plurals_and_plural_possessives() {
+        assert!(has(&bases_of("knives"), "knife", InflectionRule::Ves));
+        assert!(has(
+            &bases_of("kettles'"),
+            "kettles",
+            InflectionRule::SApostrophe
+        ));
     }
 
     #[test]
