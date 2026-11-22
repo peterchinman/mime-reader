@@ -50,8 +50,8 @@ pub use meter::{
 pub use phoneme::{Consonant, Phoneme, Stress, Vowel, VowelPhoneme};
 pub use poem::Poem;
 pub use pronunciation::{
-    ConfiguredDictionary, InflectionRule, PronunciationMode, PronunciationOrigin,
-    WordPronunciations,
+    ConfiguredDictionary, InflectionBase, InflectionRule, PronunciationMode, PronunciationOrigin,
+    WordPronunciations, inflection_bases,
 };
 pub use rhyme_distance::{
     AlignmentStep, OwnedAlignmentStep, RhymeDistanceConfig, RhymeDistanceOutput,
