@@ -32,6 +32,12 @@ pub enum InflectionRule {
     Er,
     /// `-est`.
     Est,
+    /// `-less`: *hopeless*, *pulpless*, and *penniless* over a base in y.
+    Less,
+    /// `-ness`: *sadness*, *pulpiness*, and *happiness* over a base in y.
+    Ness,
+    /// `-ful`: *hopeful*, *spoonful*, and *beautiful* over a base in y.
+    Ful,
 }
 
 /// A productive suffix: how to recover the written bases a word may have been
@@ -52,6 +58,9 @@ enum InflectionalSuffix {
     Ed,
     Er,
     Est,
+    Less,
+    Ness,
+    Ful,
 }
 
 /// A productive pronunciation rule and the possible written bases from which
@@ -91,11 +100,15 @@ impl PronunciationDerivation {
 impl InflectionalSuffix {
     /// Every suffix, in precedence order: `derive_pronunciations` takes the
     /// first one whose base is in the dictionary.
-    const PRECEDENCE: [Self; 11] = [
+    const PRECEDENCE: [Self; 14] = [
         Self::ApostropheS,
         Self::SApostrophe,
         Self::Er,
         Self::Est,
+        // Before -s: every -less and -ness word ends in s.
+        Self::Less,
+        Self::Ness,
+        Self::Ful,
         Self::S,
         Self::Ves,
         Self::IlyFromY,
@@ -120,6 +133,9 @@ impl InflectionalSuffix {
             Self::Ed => ed_bases(word),
             Self::Er => er_est_bases(word, "er", "r"),
             Self::Est => er_est_bases(word, "est", "st"),
+            Self::Less => suffix_bases(word, "less"),
+            Self::Ness => suffix_bases(word, "ness"),
+            Self::Ful => suffix_bases(word, "ful"),
         }
     }
 
@@ -134,6 +150,9 @@ impl InflectionalSuffix {
             Self::Ed => InflectionRule::Ed,
             Self::Er => InflectionRule::Er,
             Self::Est => InflectionRule::Est,
+            Self::Less => InflectionRule::Less,
+            Self::Ness => InflectionRule::Ness,
+            Self::Ful => InflectionRule::Ful,
         }
     }
 
@@ -175,6 +194,45 @@ impl InflectionalSuffix {
                     ],
                 ),
             ],
+            // CMUdict writes -less with AH0 in most words (143 of 179) and
+            // IH0 in most of the rest; keep both, the usual one first.
+            Self::Less => [VowelPhoneme::AH, VowelPhoneme::IH]
+                .into_iter()
+                .map(|vowel| {
+                    append_suffix(
+                        base,
+                        [
+                            consonant_phoneme(ConsonantPhoneme::L),
+                            vowel_phoneme(vowel),
+                            consonant_phoneme(ConsonantPhoneme::S),
+                        ],
+                    )
+                })
+                .collect(),
+            // As -less: AH0 in most -ness words (330 of 408), IH0 in most of
+            // the rest.
+            Self::Ness => [VowelPhoneme::AH, VowelPhoneme::IH]
+                .into_iter()
+                .map(|vowel| {
+                    append_suffix(
+                        base,
+                        [
+                            consonant_phoneme(ConsonantPhoneme::N),
+                            vowel_phoneme(vowel),
+                            consonant_phoneme(ConsonantPhoneme::S),
+                        ],
+                    )
+                })
+                .collect(),
+            // CMUdict writes -ful as F AH0 L in 116 of its 123 -ful words.
+            Self::Ful => vec![append_suffix(
+                base,
+                [
+                    consonant_phoneme(ConsonantPhoneme::F),
+                    vowel_phoneme(VowelPhoneme::AH),
+                    consonant_phoneme(ConsonantPhoneme::L),
+                ],
+            )],
         }
     }
 }
@@ -370,6 +428,20 @@ fn er_est_bases(word: &str, written_suffix: &str, silent_e_suffix: &str) -> Opti
 
 // The restored y or ie takes the case of the letter it replaces, which keeps
 // a capitalized word's single-letter base intact (Dying -> Die).
+/// The bases of a word formed with -less, -ness or -ful (`suffix`): pulp ->
+/// pulpless, sad -> sadness and hope -> hopeful add it to the whole base;
+/// penny -> penniless, happy -> happiness and beauty -> beautiful turn a
+/// final y after a consonant to i.
+fn suffix_bases(word: &str, suffix: &str) -> Option<Vec<String>> {
+    let stem = strip_suffix_ignore_ascii_case(word, suffix).filter(|stem| !stem.is_empty())?;
+    let mut base_candidates = Vec::with_capacity(2);
+    push_candidate(&mut base_candidates, stem.to_string());
+    if let Some(y_base) = restore_final_y_after_consonant(stem) {
+        push_candidate(&mut base_candidates, y_base);
+    }
+    Some(base_candidates)
+}
+
 fn restore_final_y(stem: &str) -> Option<String> {
     let base = stem.strip_suffix(['i', 'I'])?;
     let y = if stem.ends_with('I') { "Y" } else { "y" };
@@ -901,6 +973,67 @@ mod tests {
         assert_eq!(
             as_arpabet(&pronunciations[1]),
             ["P", "L", "EY1", "N", "AH0", "S", "T"]
+        );
+    }
+
+    #[test]
+    fn less_suffix_finds_its_base_and_adds_both_weak_vowels() {
+        assert_eq!(bases(InflectionalSuffix::Less, "pulpless"), ["pulp"]);
+        assert_eq!(bases(InflectionalSuffix::Less, "hopeless"), ["hope"]);
+        assert!(includes_base(
+            &bases(InflectionalSuffix::Less, "penniless"),
+            "penny"
+        ));
+        assert!(PronunciationDerivation::new(InflectionalSuffix::Less, "less").is_none());
+
+        let derivation = derive(InflectionalSuffix::Less, "pulpless");
+        let pronunciations = derivation.apply(&[phonemes(&["P", "AH1", "L", "P"])]);
+        assert_eq!(
+            as_arpabet(&pronunciations[0]),
+            ["P", "AH1", "L", "P", "L", "AH0", "S"]
+        );
+        assert_eq!(
+            as_arpabet(&pronunciations[1]),
+            ["P", "AH1", "L", "P", "L", "IH0", "S"]
+        );
+    }
+
+    #[test]
+    fn ness_suffix_finds_its_base_and_adds_both_weak_vowels() {
+        assert_eq!(bases(InflectionalSuffix::Ness, "sadness"), ["sad"]);
+        assert!(includes_base(
+            &bases(InflectionalSuffix::Ness, "pulpiness"),
+            "pulpy"
+        ));
+        assert!(PronunciationDerivation::new(InflectionalSuffix::Ness, "ness").is_none());
+
+        let derivation = derive(InflectionalSuffix::Ness, "sadness");
+        let pronunciations = derivation.apply(&[phonemes(&["S", "AE1", "D"])]);
+        assert_eq!(
+            as_arpabet(&pronunciations[0]),
+            ["S", "AE1", "D", "N", "AH0", "S"]
+        );
+        assert_eq!(
+            as_arpabet(&pronunciations[1]),
+            ["S", "AE1", "D", "N", "IH0", "S"]
+        );
+    }
+
+    #[test]
+    fn ful_suffix_finds_its_base_and_adds_f_ah_l() {
+        assert_eq!(bases(InflectionalSuffix::Ful, "spoonful"), ["spoon"]);
+        assert!(includes_base(
+            &bases(InflectionalSuffix::Ful, "beautiful"),
+            "beauty"
+        ));
+        assert!(PronunciationDerivation::new(InflectionalSuffix::Ful, "ful").is_none());
+
+        let derivation = derive(InflectionalSuffix::Ful, "hopeful");
+        let pronunciations = derivation.apply(&[phonemes(&["HH", "OW1", "P"])]);
+        assert_eq!(pronunciations.len(), 1);
+        assert_eq!(
+            as_arpabet(&pronunciations[0]),
+            ["HH", "OW1", "P", "F", "AH0", "L"]
         );
     }
 
